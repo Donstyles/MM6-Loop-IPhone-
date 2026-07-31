@@ -62,6 +62,7 @@ async function main() {
     }
   }
 
+  const recovered = await page.evaluate('JSON.stringify(window.__frameErrors || [])');
   const fps = await page.evaluate('window.__fps || 0');
   const perf = await page.evaluate('JSON.stringify(window.__perf || {})');
 
@@ -95,6 +96,8 @@ async function main() {
   writeFileSync(OUT, Buffer.from(sheet.split(',')[1], 'base64'));
   console.log(`\nwrote ${OUT} (${frames.length} frames, ${COLS}x${rows})`);
   console.log('FPS(headless):', fps, 'PERF:', perf);
+  const rec = JSON.parse(recovered);
+  if (rec.length) { console.log('--- RECOVERED FRAME ERRORS ---'); rec.forEach((r) => console.log(r.split('\n')[0])); }
   if (errors.length) {
     console.log('--- ERRORS ---');
     errors.slice(0, 30).forEach((e) => console.log(e));

@@ -70,12 +70,19 @@ function frame(now) {
 
   ui.beginFrame(uiCtx, input.pointer, input.takeUiEvents());
 
-  if (state === 'loading') {
-    boot.update(dt);
-    boot.draw(uiCtx);
-    if (boot.done) enterTitle();
-  } else {
-    tickGame(dt);
+  // One bad frame must never end the game. An exception escaping here would
+  // stop the requestAnimationFrame chain and freeze on the last image drawn,
+  // which looks like a hang rather than a bug.
+  try {
+    if (state === 'loading') {
+      boot.update(dt);
+      boot.draw(uiCtx);
+      if (boot.done) enterTitle();
+    } else {
+      tickGame(dt);
+    }
+  } catch (e) {
+    reportFrameError(e);
   }
 
   ui.endFrame();
@@ -88,6 +95,20 @@ function frame(now) {
   if (session) { perf.sprites = session.stats.sprites; perf.entities = session.stats.entities; }
 
   requestAnimationFrame(frame);
+}
+
+const seenFrameErrors = new Set();
+const frameErrors = [];
+window.__frameErrors = frameErrors;
+
+/** Log each distinct frame error once; repeats every frame are just noise. */
+function reportFrameError(e) {
+  const key = String((e && e.stack) || e).slice(0, 400);
+  if (!seenFrameErrors.has(key)) {
+    seenFrameErrors.add(key);
+    frameErrors.push(key);
+    console.error('frame error (recovered):', e);
+  }
 }
 
 function tickGame(dt) {

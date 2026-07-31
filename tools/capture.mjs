@@ -62,9 +62,12 @@ async function main() {
     process.stdout.write(`shot ${name}\n`);
   }
 
+  const recovered = await page.evaluate('JSON.stringify(window.__frameErrors || [])');
   const fps = await page.evaluate('window.__fps || 0');
   const perf = await page.evaluate(`(window.__perf && JSON.stringify(window.__perf)) || '{}'`);
   console.log('FPS(headless swiftshader, not representative):', fps);
+  const rec = JSON.parse(recovered);
+  if (rec.length) { console.log('--- RECOVERED FRAME ERRORS ---'); rec.forEach((r) => console.log(r.split('\n')[0])); }
   console.log('PERF:', perf);
   if (errors.length) {
     console.log('\n--- PAGE ERRORS ---');
