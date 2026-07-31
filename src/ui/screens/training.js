@@ -24,8 +24,9 @@ import { LevelUpScreen } from './levelup.js';
 /** Sand floor, weapon racks, straw dummies, two sparring figures. */
 export function paintTrainingInterior(g, w, h) {
   const horizon = Math.round(h * 0.52);
-  paintWall(g, 0, 0, w, horizon, { ramp: 'plaster', lo: 0.14, hi: 0.50, course: 26, seed: 63 });
-  paintFloor(g, 0, horizon, w, h - horizon, { ramp: 'sand', seed: 71 });
+  paintWall(g, 0, 0, w, horizon, { ramp: 'plaster', lo: 0.10, hi: 0.40, course: 26, seed: 63 });
+  // Sand, but trodden and shadowed - the bright end of the ramp reads as snow.
+  paintFloor(g, 0, horizon, w, h - horizon, { ramp: 'dirt', seed: 71 });
 
   // High windows throwing light bars onto the sand.
   for (let i = 0; i < 3; i++) {
@@ -35,9 +36,10 @@ export function paintTrainingInterior(g, w, h) {
     g.fillStyle = rampCss('sky', 14); g.fillRect(wx, 22, 48, 22);
     g.fillStyle = rampCss('wood', 5);
     g.fillRect(wx + 22, 22, 3, 52); g.fillRect(wx, 46, 48, 3);
-    glow(g, wx + 24, 48, 70, '#ffe8b0', 0.42);
+    glow(g, wx + 24, 48, 60, '#ffe8b0', 0.35);
+    // The shaft of light on the sand, kept faint so the floor stays a floor.
     g.save();
-    g.globalAlpha = 0.10;
+    g.globalAlpha = 0.055;
     poly(g, [wx, horizon, wx + 48, horizon, wx + 76, h, wx - 20, h], '#fff0c0');
     g.restore();
   }

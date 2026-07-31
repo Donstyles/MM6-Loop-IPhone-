@@ -351,8 +351,12 @@ export function generateHeightmap(seed, opts = {}) {
       const wx = u * pf.freq + pf.warp * gradNoise2(u * 1.7, v * 1.7, rs + 91);
       const wz = v * pf.freq + pf.warp * gradNoise2(u * 1.7 + 5.1, v * 1.7 + 3.3, rs + 92);
 
-      let h = fbm2(wx, wz, 5, 2.05, 0.5, rs) * pf.base;
-      h += fbm2(u * pf.freq * 3.2, v * pf.freq * 3.2, 3, 2, 0.5, rs + 411) * pf.detailAmp;
+      // Gain 0.38 rather than the usual 0.5: MM6's outdoor maps are dominated
+      // by one broad low-frequency form with only a whisper of detail on top.
+      // At a 32-unit height quantum and flat shading, high-frequency octaves
+      // stop reading as terrain and start reading as static.
+      let h = fbm2(wx, wz, 5, 2.05, 0.38, rs) * pf.base;
+      h += fbm2(u * pf.freq * 3.2, v * pf.freq * 3.2, 2, 2, 0.4, rs + 411) * pf.detailAmp;
 
       if (pf.ridge > 0) {
         const m = clamp(fbm2(u * 1.3, v * 1.3, 3, 2, 0.5, rs + 733) * 1.6 + 0.35, 0, 1);
@@ -596,13 +600,18 @@ const DEFAULT_TOD = 9.5;
  * Bake one flat-shaded triangle's grey level.
  * @returns {number} 0..1 linear-space grey, already on the 32-step ladder.
  */
-function faceGrey(nx, ny, nz, sun, ambient, diffuse) {
+function faceGrey(nx, ny, nz, sun, ambient, diffuse, upness) {
   const ndl = Math.max(0, nx * sun.x + ny * sun.y + nz * sun.z);
+  // The MM6 sun has no north/south component at all, so a north- or
+  // south-facing slope shades identically to flat ground and the landform
+  // vanishes. A small steepness term stands in for the ambient occlusion the
+  // engine got from its baked per-vertex values and puts the hills back.
+  const steep = 1 - 0.30 * (1 - clamp(upness === undefined ? ny : upness, 0, 1));
   // The engine's raw `ambient + diffuse*N.L` saturates to white on any level
   // ground after about 08:00, which is why MM6 snow visibly clips at noon. We
   // hold the same shape but pull both terms back so the landform stays legible
   // at every hour instead of blowing out for most of the day.
-  const s = clamp(ambient * 0.75 + clamp(diffuse * ndl, 0, 0.85) * 0.68, 0, 1);
+  const s = clamp((ambient * 0.55 + clamp(diffuse * ndl, 0, 0.85) * 0.88) * steep, 0, 1);
   return SRGB_TO_LIN(quantiseShade(s));
 }
 
@@ -745,7 +754,14 @@ export function buildTerrain(hm, opts = {}) {
             const il = 1 / (Math.hypot(nx, ny, nz) || 1);
             nx *= il; ny *= il; nz *= il;
             if (ny < 0) { nx = -nx; ny = -ny; nz = -nz; }
-            faceInfo.push(nx, ny, nz, isCliff ? cliffDark : 1);
+            // Exaggerate the horizontal component for lighting only. MM6's
+            // hand-built terrain is steeper than a noise field, and with the
+            // sun high in the sky a gentle slope otherwise shades almost
+            // identically to flat ground and the landform disappears.
+            const ex = 2.4;
+            let lx = nx * ex, ly = ny, lz = nz * ex;
+            const li2 = 1 / (Math.hypot(lx, ly, lz) || 1);
+            faceInfo.push(lx * li2, ly * li2, lz * li2, isCliff ? cliffDark : 1, ny);
             for (const vi of tri) {
               pos[vp++] = P[vi][0]; pos[vp++] = P[vi][1]; pos[vp++] = P[vi][2];
               const u = UVS[(vi + rot) & 3];
@@ -793,9 +809,9 @@ export function buildTerrain(hm, opts = {}) {
     for (const c of chunks) {
       const arr = c.mesh.geometry.attributes.color.array;
       const f = c.faces;
-      const n = f.length / 4;
+      const n = f.length / 5;
       for (let t = 0; t < n; t++) {
-        const g = faceGrey(f[t * 4], f[t * 4 + 1], f[t * 4 + 2], sun, st.ambient, st.diffuse) * f[t * 4 + 3];
+        const g = faceGrey(f[t * 5], f[t * 5 + 1], f[t * 5 + 2], sun, st.ambient, st.diffuse, f[t * 5 + 4]) * f[t * 5 + 3];
         const o = t * 9;
         arr[o] = g; arr[o + 1] = g; arr[o + 2] = g;
         arr[o + 3] = g; arr[o + 4] = g; arr[o + 5] = g;

@@ -44,12 +44,17 @@ export class Boot {
   }
 
   async _run() {
+    const times = {};
+    window.__bootTimes = times;
     for (const stage of STAGES) {
       this.label = stage.label;
       this._stage = stage;
+      const t0 = performance.now();
       try {
         await this._runStage(stage);
+        times[stage.id] = Math.round(performance.now() - t0);
       } catch (e) {
+        times[stage.id] = `failed after ${Math.round(performance.now() - t0)}ms`;
         // A failed art module should not stop the game booting; the affected
         // pieces fall back to placeholders.
         console.error(`stage ${stage.id} failed`, e);
@@ -146,11 +151,12 @@ export class Boot {
     for (const k of (flora?.FLORA_KINDS || [])) list.push({ category: 'flora', kind: k, seed: 1 });
     for (const k of (props?.PROP_KINDS || [])) list.push({ category: 'prop', kind: k, seed: 1 });
 
+    // The bestiary the first region can actually throw at you. Everything else
+    // bakes the first time it is spawned.
     const starters = [
-      'BloodsuckerA', 'BloodsuckerB', 'GoblinA', 'GoblinB', 'GoblinC',
-      'RatA', 'RatB', 'BatA', 'BatB', 'SpiderA', 'SpiderB',
-      'PeasantM1A', 'PeasantF1A', 'GuardA', 'FighterLeathA', 'FighterLeathB',
-      'SkeletonA', 'WolfA', 'LizardArchA', 'ThiefA',
+      'BloodsuckerA', 'GoblinA', 'GoblinB', 'GoblinC',
+      'RatA', 'BatA', 'SpiderA', 'FighterLeathA',
+      'PeasantM1A', 'PeasantF1A', 'GuardA', 'SkeletonA',
     ];
     const all = creatures?.CREATURE_KINDS || [];
     const pick = starters.filter((k) => all.includes(k));
@@ -209,7 +215,7 @@ export class Boot {
     }
 
     const label = this.error ? 'Something went wrong' : this.label;
-    const dots = '.'.repeat(1 + (Math.floor(this.t * 2) % 3));
+    const dots = '.'.repeat(1 + (Math.floor(Math.abs(this.t) * 2) % 3));
     if (font && font.drawText) {
       font.drawText(ctx, label + dots, cx, by + bh + 8, { align: 'center', color: '#e8dcb0' });
       if (this.detail) font.drawText(ctx, this.detail, cx, by + bh + 22, { face: 'small', align: 'center', color: '#8a7f60' });

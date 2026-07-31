@@ -6,7 +6,7 @@
 <style>
   body { margin: 0; background: #101012; color: #d8c47a; font: 12px/1.4 monospace; }
   h1 { font-size: 14px; padding: 8px 12px; margin: 0; color: #e8dca8; }
-  .grid { display: flex; flex-wrap: wrap; gap: 12px; padding: 10px; }
+  .grid { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px; }
   .cell { width: 640px; }
   .cell canvas { display: block; width: 640px; height: 480px; image-rendering: pixelated; border: 1px solid #000; background: #000; }
   .cell .lbl { padding: 3px 0 0; color: #c8bc98; }
@@ -648,7 +648,9 @@ const session = {
   },
   player: { pos: { x: 1200, y: 160, z: -3400 }, yaw: 0.7 },
   map: {
-    name: 'New Sorpigal', indoor: false, worldSize: 65536,
+    // A small world so the fake 256px map picture still shows detail at the
+    // book's fixed zooms; the real regions are 65536 units across.
+    name: 'New Sorpigal', indoor: false, worldSize: 12288,
     mapMarkers: [
       { x: 1024, z: -3072, name: 'New Sorpigal', kind: 'town' },
       { x: 5120, z: -1024, name: 'Abandoned Temple', kind: 'dungeon' },
@@ -718,7 +720,7 @@ function shot(label, makeScreen, hover, before) {
 const mk = (Cls, opts) => (ui, hud) => new Cls(session, ui, hud, opts || {});
 
 shot('charsheet — Stats (hover Might)', mk(CharSheetScreen, { tab: 0 }), [60, 60]);
-shot('charsheet — Skills (hover a skill)', mk(CharSheetScreen, { tab: 1 }), [80, 120]);
+shot('charsheet — Skills (hover a skill)', mk(CharSheetScreen, { tab: 1 }), [80, 148]);
 shot('charsheet — Awards', mk(CharSheetScreen, { tab: 3 }), [-1, -1]);
 shot('inventory — carrying an axe over the grid', mk(InventoryScreen), [180, 150], (s, ui) => {
   const bag = roderic.inventory;
@@ -763,6 +765,16 @@ shot('options', mk(OptionsScreen), [140, 90]);
   ui.endFrame();
   delete session.map.mapImage;
 })();
+
+// Flatten every canvas to an <img>: a page of 13 live canvases makes Chromium's
+// full-page capture crawl, and the screenshot tool only allows 30 seconds.
+for (const cv of document.querySelectorAll('.cell canvas')) {
+  const img = new Image();
+  img.width = 640; img.height = 480;
+  img.style.cssText = 'display:block;width:640px;height:480px;image-rendering:pixelated;border:1px solid #000';
+  img.src = cv.toDataURL('image/png');
+  cv.parentNode.replaceChild(img, cv);
+}
 
 document.getElementById('head').textContent =
   'MM6 panels set A — panel 461x345 at (8,8) over live chrome. stubbed: '

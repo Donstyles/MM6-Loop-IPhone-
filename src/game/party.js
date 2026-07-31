@@ -12,10 +12,10 @@ import {
   isIncapacitated, RESIST_IDS, MAX_LEVEL, trainingCost, priceMultipliers, derivedSummary,
 } from './stats.js';
 import {
-  MASTERY, SKILL_IDS, CLASS_START_SKILLS, classSkillMax, skillPointCost, skillById,
+  MASTERY, CLASS_START_SKILLS, classSkillMax, skillPointCost, skillById,
 } from './skills.js';
 import {
-  SLOTS, INV_W, INV_H, itemDef, itemMods, itemValue, itemName, makeItem, makeGold,
+  SLOTS, INV_W, INV_H, itemDef, itemMods, itemValue, itemName,
   startingKit, setUidCounter, uidCounter, potionById, TYPE_SLOT,
 } from './items.js';
 import { spellById, spellPower, spellDuration, schoolSkill, SPELLS_BY_SCHOOL } from './spells.js';
@@ -466,23 +466,82 @@ export function unequip(c, slot) {
   return { ok: true, reason: '', item };
 }
 
-/** Auto-equip everything sensible in the pack. Used by the balance harness. */
+/**
+ * How useful is this item to *this* character? Gold value is a terrible guide -
+ * a Knight will happily buy a wizard's staff at the price of a good sword - so
+ * score weapons by the damage they would actually do in this character's hands
+ * and armour by the protection net of the recovery it costs.
+ */
+export function itemScore(c, item) {
+  const def = itemDef(item && item.def);
+  if (!def) return 0;
+  const mods = itemMods(item);
+  let score = 0;
+
+  // Stat, resistance and pool bonuses are worth the same wherever they appear.
+  for (const id of STAT_IDS) score += (mods[id] || 0) * 0.4;
+  for (const r of RESIST_IDS) score += (mods.resist[r] || 0) * 0.15;
+  score += (mods.hp || 0) * 0.25 + (mods.sp || 0) * 0.25;
+  if (mods.elemental) for (const e of mods.elemental) score += (e.dice.n * (e.dice.s + 1)) / 2;
+  score += (mods.vampiric || 0) * 20;
+
+  if (def.dice) {
+    const skill = def.skill ? c.skills[def.skill] : null;
+    if (def.skill && classSkillMax(c.class, def.skill) <= 0) return -1; // cannot use it at all
+    const lv = skill ? skill.level : 0;
+    const mastery = skill ? skill.mastery : 0;
+    const dmg = (def.dice.n * (def.dice.s + 1)) / 2 + (def.dice.plus || 0)
+      + (mods.damage || 0) + (mastery >= MASTERY.EXPERT ? lv * (mastery >= MASTERY.MASTER ? 1.75 : 1) : 0);
+    // Swings per notional round: a fast weapon in a trained hand beats a
+    // sluggish one that hits harder.
+    const recovery = Math.max(20, (def.recovery || 100) - (mods.recovery || 0));
+    score += (dmg * 100) / recovery;
+    // An unskilled weapon is a liability whatever it rolls.
+    if (lv <= 0) score *= 0.25;
+    if (def.twoHanded) score *= 0.85;
+    return score;
+  }
+
+  if (def.ac !== undefined) {
+    if (def.skill && classSkillMax(c.class, def.skill) <= 0) return -1;
+    const skill = def.skill ? c.skills[def.skill] : null;
+    const trained = skill && skill.mastery >= MASTERY.EXPERT;
+    score += (def.ac || 0) + (mods.ac || 0);
+    // Recovery penalty only bites until the armour skill reaches Expert.
+    if (!trained) score -= (def.recovery || 0) * 0.35;
+    if (def.skill && (!skill || skill.level <= 0)) score -= 4;
+    return score;
+  }
+  return score;
+}
+
+/**
+ * Equip the best of everything in the pack. Two passes so a slot is not
+ * blocked by a mediocre item that arrived first.
+ */
 export function autoEquip(c) {
   const equipped = [];
-  // Best first, so the good stuff wins the slot.
-  const candidates = c.inventory.items.slice().sort((a, b) => itemValue(b) - itemValue(a));
-  for (const item of candidates) {
-    const def = itemDef(item.def);
-    if (!def || !TYPE_SLOT[def.type]) continue;
-    const slot = slotFor(c, item);
-    if (!slot) continue;
-    const cur = c.equipment[slot];
-    // Sorcerers and clerics should not be lugging plate around.
-    if (def.skill && classSkillMax(c.class, def.skill) <= 0 && def.type !== 'weapon') continue;
-    if (def.type === 'weapon' && def.skill && classSkillMax(c.class, def.skill) <= 0) continue;
-    if (cur && itemValue(cur) >= itemValue(item)) continue;
-    const r = equip(c, item, slot);
-    if (r.ok) equipped.push(item);
+  for (let pass = 0; pass < 2; pass++) {
+    const candidates = c.inventory.items
+      .filter((it) => { const d = itemDef(it.def); return d && TYPE_SLOT[d.type]; })
+      .map((it) => ({ it, s: itemScore(c, it) }))
+      .filter((e) => e.s > 0)
+      .sort((a, b) => b.s - a.s);
+    let changed = false;
+    for (const { it, s } of candidates) {
+      const slot = slotFor(c, it);
+      if (!slot) continue;
+      const cur = c.equipment[slot];
+      if (cur && itemScore(c, cur) >= s) continue;
+      // A two-hander must beat the weapon *and* the shield it displaces.
+      const def = itemDef(it.def);
+      if (def.twoHanded && slot === 'mainhand' && c.equipment.offhand) {
+        const combined = (cur ? itemScore(c, cur) : 0) + itemScore(c, c.equipment.offhand);
+        if (combined >= s) continue;
+      }
+      if (equip(c, it, slot).ok) { equipped.push(it); changed = true; }
+    }
+    if (!changed) break;
   }
   return equipped;
 }

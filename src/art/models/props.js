@@ -37,9 +37,10 @@ function barrelBody(H, hexWood, hexBand, rnd) {
 const BUILDERS = {
   chest: (H, rnd, open) => {
     const g = new THREE.Group();
-    const wood = rampHex('wood', 4), band = rampHex('stone', 8), gold = rampHex('gold', 10);
+    const wood = rampHex('wood', 4), band = rampHex('grey', 3), gold = rampHex('gold', 10);
     g.add(box(H * 1.35, H * 0.62, H * 0.85, wood, { pivot: 'bottom' }));
-    for (const x of [-0.5, 0.5]) g.add(box(H * 0.10, H * 0.64, H * 0.88, band, { pivot: 'bottom', x: H * 1.35 * x }));
+    for (const x of [-0.34, 0, 0.34]) g.add(box(H * 0.09, H * 0.66, H * 0.90, band, { pivot: 'bottom', x: H * 1.35 * x }));
+    g.add(box(H * 1.38, H * 0.09, H * 0.88, band, { pivot: 'bottom', y: H * 0.53 }));
     const lid = grp(0, H * 0.62, -H * 0.42);
     g.add(lid);
     lid.add(cyl(H * 0.42, H * 0.42, H * 1.35, wood, { seg: 8, rz: PI / 2, y: 0, z: H * 0.42 }));
@@ -56,12 +57,12 @@ const BUILDERS = {
   barrel: (H, rnd) => barrelBody(H, rampHex('wood', 5), rampHex('stone', 7), rnd),
   crate: (H, rnd) => {
     const g = new THREE.Group();
-    const wood = rampHex('wood', 6);
+    const wood = rampHex('wood', 8);
     g.add(box(H * 0.95, H * 0.95, H * 0.95, wood, { pivot: 'bottom' }));
     for (const z of [-1, 1]) {
-      g.add(box(H * 1.0, H * 0.09, H * 0.02, mulHex(wood, 0.65), { y: H * 0.18, z: z * H * 0.48 }));
-      g.add(box(H * 1.0, H * 0.09, H * 0.02, mulHex(wood, 0.65), { y: H * 0.78, z: z * H * 0.48 }));
-      g.add(box(H * 1.0, H * 0.09, H * 0.02, mulHex(wood, 0.8), { y: H * 0.48, z: z * H * 0.48, rz: 0.78 }));
+      g.add(box(H * 1.02, H * 0.12, H * 0.05, mulHex(wood, 0.45), { y: H * 0.16, z: z * H * 0.49 }));
+      g.add(box(H * 1.02, H * 0.12, H * 0.05, mulHex(wood, 0.45), { y: H * 0.80, z: z * H * 0.49 }));
+      g.add(box(H * 1.30, H * 0.10, H * 0.05, mulHex(wood, 0.55), { y: H * 0.48, z: z * H * 0.49, rz: 0.78 }));
     }
     return g;
   },
@@ -101,8 +102,8 @@ const BUILDERS = {
     g.add(cyl(H * 0.45, H * 0.45, H * 0.06, rampHex('water', 6), { seg: 12, y: H * 0.30 }));
     for (const s of [-1, 1]) g.add(box(H * 0.10, H * 0.85, H * 0.10, rampHex('wood', 4), { pivot: 'bottom', x: s * H * 0.5, y: H * 0.42 }));
     g.add(cyl(H * 0.08, H * 0.08, H * 1.05, rampHex('wood', 6), { seg: 7, rz: PI / 2, y: H * 1.2 }));
-    g.add(box(H * 1.3, H * 0.08, H * 0.9, rampHex('wood', 3), { y: H * 1.34, rx: 0.0 }));
-    g.add(box(H * 1.3, H * 0.08, H * 0.9, rampHex('wood', 5), { y: H * 1.42 }));
+    for (const s2 of [-1, 1]) g.add(box(H * 1.35, H * 0.08, H * 0.62, rampHex('wood', s2 > 0 ? 6 : 3), { y: H * 1.42, z: s2 * H * 0.26, rx: -s2 * 0.55 }));
+    g.add(box(H * 1.35, H * 0.07, H * 0.09, rampHex('wood', 7), { y: H * 1.58 }));
     g.add(box(H * 0.02, H * 0.35, H * 0.02, rampHex('grey', 6), { pivot: 'top', y: H * 1.18 }));
     g.add(cyl(H * 0.14, H * 0.12, H * 0.18, rampHex('stone', 9), { seg: 7, y: H * 0.75 }));
     return g;

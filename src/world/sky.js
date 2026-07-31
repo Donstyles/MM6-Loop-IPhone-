@@ -91,7 +91,9 @@ const _skyTexCache = new Map();
 export function skyTexture(kind = 'plansky3') {
   const hit = _skyTexCache.get(kind);
   if (hit) return hit;
-  const S = 256;
+  // 128 rather than 256: the plate is only ever seen heavily magnified or
+  // heavily tiled, and palettising 64k pixels costs a second of load time.
+  const S = 128;
   const p = new Pix(S, S);
   const seed = kind.length * 977 + 3;
   for (let y = 0; y < S; y++) {
@@ -234,6 +236,9 @@ export function buildSky(scene, opts = {}) {
   const camera = opts.camera || null;
   const group = new THREE.Group();
   group.name = 'sky';
+  // The sky must survive a host that never calls update(): everything it needs
+  // is pulled off the camera and scene in onBeforeRender instead.
+  group.matrixAutoUpdate = true;
 
   const geo = new THREE.PlaneGeometry(2, 2);
   const mat = new THREE.ShaderMaterial({
@@ -264,7 +269,7 @@ export function buildSky(scene, opts = {}) {
   const snow = buildSnow();
   group.add(snow.mesh);
 
-  scene.add(group);
+  if (scene) scene.add(group);
 
   const state = {
     tod: 10,
@@ -280,8 +285,12 @@ export function buildSky(scene, opts = {}) {
     drift: opts.drift === undefined ? 0.016 : opts.drift,
   };
 
-  if (!scene.fog) scene.fog = new THREE.Fog(0x9aa4ac, SHADE_DIST, FAR_CLIP);
-  const fog = scene.fog;
+  // Our own fog object. If the host scene has none we install this one; if it
+  // has its own we write our numbers into *theirs*, because the fog target and
+  // the sub-horizon fill colour must be the same value or the horizon seams.
+  const ownFog = new THREE.Fog(0x9aa4ac, SHADE_DIST, FAR_CLIP);
+  if (scene && !scene.fog) scene.fog = ownFog;
+  let fog = (scene && scene.fog) || ownFog;
 
   function setRegion(def) {
     if (!def) return;
@@ -298,13 +307,20 @@ export function buildSky(scene, opts = {}) {
   let elapsed = 0;
   let lastYaw = 0;
   const _m3 = new THREE.Matrix3();
+  const _v2 = new THREE.Vector2();
 
   function update(dt, timeOfDay, weather, cam) {
     const c = cam || camera;
     elapsed += dt;
     if (timeOfDay !== undefined) state.tod = timeOfDay <= 1 ? timeOfDay * 24 : timeOfDay;
     if (weather) state.weather = weather === 'rain' ? 'fog' : weather;   // MM6 has no rain
+    refresh();
+    if (c) aimAt(c);
+    stepSnow(dt, c);
+  }
 
+  /** Recompute tint, haze and fog. Cheap enough to run every frame. */
+  function refresh() {
     const g = timeTint(state.tod);
     const st = sunTerms(state.tod);
     state.tint = g;
@@ -347,28 +363,32 @@ export function buildSky(scene, opts = {}) {
       // the sky both end in the same grey wall.
       state.haze.copy(fog.color);
     } else {
-      const maxA = Math.min(cap, 1 - g);
-      fog.color.setRGB(0, 0, 0);
-      fog.near = SHADE_DIST;
-      fog.far = maxA < 0.01 ? 1e7 : SHADE_DIST + (FAR_CLIP - SHADE_DIST) / maxA;
-      // Clear day: the horizon fill is the cloud plate's own mean, tinted the
-      // same way the sky quad above it is, so the two meet invisibly.
+      // Clear day: the world fades toward the horizon haze, which is the cloud
+      // plate's own mean tinted exactly like the sky quad above it. Using the
+      // identical colour for fog target and sub-horizon fill is what makes the
+      // seam disappear; fading toward black instead leaves a dark rim.
       state.haze.setRGB(state.plate.r * g, state.plate.g * g, state.plate.b * g);
+      const maxA = Math.min(cap, 0.58);
+      fog.color.copy(state.haze);
+      fog.near = SHADEMIST_DIST * 0.75;
+      fog.far = fog.near + (FAR_CLIP - fog.near) / maxA;
     }
     mat.uniforms.uHaze.value.copy(state.haze);
 
     // Cloud plate self-drift; MM6's sky moves even when you stand still.
-    mat.uniforms.uDrift.value.set(elapsed * state.drift, elapsed * state.drift * 0.42);
+    const t = performance.now() / 1000;
+    mat.uniforms.uDrift.value.set(t * state.drift, t * state.drift * 0.42);
+  }
 
-    if (c) {
-      mat.uniforms.uCamXZ.value.set(c.position.x, c.position.z);
-      mat.uniforms.uInvProj.value.copy(c.projectionMatrixInverse);
-      _m3.setFromMatrix4(c.matrixWorld);
-      mat.uniforms.uCamRot.value.copy(_m3);
-      group.position.copy(c.position);
-    }
+  function aimAt(c) {
+    mat.uniforms.uCamXZ.value.set(c.position.x, c.position.z);
+    mat.uniforms.uInvProj.value.copy(c.projectionMatrixInverse);
+    _m3.setFromMatrix4(c.matrixWorld);
+    mat.uniforms.uCamRot.value.copy(_m3);
+    group.position.copy(c.position);
+  }
 
-    // --- snow -------------------------------------------------------------
+  function stepSnow(dt, c) {
     const snowing = state.weather === 'snow';
     snow.mesh.visible = snowing;
     if (snowing && c) {
@@ -402,10 +422,23 @@ export function buildSky(scene, opts = {}) {
   }
 
   function dispose() {
-    scene.remove(group);
+    if (group.parent) group.parent.remove(group);
     geo.dispose(); mat.dispose();
     snow.mesh.geometry.dispose(); snow.mat.dispose();
   }
 
-  return { group, update, setRegion, setViewport, dispose, state, quad };
+  // Self-drive. A host that forgets to call update() still gets a correct sky,
+  // and a host with its own fog object still gets our numbers written into it.
+  quad.onBeforeRender = (renderer, hostScene, cam) => {
+    if (hostScene) {
+      if (!hostScene.fog) hostScene.fog = ownFog;
+      fog = hostScene.fog;
+    }
+    refresh();
+    if (cam) aimAt(cam);
+    const t = renderer.getSize(_v2);
+    if (t.y > 0 && t.y !== mat.uniforms.uViewportH.value) setViewport(t.x, t.y);
+  };
+
+  return { group, update, setRegion, setViewport, dispose, state, quad, fog: ownFog };
 }

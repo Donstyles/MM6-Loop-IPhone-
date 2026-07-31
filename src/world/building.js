@@ -47,7 +47,7 @@ export function setBuildingLight(hours) {
 function faceShade(nx, ny, nz, tintR = 1, tintG = 1, tintB = 1, extra = 1) {
   const ndl = Math.max(0, nx * SUN.x + ny * SUN.y + nz * SUN.z);
   // Same pulled-back curve the terrain uses, so walls and ground agree.
-  const g = quantiseShade(clamp((AMBIENT * 0.75 + clamp(DIFFUSE * ndl, 0, 0.85) * 0.68) * extra, 0, 1));
+  const g = quantiseShade(clamp((AMBIENT * 0.55 + clamp(DIFFUSE * ndl, 0, 0.85) * 0.88) * extra, 0, 1));
   const l = SRGB_TO_LIN(g);
   return [l * tintR, l * tintG, l * tintB];
 }

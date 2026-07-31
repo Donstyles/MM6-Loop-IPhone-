@@ -127,7 +127,7 @@ function setPage(pi) {
   slots = [];
   const ids = EFFECT_IDS.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
   ids.forEach((id, i) => {
-    slots.push({ id, x: (i - (PAGE_SIZE - 1) / 2) * 400, y: 230, z: 0, handle: null, wait: i * 0.05 });
+    slots.push({ id, x: (i - (PAGE_SIZE - 1) / 2) * 400, y: 230, z: 0, handle: null, wait: 0 });
   });
 }
 window.__setPage = setPage;
@@ -167,7 +167,7 @@ setPage(0);
 
 let last = performance.now();
 let frames = 0;
-window.__dbg = () => ({ frames, page, count: vfx.count, drawn: vfx.drawn, batches: sr.drawCalls, slots: slots.map((s) => ({ id: s.id, w: +s.wait.toFixed(2), a: !!(s.handle && s.handle.active) })) });
+window.__dbg = () => ({ frames, page, count: vfx.count, drawn: vfx.drawn, batches: sr.drawCalls });
 
 function frame(now) {
   // Building the atlases blocks for seconds, and rAF hands back the timestamp

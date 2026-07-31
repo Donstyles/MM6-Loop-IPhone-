@@ -153,7 +153,7 @@ const BUILDERS = {
   },
   dead_tree: (H, rnd) => {
     const root = new THREE.Group();
-    const bark = rampHex('grey', 4);
+    const bark = rampHex('wood', 3);
     root.add(cyl(H * 0.020, H * 0.052, H * 0.52, bark, { seg: 6, pivot: 'bottom' }));
     const crown = grp(0, H * 0.50, 0);
     root.add(crown);

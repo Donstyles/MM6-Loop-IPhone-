@@ -59,7 +59,8 @@ function frame(now) {
   const t0 = now;
   let dt = (now - last) / 1000;
   last = now;
-  if (dt > 0.25) dt = 0.25;            // don't simulate a whole tab-switch
+  // Never simulate a whole tab-switch, and never a negative step.
+  dt = Math.max(0, Math.min(0.25, dt));
   frames++; fpsAccum += dt;
   if (fpsAccum >= 0.5) {
     perf.fps = Math.round(frames / fpsAccum);
@@ -109,8 +110,21 @@ function tickGame(dt) {
   uiCtx.clearRect(0, 0, layout.w, layout.h);
 
   if (top) {
+    // The carved surround stays visible around every panel, and the panel is
+    // clipped to the world window so a stray screen cannot paint over it.
+    if (hud && !top.fullFrame) hud.drawFrame(uiCtx, dt);
     if (top.update) top.update(dt, input);
-    top.draw(uiCtx);
+    if (top.fullFrame) {
+      top.draw(uiCtx);
+    } else {
+      uiCtx.save();
+      uiCtx.beginPath();
+      uiCtx.rect(layout.view.x, layout.view.y, layout.view.w, layout.view.h);
+      uiCtx.clip();
+      top.draw(uiCtx);
+      uiCtx.restore();
+    }
+    if (hud && !top.fullFrame) handleHudButtons();
   } else if (hud) {
     hud.showTouch = input.hasTouch;
     hud.stickDX = input.stick.dx; hud.stickDY = input.stick.dy;

@@ -21,8 +21,8 @@ const LABEL_X = 14;
 const LABEL_W = 84;
 const COL_X = 102;
 const COL_W = 86;
-const ROW_H = 14;
-const TOP = 52;
+const ROW_H = 13;
+const TOP = 50;
 
 function fmt(n) { return String(Math.round(n || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
 

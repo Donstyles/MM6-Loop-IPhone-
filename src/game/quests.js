@@ -10,8 +10,8 @@
 
 import { Rand } from '../core/rng.js';
 import { MONSTERS, monsterById, MONSTER_FAMILIES, monstersInLevelRange } from './monsters.js';
-import { ARTIFACTS, generateItem, makeGold, itemName } from './items.js';
-import { npcName, townName, dungeonName, profession, uniqueMonsterName, shopName } from './npcnames.js';
+import { ARTIFACTS, generateItem, itemName } from './items.js';
+import { npcName, townName, dungeonName, profession, uniqueMonsterName } from './npcnames.js';
 
 export const QUEST_STATES = ['unavailable', 'available', 'active', 'complete', 'rewarded', 'failed'];
 
@@ -23,9 +23,15 @@ export const QUEST_TYPES = [
 // Objectives
 // ---------------------------------------------------------------------------
 
+// Ids come from counters, never Math.random: everything in this game has to be
+// reproducible from a seed, save files included.
+let OBJ_ID = 1;
+let QID = 1;
+export function resetQuestIds(n) { QID = n | 0 || 1; OBJ_ID = 1; }
+
 function objective(kind, spec) {
   return Object.assign({
-    id: spec.id || `${kind}_${Math.random().toString(36).slice(2, 8)}`,
+    id: spec.id || `${kind}_${OBJ_ID++}`,
     kind,
     count: 1,
     progress: 0,
@@ -138,9 +144,6 @@ export const REGION_LEVEL = {
 // ---------------------------------------------------------------------------
 // Side quest generation
 // ---------------------------------------------------------------------------
-
-let QID = 1;
-export function resetQuestIds(n) { QID = n | 0 || 1; }
 
 function makeQuest(spec) {
   return Object.assign({

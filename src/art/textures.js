@@ -66,6 +66,8 @@ function fbmXY(x, y, perX, perY, seed, oct = 3, gain = 0.5, size = 64) {
  */
 function worley(fx, fy, per, seed, jitter = 0.9) {
   const xi = Math.floor(fx), yi = Math.floor(fy);
+  // squared distances in the loop, one pair of square roots at the end - this
+  // runs a few million times per library build
   let f1 = 1e9, f2 = 1e9, bx = 0, by = 0, bgx = 0, bgy = 0;
   for (let dy = -1; dy <= 1; dy++) {
     for (let dx = -1; dx <= 1; dx++) {
@@ -74,12 +76,12 @@ function worley(fx, fy, per, seed, jitter = 0.9) {
       const px = cx + 0.5 + (hash2(gx, gy, seed) - 0.5) * jitter;
       const py = cy + 0.5 + (hash2(gx, gy, seed + 7919) - 0.5) * jitter;
       const ddx = px - fx, ddy = py - fy;
-      const d = Math.sqrt(ddx * ddx + ddy * ddy);
+      const d = ddx * ddx + ddy * ddy;
       if (d < f1) { f2 = f1; f1 = d; bx = px; by = py; bgx = gx; bgy = gy; }
       else if (d < f2) f2 = d;
     }
   }
-  return { f1, f2, cx: bx, cy: by, gx: bgx, gy: bgy };
+  return { f1: Math.sqrt(f1), f2: Math.sqrt(f2), cx: bx, cy: by, gx: bgx, gy: bgy };
 }
 
 /** Per-pixel paint pass; fn may return null to leave the pixel alone. */
@@ -354,12 +356,6 @@ function weatherStreaks(pix, o = {}) {
   return pix;
 }
 
-/** Wood grain multiplier along an axis; returns a 0.85..1.15-ish scalar. */
-function grainK(x, y, seed, vertical = true, amt = 0.16, size = 64) {
-  const g = vertical ? fbmXY(x, y, 26, 3, seed, 3, 0.55, size) : fbmXY(x, y, 3, 26, seed, 3, 0.55, size);
-  return 1 - amt * 0.5 + g * amt;
-}
-
 /** A knot in a plank: concentric dark rings. */
 function knot(pix, cx, cy, r, dark, light) {
   for (let dy = -r - 1; dy <= r + 1; dy++) {
@@ -537,37 +533,38 @@ function tRoadCobble() {
  * train reads as corduroy the moment the tile repeats.
  */
 function sandTex(o) {
-  const { colA, colB, colHi, colShadow, seed, kx = 1, ky = 5, rippleAmp = 0.1, gritN = 220 } = o;
+  const { colA, colB, colHi, colShadow, seed, perX = 6, perY = 26, rippleAmp = 0.09, gritN = 220 } = o;
   const p = P();
   paint(p, (x, y) => {
-    const warp = (nz(x, y, 3, seed + 1, 3, 0.6) - 0.5) * 9 + (nz(x, y, 6, seed + 2, 2, 0.5) - 0.5) * 3;
-    const s = Math.sin(TAU * (x * kx + y * ky) / 64 + warp);
+    // Ripples come out of stretched noise, not a sine train: a periodic wave
+    // reads as corduroy the moment the tile repeats, and the spec is explicit
+    // that desert sand is "very low contrast, fine wind-ripple stipple".
+    const rip = fbmXY(x, y, perX, perY, seed + 1, 3, 0.5) - 0.5;
     const n = fbmXY(x, y, 16, 16, seed + 3, 4, 0.55);
     let c = mixC(colA, colB, clamp01(0.35 + n * 0.7));
-    // the ripple is barely there - a stipple, not a corrugation
-    c = scaleC(c, 1 + s * rippleAmp);
-    c = mixC(c, colHi, clamp01(s - 0.75) * 0.35);
+    c = scaleC(c, 1 + rip * rippleAmp * 4);
+    c = mixC(c, colHi, clamp01(rip * 4 - 0.7) * 0.3);
     // occasional shadow streak in the lee of a crest
-    const streak = clamp01(-s - 0.7) * smoothstep(0.45, 0.75, nz(x, y, 4, seed + 5, 3, 0.6));
+    const streak = clamp01(-rip * 4 - 0.5) * smoothstep(0.45, 0.75, nz(x, y, 4, seed + 5, 3, 0.6));
     return mixC(c, colShadow, streak * 0.45);
   });
-  grit(p, gritN, seed + 9, 0.93, 1.07);
+  grit(p, gritN, seed + 9, 0.94, 1.06);
   return p;
 }
 
 const tSand = () => sandTex({
-  colA: [180, 154, 106], colB: [216, 192, 140], colHi: [226, 206, 158], colShadow: [142, 122, 82],
-  seed: 311, kx: 1, ky: 5, rippleAmp: 0.055,
+  colA: [178, 156, 116], colB: [208, 188, 146], colHi: [218, 200, 158], colShadow: [146, 128, 92],
+  seed: 311, perX: 5, perY: 24, rippleAmp: 0.038,
 });
 function tSandDune() {
   const p = sandTex({
-    colA: [172, 144, 96], colB: [212, 186, 132], colHi: [224, 202, 152], colShadow: [136, 116, 78],
-    seed: 317, kx: 2, ky: 7, rippleAmp: 0.075,
+    colA: [172, 150, 108], colB: [206, 184, 138], colHi: [216, 196, 152], colShadow: [140, 122, 84],
+    seed: 317, perX: 7, perY: 20, rippleAmp: 0.055,
   });
   // a second, coarser ripple set crossing the first
   paint(p, (x, y) => {
-    const s = Math.sin(TAU * (x * 3 - y * 2) / 64 + nz(x, y, 3, 319, 3, 0.6) * 8);
-    return scaleC(p.get(x, y), 1 + s * 0.035);
+    const s = fbmXY(x, y, 14, 5, 319, 2, 0.5) - 0.5;
+    return scaleC(p.get(x, y), 1 + s * 0.14);
   });
   return p;
 }
@@ -692,8 +689,8 @@ function tFarmland() {
   for (const [cx, cy] of scatter(80, 431)) {
     const r = rnd.float(1.2, 2.6);
     blob(p, cx, cy, r, r * 0.8, (x, y, d, dx, dy) => {
-      if (d > 0.9) return null;
-      return scaleC(p.get(x, y), clamp(1 - (dx + dy) * 0.12, 0.7, 1.3));
+      if (d > 0.85 + nz1(x, y, 26, 435) * 0.3) return null;
+      return scaleC(p.get(x, y), clamp(1 - (dx + dy) * 0.2 - d * 0.1, 0.6, 1.45));
     });
   }
   grit(p, 150, 433);
@@ -949,7 +946,7 @@ function plasterBase(p, o = {}) {
  */
 function tWallPlaster() {
   const p = P();
-  plasterBase(p, { seed: 701, colA: [186, 176, 150], colB: [226, 218, 194] });
+  plasterBase(p, { seed: 701, colA: [184, 174, 152], colB: [214, 206, 186] });
   // trowel sweeps, then hairline cracks with a little grime in them
   paint(p, (x, y) => {
     const sweep = fbmXY(x, y, 4, 7, 705, 3, 0.5);
@@ -1466,7 +1463,7 @@ function tRoofTileBlue() {
 function tRoofThatch() {
   const p = P();
   const rows = 4, rh = 64 / rows;
-  const dk = [86, 66, 26], md = [166, 136, 56], lt = [214, 186, 106];
+  const dk = [92, 76, 40], md = [138, 112, 56], lt = [184, 154, 86];
   p.fill(40, 30, 12);
   // bundles laid bottom-up; every strand is its own 1px fibre
   for (let r = rows - 1; r >= 0; r--) {
@@ -1649,7 +1646,7 @@ function windowTex(lit) {
 
 function tShutters() {
   const p = P();
-  const paintDk = [36, 52, 62], paintMd = [70, 100, 112], paintLt = [116, 150, 158];
+  const paintDk = [48, 58, 58], paintMd = [92, 102, 98], paintLt = [140, 148, 138];
   paint(p, (x, y) => {
     const g = fbmXY(x, y, 3, 24, 997, 3, 0.55);
     return mixC(paintDk, mixC(paintMd, paintLt, g), 0.3 + g * 0.65);
@@ -2088,7 +2085,7 @@ function tDunIce() {
     const n = fbmXY(x, y, 7, 7, 1213, 4, 0.55);
     const deep = fbmXY(x, y, 3, 3, 1217, 3, 0.6);
     // deep glacial blue where the ice is thick, near-white where it is thin
-    return mixC([64, 124, 148], [178, 216, 230], clamp01((n * 0.4 + deep * 0.6 - 0.32) * 1.15));
+    return mixC([118, 146, 170], [208, 228, 240], clamp01((n * 0.4 + deep * 0.6 - 0.32) * 1.15));
   });
   // internal fracture planes: straight bright shards
   const rnd = new Rand(1223);
@@ -2101,7 +2098,7 @@ function tDunIce() {
       x += Math.cos(a); y += Math.sin(a);
       // fracture planes fade out towards their ends
       const f = Math.sin((s / len) * Math.PI);
-      const c = bright ? [214, 240, 248] : [40, 82, 104];
+      const c = bright ? [222, 236, 246] : [96, 124, 150];
       blend(p, Math.round(x), Math.round(y), c, 0.45 * f);
       blend(p, Math.round(x + Math.sin(a)), Math.round(y - Math.cos(a)), c, 0.16 * f);
     }
@@ -2111,14 +2108,14 @@ function tDunIce() {
     const cx = rnd.int(64), cy = rnd.int(64), r = rnd.float(0.8, 2);
     blob(p, cx, cy, r, r, (x, y, d) => {
       if (d > 1) return null;
-      return mixC(p.get(x, y), d < 0.5 ? [232, 250, 252] : [60, 118, 140], 0.55);
+      return mixC(p.get(x, y), d < 0.5 ? [226, 240, 248] : [110, 140, 164], 0.55);
     });
   }
   // polished sheen
   paint(p, (x, y) => {
     const s = smoothstep(0.6, 0.9, nzXY(x, y, 4, 12, 1229));
     if (s <= 0) return null;
-    return mixC(p.get(x, y), [236, 250, 252], s * 0.35);
+    return mixC(p.get(x, y), [228, 242, 250], s * 0.3);
   });
   return p;
 }
@@ -2131,8 +2128,8 @@ function tDunLavaRock() {
     const edge = c.f2 - c.f1;
     // black crust plates, dull heat only in the hairline seams between them
     let col = mixC([16, 14, 14], [58, 50, 46], clamp01(0.2 + n * 0.85 - c.f1 * 0.35));
-    const seam = 0.35 + nz(x, y, 3, 1233, 2, 0.5) * 1.0;
-    const glow = Math.pow(1 - smoothstep(0.0, 0.13, edge), 1.3) * seam;
+    const seam = 0.25 + nz(x, y, 3, 1233, 2, 0.5) * 0.9;
+    const glow = Math.pow(1 - smoothstep(0.0, 0.08, edge), 1.4) * seam;
     if (glow > 0) {
       const hot = mixC([106, 32, 6], [198, 106, 16], clamp01(glow * 1.5 - 0.5));
       col = mixC(col, hot, clamp01(glow * 0.85));
@@ -2337,13 +2334,24 @@ function waterFrames(o) {
     times.push(acc);
     acc += frames === WATER_FRAMES ? WATER_FRAME_TIMES[f] : 1 / frames;
   }
+  // The domain warp and the foam field are static across the loop, so they are
+  // built once rather than seven times.
+  const WX = new Float32Array(64 * 64), WY = new Float32Array(64 * 64);
+  const FM = foam > 0 ? new Float32Array(64 * 64) : null;
+  for (let y = 0; y < 64; y++) {
+    for (let x = 0; x < 64; x++) {
+      const i = y * 64 + x;
+      WX[i] = x + (nz(x, y, 4, seed, 3, 0.55) - 0.5) * warp * 2;
+      WY[i] = y + (nz(x, y, 4, seed + 17, 3, 0.55) - 0.5) * warp * 2;
+      if (FM) FM[i] = smoothstep(0.62, 0.8, nz(x, y, 5, seed + 31, 3, 0.6));
+    }
+  }
   for (let f = 0; f < frames; f++) {
     const ph = (times[f] / acc) * TAU;
     const p = P();
     paint(p, (x, y) => {
-      // static domain warp so the wave train is not a regular grid
-      const wx = x + (nz(x, y, 4, seed, 3, 0.55) - 0.5) * warp * 2;
-      const wy = y + (nz(x, y, 4, seed + 17, 3, 0.55) - 0.5) * warp * 2;
+      const i = y * 64 + x;
+      const wx = WX[i], wy = WY[i];
       let h = 0, n = 0;
       for (const [kx, ky, sp, a] of waves) {
         h += a * Math.sin(TAU * (kx * wx + ky * wy) / 64 + ph * sp);
@@ -2356,10 +2364,7 @@ function waterFrames(o) {
       c = mixC(c, colLite, cr * 0.85);
       const cr2 = smoothstep(spec + 0.24, spec + 0.34, h);
       c = mixC(c, colSpec, cr2);
-      if (foam > 0) {
-        const fm = smoothstep(0.62, 0.8, nz(x, y, 5, seed + 31, 3, 0.6)) * cr;
-        c = mixC(c, [168, 190, 196], fm * foam);
-      }
+      if (FM) c = mixC(c, [168, 190, 196], FM[i] * cr * foam);
       return c;
     });
     out.push(p);
@@ -2381,13 +2386,23 @@ const fWaterDeep = () => waterFrames({
 function fSwampWater() {
   // same 7-frame table as open water so one global phase drives every fluid
   const frames = WATER_FRAMES, out = [];
+  // static warp field, shared by every frame
+  const WX = new Float32Array(64 * 64), WY = new Float32Array(64 * 64), WV = new Float32Array(64 * 64);
+  for (let y = 0; y < 64; y++) {
+    for (let x = 0; x < 64; x++) {
+      const i = y * 64 + x;
+      WX[i] = x + (nz(x, y, 4, 1373, 3, 0.55) - 0.5) * 8;
+      WY[i] = y + (nz(x, y, 4, 1379, 3, 0.55) - 0.5) * 8;
+      WV[i] = nz1(x, y, 18, 1387);
+    }
+  }
   let acc = 0;
   for (let f = 0; f < frames; f++) {
     const ph = acc * TAU; acc += WATER_FRAME_TIMES[f];
     const p = P();
     paint(p, (x, y) => {
-      const wx = x + (nz(x, y, 4, 1373, 3, 0.55) - 0.5) * 8;
-      const wy = y + (nz(x, y, 4, 1379, 3, 0.55) - 0.5) * 8;
+      const wi = y * 64 + x;
+      const wx = WX[wi], wy = WY[wi];
       const h = 0.6 * Math.sin(TAU * (wx + 2 * wy) / 64 + ph)
         + 0.4 * Math.sin(TAU * (2 * wx - wy) / 64 - ph);
       let c = mixC([44, 56, 38], [78, 92, 56], clamp01(h * 0.5 + 0.5));
@@ -2396,7 +2411,7 @@ function fSwampWater() {
       const sn = nz(x + Math.cos(ph) * 4, y + Math.sin(ph) * 4, 4, 1381, 3, 0.6);
       const sc = smoothstep(0.55, 0.60, sn);
       const rim = smoothstep(0.53, 0.55, sn) * (1 - smoothstep(0.575, 0.6, sn));
-      c = mixC(c, mixC([62, 78, 42], [116, 128, 74], nz1(x, y, 18, 1387)), sc * 0.8);
+      c = mixC(c, mixC([62, 78, 42], [116, 128, 74], WV[wi]), sc * 0.8);
       c = mixC(c, [34, 42, 26], rim * 0.55);
       return c;
     });
@@ -2445,16 +2460,16 @@ function tLava() {
       const tone = hash2(c.gx, c.gy, 1411);
       // each plate is its own slab of crust: some fresh and black, some old
       // and ashy grey, all of them cracked
-      let col = mixC([16, 13, 13], [86, 74, 68], clamp01(0.1 + n * 0.7 + tone * 0.5 - c.f1 * 0.3));
+      let col = mixC([26, 20, 16], [70, 46, 32], clamp01(0.1 + n * 0.7 + tone * 0.5 - c.f1 * 0.3));
       // molten channels between plates, hotter in some seams than others
-      const seam = 0.45 + nz(x, y, 3, 1413, 2, 0.5) * 1.1;
-      const g = Math.pow(1 - smoothstep(0.0, 0.16, edge), 1.3) * seam;
+      const seam = 0.28 + nz(x, y, 3, 1413, 2, 0.5) * 1.0;
+      const g = Math.pow(1 - smoothstep(0.0, 0.075, edge), 1.5) * seam;
       if (g > 0) {
         const hot = mixC([176, 46, 4], [255, 210, 90], clamp01(g * 1.5 - 0.4 + pulse * 0.2));
         col = mixC(col, hot, clamp01(g * 1.15));
       }
       // heat bleeding a little way onto the crust either side of a channel
-      const bleed = (1 - smoothstep(0.1, 0.34, edge)) * 0.3 * (0.7 + pulse * 0.4) * seam;
+      const bleed = (1 - smoothstep(0.06, 0.24, edge)) * 0.28 * (0.7 + pulse * 0.4) * seam;
       col = mixC(col, [126, 42, 8], clamp01(bleed));
       return col;
     });
@@ -2581,8 +2596,8 @@ const DEFS = [
   ['mud', 'terrain', 64, 512, 12, tMud],
   ['road_dirt', 'terrain', 64, 512, 12, tRoadDirt],
   ['road_cobble', 'terrain', 64, 512, 8, tRoadCobble],
-  ['sand', 'terrain', 64, 512, 12, tSand],
-  ['sand_dune', 'terrain', 64, 512, 12, tSandDune],
+  ['sand', 'terrain', 64, 512, 6, tSand],
+  ['sand_dune', 'terrain', 64, 512, 7, tSandDune],
   ['snow', 'terrain', 64, 512, 12, tSnow],
   ['snow_rock', 'terrain', 64, 512, 10, tSnowRock],
   ['gravel', 'terrain', 64, 512, 10, tGravel],
@@ -2600,7 +2615,7 @@ const DEFS = [
   ['cliff_snow', 'terrain', 64, 512, 10, tCliffSnow],
   ['cliff_volcanic', 'terrain', 64, 512, 10, tCliffVolcanic],
   // --- building walls ------------------------------------------------------
-  ['wall_plaster', 'wall', 64, 256, 6, tWallPlaster],
+  ['wall_plaster', 'wall', 64, 256, 4, tWallPlaster],
   ['wall_timber', 'wall', 64, 256, 5, tWallTimber],
   ['wall_brick', 'wall', 64, 256, 6, tWallBrick],
   ['wall_stone_block', 'wall', 64, 256, 7, tWallStoneBlock],
@@ -2650,7 +2665,7 @@ const DEFS = [
   // --- liquids (animated) --------------------------------------------------
   ['water', 'liquid', 64, 512, 10, fWater],
   ['water_deep', 'liquid', 64, 512, 10, fWaterDeep],
-  ['lava', 'liquid', 64, 512, 10, tLava],
+  ['lava', 'liquid', 64, 512, 4, tLava],
   ['swamp_water', 'liquid', 64, 512, 10, fSwampWater],
   // --- special -------------------------------------------------------------
   ['sky_gradient', 'special', 128, 4096, 18, tSkyGradient],
@@ -2675,32 +2690,32 @@ const TONE = {
   grass_lush: [70, 120, 0.10, 0.02],
   dirt: [70, 124, 0.06, 0.14],
   mud: [58, 106, 0.08, 0.12],
-  road_dirt: [76, 130, 0.06, 0.13],
+  road_dirt: [76, 130, 0.10, 0.07],
   road_cobble: [70, 162, 0.12, 0.09],
-  sand: [156, 200, 0.08, 0.06],
-  sand_dune: [150, 196, 0.08, 0.06],
+  sand: [158, 198, 0.16, 0.03],
+  sand_dune: [152, 196, 0.14, 0.03],
   snow: [198, 244, 0.06, -0.02],
-  snow_rock: [96, 212, 0.08, 0.05],
+  snow_rock: [96, 212, 0.06, 0.02],
   gravel: [64, 158, 0.10, 0.09],
   moss_rock: [58, 134, 0.10, 0.05],
   swamp_muck: [56, 106, 0.10, 0.02],
   farmland: [70, 132, 0.06, 0.12],
   ash: [82, 136, 0.22, 0.0],
   volcanic_rock: [34, 104, 0.12, 0.05],
-  beach_wet: [64, 116, 0.08, 0.03],
+  beach_wet: [56, 104, 0.10, 0.0],
   tundra: [74, 124, 0.12, 0.04],
   forest_floor: [46, 114, 0.08, 0.08],
-  cliff_rock: [62, 148, 0.10, 0.08],
-  cliff_sand: [100, 190, 0.08, 0.07],
-  cliff_snow: [96, 202, 0.06, 0.03],
+  cliff_rock: [62, 148, 0.08, 0.13],
+  cliff_sand: [100, 190, 0.16, 0.04],
+  cliff_snow: [96, 202, 0.04, -0.03],
   cliff_volcanic: [32, 102, 0.10, 0.05],
   // man-made: a little more range, still not punchy
-  wall_plaster: [168, 224, 0.08, 0.05],
+  wall_plaster: [166, 216, 0.14, 0.03],
   wall_timber: [58, 216, 0.06, 0.05],
   wall_brick: [72, 168, 0.06, 0.05],
-  wall_stone_block: [78, 168, 0.10, 0.10],
-  wall_castle: [98, 172, 0.14, 0.11],
-  wall_castle_dark: [66, 132, 0.14, 0.11],
+  wall_stone_block: [78, 168, 0.08, 0.14],
+  wall_castle: [98, 172, 0.12, 0.13],
+  wall_castle_dark: [66, 132, 0.12, 0.13],
   wall_wood_plank: [46, 138, 0.06, 0.05],
   wall_log: [44, 148, 0.06, 0.05],
   wall_marble: [190, 240, 0.10, 0.03],
@@ -2709,7 +2724,7 @@ const TONE = {
   wall_shop_front: [66, 214, 0.08, 0.05],
   roof_shingle_red: [56, 148, 0.06, 0.03],
   roof_shingle_grey: [58, 148, 0.12, 0.06],
-  roof_thatch: [70, 180, 0.10, 0.06],
+  roof_thatch: [66, 162, 0.18, 0.04],
   roof_tile_blue: [50, 158, 0.10, -0.02],
   roof_slate: [46, 130, 0.12, 0.0],
   dun_brick: [62, 134, 0.12, 0.05],
@@ -2719,7 +2734,7 @@ const TONE = {
   dun_metal: [56, 148, 0.12, 0.0],
   dun_sewer: [54, 112, 0.12, 0.03],
   dun_tomb: [86, 148, 0.10, 0.08],
-  dun_ice: [136, 208, 0.08, -0.03],
+  dun_ice: [138, 206, 0.18, -0.02],
   dun_lava_rock: [28, 92, 0.04, 0.06],
   dun_temple: [40, 130, 0.08, 0.0],
   dun_wood: [30, 118, 0.06, 0.05],
@@ -2728,6 +2743,12 @@ const TONE = {
   dun_floor_tile: [54, 148, 0.12, 0.04],
   dun_ceiling_stone: [42, 112, 0.12, 0.06],
   dun_ceiling_cave: [30, 96, 0.10, 0.07],
+  // trim: mostly left alone, but the painted ones need reining in
+  shutters: [56, 150, 0.16, 0.04],
+  wall_banner: [40, 158, 0.05, 0.02],
+  fence_wood: [40, 140, 0.06, 0.05],
+  barrel_side: [46, 156, 0.06, 0.05],
+  crate_side: [46, 156, 0.06, 0.05],
 };
 
 /** @type {string[]} every texture id in the library. */
@@ -2887,6 +2908,7 @@ function maskDistance(id, x, y) {
       road_ns: ['n', 's'], road_ew: ['e', 'w'],
       road_turn_ne: ['n', 'e'], road_turn_se: ['s', 'e'],
       road_turn_sw: ['s', 'w'], road_turn_nw: ['n', 'w'],
+      // a T is named for the side it closes off: road_t_n has no north arm
       road_t_n: ['e', 'w', 's'], road_t_e: ['n', 's', 'w'],
       road_t_s: ['e', 'w', 'n'], road_t_w: ['n', 's', 'e'],
       road_y: ['s', 'n', 'e'], road_cross: ['n', 'e', 's', 'w'],

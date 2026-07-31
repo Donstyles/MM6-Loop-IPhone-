@@ -248,14 +248,13 @@ export class CharSheetScreen extends Screen {
           F.drawText(ctx, `(${s.level})`, px(col.x + col.w - 52), py(y), {
             face: 'small', color: c, align: 'right',
           });
+          // A capped skill prints its rank in canary: this is as far as the
+          // class can ever take it.
+          const capped = cap && s.mastery >= cap;
           F.drawText(ctx, MASTERY_NAMES[s.mastery] || '-', px(col.x + col.w), py(y), {
             face: 'small', align: 'right',
-            color: s.mastery >= 3 ? CANARY : s.mastery === 2 ? BOLT : c,
+            color: capped ? CANARY : s.mastery >= 2 ? BOLT : c,
           });
-          if (cap && s.mastery >= cap) {
-            ctx.globalAlpha = 0.6; ctx.fillStyle = DIM;
-            ctx.fillRect(px(col.x + col.w + 2), py(y + 1), 2, 8); ctx.globalAlpha = 1;
-          }
           y += 13;
         }
         y += 6;
@@ -287,7 +286,6 @@ export class CharSheetScreen extends Screen {
     const x = 20, w = 396, top = 44, rowH = 20;
     const visible = Math.floor((296 - top) / rowH);
 
-    F.drawText(ctx, 'Awards and Titles', px(x), py(28), { color: CANARY });
     this.awardScroll = this.scrollbar(ctx, 'awardbar', px(x + w + 6), py(top),
       visible * rowH, this.awardScroll, list.length, visible);
 

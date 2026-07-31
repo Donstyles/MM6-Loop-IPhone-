@@ -18,7 +18,7 @@
 
 import { layout } from '../../core/layout.js';
 import { Rand, clamp, smoothstep, fbm2, valueNoise2 } from '../../core/rng.js';
-import { rampCss, ramp, ditherImageData } from '../../core/palette.js';
+import { rampCss, ramp, snap } from '../../core/palette.js';
 import * as F from '../../art/font.js';
 import { PORTRAIT_W, PORTRAIT_H } from '../../art/portraits.js';
 import { Screen, A, portraitOf, wrapLines, drawWrapped } from './screenbase.js';
@@ -232,27 +232,77 @@ export function yesNo(ui, ctx, idNs = 'confirm') {
 // Painting kit
 // ---------------------------------------------------------------------------
 
+// Ordered dither for the painted interiors. palette.js's ditherImageData does a
+// full 256-entry nearest search per pixel, which is far too slow for a 461x345
+// backdrop; painted surfaces only ever emit a couple of hundred distinct
+// colours, so memoising the snap makes the same result effectively free.
+const BAYER4 = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+const _snapMemo = new Map();
+
+function snapMemo(r, g, b) {
+  const k = (r << 16) | (g << 8) | b;
+  let v = _snapMemo.get(k);
+  if (v === undefined) { v = snap(r, g, b); _snapMemo.set(k, v); }
+  return v;
+}
+
+/** Ordered-dither and palettise an ImageData in place. */
+export function ditherRegion(img, amount = 8) {
+  const { data, width, height } = img;
+  for (let y = 0; y < height; y++) {
+    const row = BAYER4[y & 3];
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      if (data[i + 3] === 0) continue;
+      const t = (row[x & 3] / 16 - 0.469) * amount;
+      const p = snapMemo(
+        clamp(Math.round(data[i] + t), 0, 255),
+        clamp(Math.round(data[i + 1] + t), 0, 255),
+        clamp(Math.round(data[i + 2] + t), 0, 255),
+      );
+      data[i] = p[0]; data[i + 1] = p[1]; data[i + 2] = p[2];
+    }
+  }
+  return img;
+}
+
+const _scratch = document.createElement('canvas');
+
 /**
- * Per-pixel paint into a rect. `f(u,v,rand,w,h)` returns [r,g,b]. The result is
- * ordered-dithered so painted interiors sit in the same 8-bit world as the 3D
- * view. Only ever called while baking a backdrop.
+ * Per-pixel paint into a rect. `f(u,v,rand,w,h)` returns [r,g,b] in *output*
+ * coordinates; the result is ordered-dithered so painted interiors sit in the
+ * same 8-bit world as the 3D view.
+ *
+ * `step` paints at 1/step resolution and blows the result up with nearest
+ * sampling. MM6's art is 64x64 textures magnified, so chunky noise is not a
+ * compromise here - it is the look - and it makes a full 461x345 interior cost
+ * a quarter of what it otherwise would. Only ever called while baking.
  */
-export function washPixels(ctx, x, y, w, h, f, seed = 5) {
+export function washPixels(ctx, x, y, w, h, f, seed = 5, step = 2) {
   x |= 0; y |= 0; w |= 0; h |= 0;
   if (w <= 0 || h <= 0) return;
-  const img = ctx.createImageData(w, h);
+  const s = Math.max(1, step | 0);
+  const cw = Math.ceil(w / s), chh = Math.ceil(h / s);
+  const img = ctx.createImageData(cw, chh);
   const d = img.data;
   const rnd = new Rand(seed);
-  for (let v = 0; v < h; v++) {
-    for (let u = 0; u < w; u++) {
-      const c = f(u, v, rnd, w, h);
-      const i = (v * w + u) * 4;
+  for (let v = 0; v < chh; v++) {
+    for (let u = 0; u < cw; u++) {
+      const c = f(u * s, v * s, rnd, w, h);
+      const i = (v * cw + u) * 4;
       if (!c) continue;
       d[i] = c[0]; d[i + 1] = c[1]; d[i + 2] = c[2]; d[i + 3] = c[3] === undefined ? 255 : c[3];
     }
   }
-  ditherImageData(img, 8);
-  ctx.putImageData(img, x, y);
+  ditherRegion(img, 8);
+  if (s === 1) { ctx.putImageData(img, x, y); return; }
+  _scratch.width = cw; _scratch.height = chh;
+  const sg = _scratch.getContext('2d');
+  sg.putImageData(img, 0, 0);
+  const sm = ctx.imageSmoothingEnabled;
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(_scratch, 0, 0, cw, chh, x, y, cw * s, chh * s);
+  ctx.imageSmoothingEnabled = sm;
 }
 
 const _baked = new Map();
@@ -271,15 +321,23 @@ export function baked(key, w, h, painter) {
   return c;
 }
 
-/** Banded additive pool of light: lamps, fires, stained glass, magic. */
+/**
+ * Banded additive pool of light: lamps, fires, stained glass, magic.
+ *
+ * Ten thin rings whose alpha falls off quadratically. Fewer, fatter rings read
+ * as concentric discs; this reads as light, and the banding it does leave is
+ * the ordered-dither look the rest of the frame has.
+ */
 export function glow(ctx, cx, cy, r, css, alpha = 0.5) {
+  const N = 10;
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
-  for (let i = 6; i >= 1; i--) {
-    ctx.globalAlpha = alpha * (i / 6) * 0.20;
-    ctx.fillStyle = css;
+  ctx.fillStyle = css;
+  for (let i = N; i >= 1; i--) {
+    const t = i / N;
+    ctx.globalAlpha = alpha * (1 - t) * (1 - t) * 0.34;
     ctx.beginPath();
-    ctx.arc(cx | 0, cy | 0, Math.max(1, (r * i) / 6) | 0, 0, Math.PI * 2);
+    ctx.arc(cx | 0, cy | 0, Math.max(1, r * t) | 0, 0, Math.PI * 2);
     ctx.fill();
   }
   ctx.restore();
@@ -328,9 +386,10 @@ export function paintWall(g, x, y, w, h, o = {}) {
   washPixels(g, x, y, w, h, (u, v) => {
     const row = Math.floor(v / course);
     const off = (row & 1) * (course * 1.5);
+    // Seams are two pixels wide because the wash is painted at half scale.
     const bx = (u + off) % (course * 2.4);
-    const seam = bx < 1.3 || (v % course) < 1.3 ? -0.12 : 0;
-    const n = fbm2((u + off) * 0.07, v * 0.09, 3, 2, 0.5, seed) * 0.5 + 0.5;
+    const seam = bx < 2.2 || (v % course) < 2.2 ? -0.12 : 0;
+    const n = fbm2((u + off) * 0.07, v * 0.09, 2, 2, 0.5, seed) * 0.5 + 0.5;
     // Light spills from the upper left of every MM6 interior.
     const lightX = 1 - smoothstep(0, w, u) * 0.42;
     const lightY = 1 - smoothstep(0, h * 1.7, v) * 0.45;
@@ -352,7 +411,7 @@ export function paintFloor(g, x, y, w, h, o = {}) {
     const rung = Math.floor(depth * 3.5) % 2;
     const n = valueNoise2(board * 3.1, depth * 2.4, seed);
     let s = 0.20 + t * 0.34 + n * 0.16 + rung * 0.03;
-    if (line < 0.05 || line > 0.95) s -= 0.13;
+    if (line < 0.09 || line > 0.91) s -= 0.13;
     const grain = valueNoise2(u * 0.9, v * 0.2 + board * 5, seed + 3) * 0.07;
     return ramp(name, Math.round(clamp(s + grain, 0.02, 1) * 15));
   }, seed);
@@ -509,11 +568,19 @@ export class HouseScreen extends Screen {
     }
   }
 
-  /** Two lines of white status text between the portrait and the options. */
+  /**
+   * White status text under the option list. It sits below rather than above
+   * because the proprietor's name and occupation already own the space between
+   * the portrait and the first option.
+   */
   drawPanelInfo(ctx) {
     const d = dlgRect();
     const lines = this.panelInfo ? this.panelInfo() : [];
-    let y = this.optionY - 8 - lines.length * 11;
+    if (!lines.length) return;
+    const optCount = this.options ? this.options().length : 0;
+    let y = Math.min(EXIT_BTN.y - 12 - lines.length * 11,
+      this.optionY + optCount * OPTION.step + 14);
+    A.divider(ctx, d.x + 14, y - 8, d.w - 28);
     for (const l of lines) {
       const s = typeof l === 'string' ? l : l.text;
       F.drawText(ctx, s, d.x + d.w / 2, y, {
@@ -949,7 +1016,7 @@ export function vignette(g, w, h, strength = 0.55) {
       d[i] *= k; d[i + 1] *= k; d[i + 2] *= k;
     }
   }
-  ditherImageData(img, 6);
+  ditherRegion(img, 6);
   g.putImageData(img, 0, 0);
 }
 

@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Game systems preview</title>
+<style>
+  html, body { margin: 0; background: #14161a; color: #d8c47a; font: 12px/1.5 monospace; }
+  h2 { font: bold 14px monospace; color: #e8d89a; margin: 16px 0 6px 12px; }
+  nav { padding: 10px 12px; border-bottom: 1px solid #3a3428; position: sticky; top: 0; background: #14161a; z-index: 2; }
+  nav button { font: 12px monospace; background: #23262c; color: #d8c47a; border: 1px solid #3a3428; padding: 4px 10px; margin-right: 4px; cursor: pointer; }
+  nav button.on { background: #d8c47a; color: #14161a; }
+  section { display: none; padding: 0 12px 40px; }
+  section.on { display: block; }
+  table { border-collapse: collapse; margin: 4px 0 18px; }
+  th, td { border: 1px solid #2c3039; padding: 2px 7px; text-align: left; white-space: nowrap; }
+  th { background: #1c1f25; color: #e8d89a; position: sticky; top: 41px; }
+  tr:nth-child(even) td { background: #181b20; }
+  td.num { text-align: right; }
+  .dim { color: #8a8168; }
+  .warn { color: #ff8080; }
+  .note { color: #9aa; margin: 4px 0 10px; max-width: 900px; white-space: pre-wrap; }
+  #err { color: #ff8080; white-space: pre-wrap; padding: 12px; }
+</style>
+</head>
+<body>
+<nav id="tabs"></nav>
+<div id="err"></div>
+
+<script type="module">
+import { Rand } from '../../src/core/rng.js';
+import * as Stats from '../../src/game/stats.js';
+import * as Skills from '../../src/game/skills.js';
+import * as Spells from '../../src/game/spells.js';
+import * as Items from '../../src/game/items.js';
+import * as Monsters from '../../src/game/monsters.js';
+import * as Party from '../../src/game/party.js';
+import * as Quests from '../../src/game/quests.js';
+import * as Names from '../../src/game/npcnames.js';
+
+const el = (tag, attrs, kids) => {
+  const n = document.createElement(tag);
+  for (const k in (attrs || {})) {
+    if (k === 'class') n.className = attrs[k];
+    else if (k === 'html') n.innerHTML = attrs[k];
+    else n.setAttribute(k, attrs[k]);
+  }
+  for (const kid of (kids || [])) n.appendChild(typeof kid === 'string' ? document.createTextNode(kid) : kid);
+  return n;
+};
+
+/** rows: array of arrays; cols: array of header strings. `num` marks right-aligned columns. */
+function table(cols, rows, num) {
+  const nums = new Set(num || []);
+  const head = el('tr', {}, cols.map((c) => el('th', {}, [String(c)])));
+  const body = rows.map((r) => el('tr', {}, r.map((v, i) =>
+    el('td', nums.has(i) ? { class: 'num' } : {}, [v === null || v === undefined ? '' : String(v)]))));
+  return el('table', {}, [head].concat(body));
+}
+
+const sections = [];
+function panel(name, build) { sections.push({ name, build }); }
+
+// --- Stats -----------------------------------------------------------------
+panel('Stats', () => {
+  const out = [];
+  out.push(el('h2', {}, ['Stat modifier table']));
+  out.push(table(['stat >=', 'modifier'],
+    Stats.STAT_BONUS_TABLE_RO.map((p) => [p.at, (p.bonus >= 0 ? '+' : '') + p.bonus]), [0, 1]));
+
+  out.push(el('h2', {}, ['Classes']));
+  out.push(table(['id', 'name', 'line', 'tier', 'HP/lvl', 'SP/lvl', 'SP stat', 'promotes to', 'starting spread'],
+    Object.values(Stats.CLASSES).map((k) => [
+      k.id, k.name, k.line, k.tier, k.hpPerLevel, k.spPerLevel, k.spStat || '-', k.promotesTo || '-',
+      Stats.STAT_IDS.map((s) => `${s.slice(0, 3)} ${k.startStats[s]}`).join(' '),
+    ]), [3, 4, 5]));
+
+  out.push(el('h2', {}, ['Conditions (severity order)']));
+  out.push(table(['id', 'name', 'sev', 'blocks', 'cured by', 'effect'],
+    Stats.CONDITIONS_BY_SEVERITY.slice().reverse().map((c) => [
+      c.id, c.name, c.severity, c.blocksAction ? 'yes' : '', (c.curedBy || []).join(', ') || '-', c.desc,
+    ]), [2]));
+
+  out.push(el('h2', {}, ['Experience table']));
+  const lv = [];
+  for (let i = 1; i <= 50; i++) lv.push([i, Stats.xpForLevel(i), i < 50 ? Stats.xpForLevel(i + 1) - Stats.xpForLevel(i) : '-', Stats.trainingCost(i)]);
+  out.push(table(['level', 'total XP', 'delta', 'training gold'], lv, [0, 1, 2, 3]));
+
+  out.push(el('h2', {}, ['Age bands']));
+  out.push(table(['band', 'from', 'to'].concat(Stats.STAT_IDS),
+    Stats.AGE_BANDS.map((b) => [b.name, b.from, b.to].concat(Stats.STAT_IDS.map((s) => b[s]))), [1, 2, 3, 4, 5, 6, 7, 8, 9]));
+  return out;
+});
+
+// --- Skills ----------------------------------------------------------------
+panel('Skills', () => {
+  const out = [];
+  out.push(el('div', { class: 'note' }, ['MM6 has three ranks only: Normal, Expert, Master. Effects shown at skill level 10.']));
+  for (const cat of Object.keys(Skills.SKILL_CATEGORIES)) {
+    out.push(el('h2', {}, [Skills.SKILL_CATEGORIES[cat]]));
+    out.push(table(['id', 'name', 'Normal', 'Expert', 'Master'],
+      Skills.SKILLS.filter((s) => s.category === cat).map((s) => [
+        s.id, s.name,
+        Skills.skillEffect(s.id, 10, 1).text,
+        Skills.skillEffect(s.id, 10, 2).text,
+        Skills.skillEffect(s.id, 10, 3).text,
+      ])));
+  }
+  out.push(el('h2', {}, ['Class / skill / max mastery matrix']));
+  const classIds = Object.keys(Skills.CLASS_SKILLS);
+  out.push(table(['skill'].concat(classIds.map((c) => Stats.CLASSES[c].name)),
+    Skills.SKILL_IDS.map((sid) => [sid].concat(classIds.map((c) => {
+      const m = Skills.classSkillMax(c, sid);
+      return m ? Skills.MASTERY_NAMES[m] : '-';
+    })))));
+
+  out.push(el('h2', {}, ['Skill point costs']));
+  const rows = [];
+  for (let i = 0; i <= 20; i++) rows.push([i, Skills.skillPointCost(i), Skills.totalSkillCost(i)]);
+  out.push(table(['at level', 'cost of next', 'total spent'], rows, [0, 1, 2]));
+  return out;
+});
+
+// --- Spells ----------------------------------------------------------------
+panel('Spells', () => {
+  const out = [];
+  const problems = Spells.validateSpells();
+  out.push(el('div', { class: problems.length ? 'warn' : 'note' },
+    [problems.length ? problems.join('\n') : `${Spells.SPELLS.length} spells, 9 schools x 11. All vfx tags valid.`]));
+  for (const school of Spells.SCHOOL_IDS) {
+    out.push(el('h2', {}, [school.toUpperCase() + ' magic']));
+    out.push(table(['tier', 'name', 'SP', 'type', 'target', 'vfx', 'avg dmg @10/Master', 'duration @10/Master', 'text'],
+      Spells.SPELLS_BY_SCHOOL[school].map((s) => [
+        s.tier, s.name, s.sp, s.type, s.target, s.vfx,
+        s.dmg || s.fractionOfMaxHP ? Spells.spellDamageAvg(s, 10, 3, { maxHP: 300 }) : '-',
+        s.dur ? Spells.spellDuration(s, 10, 3) + ' min' : '-',
+        s.text,
+      ]), [0, 2, 6]));
+  }
+  return out;
+});
+
+// --- Monsters --------------------------------------------------------------
+panel('Monsters', () => {
+  const out = [];
+  const problems = Monsters.validateMonsters();
+  out.push(el('div', { class: problems.length ? 'warn' : 'note' }, [problems.length ? problems.join('\n')
+    : `${Monsters.MONSTERS.length} entries: ${Monsters.FAMILY_IDS.length - 2} families x 3 tiers + 2 uniques.\n`
+      + 'Hit points are regenerated from the retail curve HP = floor(3L + 0.1L^2).']));
+  out.push(table(
+    ['id', 'name', 'lvl', 'HP', 'AC', 'attack', 'attack 2', 'ranged', 'spd', 'move', 'AI', 'rec', 'XP', 'gold',
+      'kind', 'size', 'group', 'fly', 'undead', 'immune', 'regions'],
+    Monsters.MONSTERS.map((m) => [
+      m.id, m.name, m.level, m.hp, m.ac,
+      `${m.attack.dice.n}d${m.attack.dice.s}+${m.attack.bonus} ${m.attack.element}`,
+      m.attack2 ? `${m.attack2.dice.n}d${m.attack2.dice.s}+${m.attack2.bonus} ${m.attack2.element}` : '-',
+      m.ranged ? `${m.ranged.spell || m.ranged.projectile} ${m.ranged.damage.n}d${m.ranged.damage.s}+${m.ranged.bonus} @${m.ranged.range}` : '-',
+      m.speed, m.moveType, m.aiType, m.recoveryTime, m.xp, m.gold,
+      m.kind, m.size, m.groupSize.join('-'), m.flying ? 'Y' : '', m.undead ? 'Y' : '',
+      m.immunities.join(',') || '-', m.spawnRegions.join(' '),
+    ]), [2, 3, 4, 8, 11, 12, 13, 15]));
+  return out;
+});
+
+// --- Items -----------------------------------------------------------------
+panel('Items', () => {
+  const out = [];
+  out.push(el('h2', {}, ['Weapons']));
+  out.push(table(['id', 'name', 'skill', 'damage', 'recovery', 'value', 'tier', '2H', 'grid'],
+    Items.WEAPONS.map((w) => [w.id, w.name, w.skill, `${w.dice.n}d${w.dice.s}${w.dice.plus ? '+' + w.dice.plus : ''}`,
+      w.recovery, w.value, w.tier, w.twoHanded ? 'Y' : '', `${w.gw}x${w.gh}`]), [4, 5, 6]));
+
+  out.push(el('h2', {}, ['Armour and worn gear']));
+  out.push(table(['id', 'name', 'type', 'skill', 'AC', 'recovery penalty', 'value', 'tier', 'grid'],
+    Items.ARMORS.map((a) => [a.id, a.name, a.type, a.skill || '-', a.ac, a.recovery, a.value, a.tier, `${a.gw}x${a.gh}`]),
+    [4, 5, 6, 7]));
+
+  out.push(el('h2', {}, ['Enchantments']));
+  out.push(table(['id', 'name', 'kind', 'tier', 'min level', 'applies to', 'effect'],
+    Items.ENCHANTMENTS.map((e) => [e.id, e.name, e.kind, e.tier, e.minLevel, e.on.join(' '), e.desc]), [3, 4]));
+
+  out.push(el('h2', {}, ['Artifacts']));
+  out.push(table(['id', 'name', 'base', 'type', 'tier', 'value', 'effect', 'flavour'],
+    Items.ARTIFACTS.map((a) => [a.id, a.name, a.base, a.type, a.tier, a.value,
+      Object.keys(a.mods).map((k) => `${k}:${JSON.stringify(a.mods[k])}`).join(' '), a.desc]), [4, 5]));
+
+  out.push(el('h2', {}, ['Potions and alchemy']));
+  out.push(table(['id', 'name', 'colour', 'layer', 'value', 'effect', 'brewed from'],
+    Items.POTIONS.map((p) => [p.id, p.name, p.color, p.layer, p.value, p.desc,
+      Items.recipesFor(p.id).map((r) => r.join(' + ')).join(' | ') || 'reagents']), [3, 4]));
+
+  out.push(el('h2', {}, ['Reagents']));
+  out.push(table(['id', 'name', 'distils to', 'power', 'value', 'tier'],
+    Items.REAGENTS.map((r) => [r.id, r.name, r.base, r.power, r.value, r.tier]), [3, 4, 5]));
+
+  out.push(el('h2', {}, ['Generated loot samples']));
+  const rand = new Rand('preview-loot');
+  const rows = [];
+  for (const level of [1, 5, 10, 20, 30, 45, 60]) {
+    for (let i = 0; i < 8; i++) {
+      const it = Items.generateItem(rand, { level, identified: true });
+      rows.push([level, it.type, Items.itemName(it, true), Items.itemValue(it),
+        Items.itemDescription(it).split('\n').slice(1, -1).join('; ')]);
+    }
+  }
+  out.push(table(['drop level', 'type', 'name', 'value', 'detail'], rows, [0, 3]));
+  return out;
+});
+
+// --- Party -----------------------------------------------------------------
+panel('Party', () => {
+  const out = [];
+  const p = Party.createParty('preview');
+  out.push(el('h2', {}, ['Default starting party']));
+  out.push(table(['name', 'class', 'lvl', 'HP', 'SP', 'AC', 'recovery', 'skills', 'spells', 'equipped'],
+    p.members.map((c) => {
+      const s = Party.characterSheet(c);
+      return [c.name, s.className, c.level, `${c.hp}/${s.maxHP}`, `${c.sp}/${s.maxSP}`, s.ac, s.recovery,
+        Object.keys(c.skills).join(' '), c.spells.length,
+        Object.keys(c.equipment).map((k) => Items.itemName(c.equipment[k], true)).join(', ')];
+    }), [2, 5, 6, 8]));
+  out.push(el('div', { class: 'note' }, [`Gold ${p.gold}, food ${p.food}, clock ${Party.clockOf(p).text}`]));
+
+  out.push(el('h2', {}, ['Level curve (Knight, default gear)']));
+  const rows = [];
+  const rand = new Rand('preview-levels');
+  const k = p.members[0];
+  for (let target = 1; target <= 50; target += target < 10 ? 1 : 5) {
+    k.xp = Stats.xpForLevel(target);
+    while (k.level < target && Party.levelUp(k, rand)) { /* climb */ }
+    rows.push([k.level, k.xp, Stats.maxHP(k), Stats.maxSP(k), Stats.armorClass(k), k.skillPoints]);
+  }
+  out.push(table(['level', 'XP', 'max HP', 'max SP', 'AC', 'unspent skill points'], rows, [0, 1, 2, 3, 4, 5]));
+  return out;
+});
+
+// --- Quests and names ------------------------------------------------------
+panel('Quests & names', () => {
+  const out = [];
+  out.push(el('h2', {}, ['Main quest chain']));
+  out.push(table(['id', 'title', 'giver', 'region', 'requires', 'gold', 'XP', 'objectives'],
+    Quests.createMainChain().map((q) => [q.id, q.title, q.giver, q.region, (q.requires || []).join(',') || '-',
+      q.reward.gold, q.reward.xp, q.objectives.map((o) => o.text).join('; ')]), [5, 6]));
+
+  out.push(el('h2', {}, ['Generated side quests']));
+  const rows = [];
+  for (const region of Object.keys(Quests.REGION_LEVEL)) {
+    for (const q of Quests.generateQuestsForRegion(region, 'preview', 3)) {
+      rows.push([region, q.type, q.title, q.giver, q.reward.gold, q.reward.xp,
+        q.objectives.map((o) => o.text).join('; '), q.text]);
+    }
+  }
+  out.push(table(['region', 'type', 'title', 'giver', 'gold', 'XP', 'objectives', 'text'], rows, [4, 5]));
+
+  out.push(el('h2', {}, ['Awards']));
+  out.push(table(['id', 'name', 'earned for'], Quests.AWARDS.map((a) => [a.id, a.name, a.text])));
+
+  out.push(el('h2', {}, ['Name generators']));
+  const r = new Rand('preview-names');
+  const nrows = [];
+  for (let i = 0; i < 30; i++) {
+    nrows.push([Names.npcName(r, 'm'), Names.npcName(r, 'f'), Names.townName(r),
+      Names.dungeonName(r, ['cave', 'crypt', 'temple', 'tower', 'mine', 'ruins'][i % 6]),
+      Names.tavernName(r), Names.shopName(r, ['weapon', 'armor', 'magic', 'alchemy', 'temple', 'guild'][i % 6]),
+      Names.uniqueMonsterName(r, 'Ogre')]);
+  }
+  out.push(table(['male', 'female', 'town', 'dungeon', 'tavern', 'shop', 'unique monster'], nrows));
+  out.push(el('h2', {}, ['Rumours']));
+  out.push(el('div', { class: 'note' }, [Array.from({ length: 8 }, () => Names.rumour(r)).join('\n')]));
+  return out;
+});
+
+// --- Build -----------------------------------------------------------------
+try {
+  const nav = document.getElementById('tabs');
+  const panes = [];
+  sections.forEach((s, i) => {
+    const btn = el('button', {}, [s.name]);
+    const sec = el('section', {});
+    let built = false;
+    btn.onclick = () => {
+      if (!built) { for (const n of s.build()) sec.appendChild(n); built = true; }
+      panes.forEach((p, j) => {
+        p.sec.className = j === i ? 'on' : '';
+        p.btn.className = j === i ? 'on' : '';
+      });
+    };
+    nav.appendChild(btn);
+    document.body.appendChild(sec);
+    panes.push({ btn, sec });
+  });
+  panes[0].btn.onclick();
+} catch (e) {
+  document.getElementById('err').textContent = e.stack || String(e);
+}
+</script>
+</body>
+</html>

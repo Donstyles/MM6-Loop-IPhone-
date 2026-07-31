@@ -1,5 +1,5 @@
 import { Pix, toTexture, mixC } from './texcanvas.js';
-import { ramp } from '../core/palette.js';
+import { ramp, snap } from '../core/palette.js';
 import { Rand, clamp, hash2, tileFbm2 } from '../core/rng.js';
 
 // ---------------------------------------------------------------------------
@@ -26,12 +26,16 @@ const MAX_ATLAS_W = 1024;
 // key colours and mixed, then the whole atlas is snapped back to the palette,
 // so nothing escapes the 256 entries.
 
+// Each entry is snapped to the palette here, once, so the finished atlas is
+// already 8-bit and needs no per-pixel quantisation pass - which for a megabyte
+// of effect frames is most of the build time.
 function makeLUT(keys, n = 24) {
   const out = [];
   for (let i = 0; i < n; i++) {
     const s = (i / (n - 1)) * (keys.length - 1);
     const a = keys[Math.floor(s)], b = keys[Math.min(keys.length - 1, Math.floor(s) + 1)];
-    out.push(mixC(a, b, s - Math.floor(s)));
+    const c = mixC(a, b, s - Math.floor(s));
+    out.push(snap(c[0], c[1], c[2]));
   }
   return out;
 }
@@ -522,16 +526,16 @@ function acidSplash(p, f, n) {
   blob(p, cx, cy + t * p.h * 0.1, R * (0.42 - t * 0.3) + 1, (v) => lut(LUT_ACID, 0.4 + v * 0.6),
     { wob: 0.3, lobes: 5, phase: t * 6, bands: 4 });
   const rnd = new Rand(1201);
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 12; i++) {
     const a = rnd.float(-Math.PI, 0.2) - 0.1;
     const sp = rnd.float(0.5, 1.1);
     const d = R * sp * t;
     const x = cx + Math.cos(a) * d;
     const y = cy + Math.sin(a) * d + R * t * t * 0.9;   // droplets arc back down
-    const r = rnd.float(1.1, 2.6) * (1 - t * 0.3);
-    blob(p, x, y, r, (v) => lut(LUT_ACID, 0.45 + v * 0.55), { wob: 0.25, lobes: 3, phase: i, bands: 3 });
-    stroke(p, x, y - r, x - Math.cos(a) * r * 1.6, y - Math.sin(a) * r * 1.6 - r, 0.6,
-      () => lut(LUT_ACID, 0.55), MAX);
+    const r = rnd.float(2.2, 4.6) * (1 - t * 0.25);
+    blob(p, x, y, r, (v) => lut(LUT_ACID, 0.35 + v * 0.65), { wob: 0.25, lobes: 3, phase: i, bands: 4 });
+    stroke(p, x, y, x - Math.cos(a) * r * 2, y - Math.sin(a) * r * 2, 0.8,
+      (v, _x, _y, s) => lut(LUT_ACID, 0.75 - s * 0.45), MAX);
   }
   if (t > 0.6) erode(p, 1 - (t - 0.6) / 0.4 * 0.7);
 }
@@ -554,7 +558,7 @@ function rockShard(p, f, n) {
     // to the screen makes a tumbling stone look like a static one.
     const dx = x + 0.5 - cx, dy = y + 0.5 - cy;
     const lx = (dx * ca + dy * sa) / R, ly = (-dx * sa + dy * ca) / R;
-    const v = clamp(0.5 - lx * 0.34 - ly * 0.3, 0, 1);
+    const v = clamp(0.36 - lx * 0.3 - ly * 0.26, 0, 1);
     return lut(LUT_STONE, (Math.floor(v * 5) + 0.5) / 5);
   }, SET);
   for (let i = 0; i < pts.length; i++) {
@@ -628,19 +632,23 @@ function shrapnel(p, f, n) {
   const cx = p.w / 2, cy = p.h * 0.9;
   const R = p.h * 0.92;
   const rnd = new Rand(606);
-  for (let i = 0; i < 30; i++) {
-    const a = -Math.PI / 2 + rnd.float(-0.52, 0.52);
-    const d = R * t * rnd.float(0.3, 1.05);
+  for (let i = 0; i < 34; i++) {
+    const a = -Math.PI / 2 + rnd.float(-0.55, 0.55);
+    const d = R * t * rnd.float(0.25, 1.05);
     const x = cx + Math.cos(a) * d, y = cy + Math.sin(a) * d;
-    const r = rnd.float(1.8, 3.6);
+    const r = rnd.float(2.6, 5.2) * (1 - t * 0.25);
     const rot = i * 1.3 + t * 8;
-    stroke(p, x, y, x - Math.cos(a) * r * 3, y - Math.sin(a) * r * 3, 0.7,
-      (v, _x, _y, s) => lut(LUT_STEEL, 0.85 - s * 0.55), SET);
+    stroke(p, x, y, x - Math.cos(a) * r * 2.2, y - Math.sin(a) * r * 2.2, 0.8,
+      (v, _x, _y, s) => lut(LUT_STEEL, 0.8 - s * 0.6), SET);
+    // Mid-grey body with one lit facet: a fragment reads as metal by contrast,
+    // but a body too dark just disappears against the world.
     poly(p, [
       [x + Math.cos(rot) * r, y + Math.sin(rot) * r],
       [x + Math.cos(rot + 2.4) * r, y + Math.sin(rot + 2.4) * r],
       [x + Math.cos(rot + 4.3) * r * 0.9, y + Math.sin(rot + 4.3) * r * 0.9],
-    ], (px2, py2) => lut(LUT_STEEL, 0.2 + (((px2 + py2) & 1) ? 0.5 : 0.2) + (i % 3) * 0.08), SET);
+    ], () => lut(LUT_STEEL, 0.34 + (i % 3) * 0.12), SET);
+    stroke(p, x + Math.cos(rot) * r, y + Math.sin(rot) * r,
+      x + Math.cos(rot + 2.4) * r, y + Math.sin(rot + 2.4) * r, 0.7, () => lut(LUT_STEEL, 0.95), SET);
   }
   if (t < 0.45) {
     blob(p, cx, cy, R * 0.22 * (1 - t * 2), (v) => lut(LUT_SPARK, 0.55 + v * 0.45),
@@ -702,19 +710,19 @@ function buffShimmer(p, f, n) {
   // Straight stippled updraught, brightest up the middle.
   for (let y = 0; y < p.h; y++) {
     const v = y / p.h;
-    const hw = p.w * 0.34 * (0.85 + 0.15 * Math.sin(2 * Math.PI * (v - t)));
+    const hw = p.w * 0.2 * (0.85 + 0.15 * Math.sin(2 * Math.PI * (v - t)));
     for (let x = Math.round(p.w / 2 - hw); x <= p.w / 2 + hw; x++) {
       const u = Math.abs((x + 0.5 - p.w / 2) / hw);
       if (!checker(x, y + (f & 1))) continue;
       if (u > 0.98) continue;
-      putMode(p, x, y, lut(LUT_PALE, 0.18 + (1 - u) * 0.28 * (1 - v * 0.4)), UNDER);
+      putMode(p, x, y, lut(LUT_PALE, 0.45 + (1 - u) * 0.4 * (1 - v * 0.3)), UNDER);
     }
   }
   for (let i = 0; i < 26; i++) {
     const h = hash2(i, 7, 1234);
     const ph = (t + h) % 1;
     const y = p.h * 0.98 - ph * p.h * 0.96;
-    const x = p.w * 0.5 + (h - 0.5) * p.w * 0.7 + Math.sin(ph * 6 + i) * p.w * 0.05;
+    const x = p.w * 0.5 + (h - 0.5) * p.w * 0.5 + Math.sin(ph * 6 + i) * p.w * 0.05;
     const b = Math.sin(Math.PI * ph);
     if (b < 0.12) continue;
     const c = lut(LUT_PALE, 0.55 + b * 0.45);
@@ -868,6 +876,10 @@ function starburst(p, f, n) {
   const env = Math.sin(Math.PI * Math.pow(t, 0.75));
   for (let i = 0; i < 8; i++) {
     const a = (i / 8) * Math.PI * 2 + t * 0.4;
+    // Gold underlay slightly wider than the white spike gives it a warm fringe
+    // instead of reading as a paper cutout.
+    spike(p, cx, cy, a, R * 0.05, R * (0.27 + 0.77 * Math.pow(t, 0.55)), R * 0.085 * env + 1.1,
+      () => lut(LUT_GOLD, 0.45 + env * 0.3));
     spike(p, cx, cy, a, R * 0.05, R * (0.25 + 0.75 * Math.pow(t, 0.55)), R * 0.05 * env + 0.6,
       () => lut(LUT_HOLY, 0.6 + env * 0.4));
     spike(p, cx, cy, a + Math.PI / 8, R * 0.04, R * (0.15 + 0.5 * Math.pow(t, 0.55)), R * 0.035 * env + 0.5,
@@ -886,9 +898,12 @@ function armageddon(p, f, n) {
   for (let y = 0; y < p.h; y++) {
     const v = y / p.h;
     for (let x = 0; x < p.w; x++) {
-      const g = tileFbm2(x * 0.10, y * 0.10 - t * 6, 32, 4, 0.6, 11);
-      const hot = clamp((g * 1.7 - 0.28) * (1.15 - v * 0.35) * (1 - t * 0.3), 0, 1);
-      if (hot < 0.14) continue;
+      // Sampled on a 2x2 grid: cheaper, and the blockiness is the look.
+      const g = tileFbm2((x & ~1) * 0.10, (y & ~1) * 0.10 - t * 6, 32, 3, 0.6, 11);
+      // Keep it in the orange-red half of the ramp; a full-frame yellow field
+      // washes out and stops reading as fire.
+      const hot = clamp((g * 1.5 - 0.3) * (1.1 - v * 0.3) * (1 - t * 0.3), 0, 0.72);
+      if (hot < 0.12) continue;
       putMode(p, x, y, lut(LUT_FIRE, (Math.floor(hot * 7) + 0.5) / 7), SET);
     }
   }
@@ -1122,6 +1137,47 @@ DEF_MAP.set('arrow', {
 
 export const EFFECT_IDS = Array.from(DEF_MAP.keys());
 
+// Spells name their visuals with their own tags (spells.js VFX_TAGS) and the
+// combat glue hands those straight to the effect system. Rather than draw 99
+// nearly identical sheets, every tag maps onto one of the effects above.
+export const EFFECT_ALIAS = {
+  light_glow: 'wisp_glow', weapon_flame: 'immolation_aura', haste_blur: 'buff_shimmer',
+  fire_spike: 'flame_pillar', immolation: 'immolation_aura', inferno: 'fire_burst',
+  incinerate: 'fire_burst', eye_glow: 'wisp_glow', feather: 'buff_shimmer',
+  sparks: 'spark_shower', jump_puff: 'dust_puff', shield_bubble: 'bless_ring',
+  invisible_fade: 'buff_shimmer', fly_wings: 'buff_shimmer', wake_flash: 'spark_hit',
+  water_ripple: 'frost_cloud', recharge_spark: 'spark_shower', enchant_glow: 'buff_shimmer',
+  portal_swirl: 'teleport_swirl', ice_blast: 'ice_burst', beacon_light: 'teleport_swirl',
+  stun_ring: 'mind_blast', slow_web: 'dust_puff', earth_shield: 'bless_ring',
+  swarm: 'poison_cloud', stone_skin: 'dust_puff', flesh_glow: 'heal_glow',
+  rock_blast: 'rock_shard', telekinesis: 'buff_shimmer', death_blossom: 'earth_burst',
+  mass_distortion: 'implosion', detect_pulse: 'mind_blast', bless_ray: 'bless_ring',
+  fate_rune: 'bless_ring', turn_undead: 'holy_burst', curse_break: 'holy_burst',
+  preserve_glow: 'heal_glow', heroism_aura: 'bless_ring', spirit_lash: 'dark_ray',
+  raise_glow: 'heal_glow', shared_life: 'heal_glow', resurrect_beam: 'holy_burst',
+  calm_wave: 'mind_blast', precision_glint: 'spark_hit', paralysis_break: 'mind_blast',
+  charm_heart: 'mind_blast', fear_wave: 'mind_blast', feeblemind: 'mind_blast',
+  berserk_rage: 'blood_hit', enslave_chain: 'soul_drain', psychic_shock: 'mind_blast',
+  telepathy: 'mind_blast', first_aid: 'heal_glow', magic_ward: 'bless_ring',
+  harm_bolt: 'dark_ray', regen_glow: 'heal_glow', cure_poison: 'heal_glow',
+  hammerhands: 'bless_ring', cure_disease: 'heal_glow', body_ward: 'bless_ring',
+  flying_fist: 'spark_hit', power_cure: 'holy_burst', light_bolt: 'starburst',
+  destroy_undead: 'holy_burst', dispel_burst: 'holy_burst', paralyze_ray: 'dark_ray',
+  summon_circle: 'teleport_swirl', day_of_gods: 'holy_burst', prismatic: 'starburst',
+  day_of_protection: 'bless_ring', hour_of_power: 'bless_ring', sunray: 'holy_burst',
+  divine: 'holy_burst', reanimate: 'soul_drain', toxic_cloud: 'poison_cloud',
+  vampiric_glow: 'soul_drain', shrapmetal: 'shrapnel', shrink_ray: 'dark_ray',
+  control_undead: 'soul_drain', pain_reflection: 'dark_ray', sacrifice_glow: 'blood_hit',
+  dragon_breath: 'fire_burst', souldrinker: 'soul_drain', beam: 'dark_ray',
+};
+
+/** Resolve an effect id or spell vfx tag to a drawable effect id. */
+export function resolveEffectId(id) {
+  if (DEF_MAP.has(id)) return id;
+  const a = EFFECT_ALIAS[id];
+  return a && DEF_MAP.has(a) ? a : null;
+}
+
 // --- sheet assembly --------------------------------------------------------
 
 function blit(dst, src, dx, dy) {
@@ -1158,9 +1214,10 @@ function buildSheet(def) {
   }
 
   // Nearest min and mag, no mips: an atlas of masked frames must never bleed
-  // one frame's pixels into the next.
+  // one frame's pixels into the next. Quantisation is skipped because every
+  // colour written above already came out of a palette-snapped LUT.
   const texture = toTexture(atlas, {
-    dither: 0, quantise: true, repeat: false, mips: false, anisotropy: 1, magNearest: true,
+    quantise: false, repeat: false, mips: false, anisotropy: 1, magNearest: true,
   });
 
   const play = { frames: def.frames, fps: def.fps, loop: def.loop };
@@ -1186,14 +1243,15 @@ function buildSheet(def) {
   };
 }
 
-/** Build (or fetch) one effect sheet. Cached for the life of the page. */
+/** Build (or fetch) one effect sheet, following spell-tag aliases. */
 export function getEffectSheet(id) {
   let s = _cache.get(id);
   if (s) return s;
-  const def = DEF_MAP.get(id);
-  if (!def) return null;
-  s = buildSheet(def);
-  _cache.set(id, s);
+  const real = resolveEffectId(id);
+  if (!real) return null;
+  s = _cache.get(real);
+  if (!s) { s = buildSheet(DEF_MAP.get(real)); _cache.set(real, s); }
+  if (real !== id) _cache.set(id, s);
   return s;
 }
 
@@ -1202,8 +1260,11 @@ export function* buildAllEffects() {
   const total = EFFECT_IDS.length;
   for (let i = 0; i < total; i++) {
     getEffectSheet(EFFECT_IDS[i]);
-    yield { id: EFFECT_IDS[i], index: i + 1, total };
+    yield { id: EFFECT_IDS[i], index: i, total };
   }
 }
 
-export function effectDef(id) { return DEF_MAP.get(id) || null; }
+export function effectDef(id) {
+  const real = resolveEffectId(id);
+  return real ? DEF_MAP.get(real) : null;
+}

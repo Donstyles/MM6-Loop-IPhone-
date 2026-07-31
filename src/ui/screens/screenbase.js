@@ -158,7 +158,7 @@ export const A = {
     if (tone === 'sheet') {
       // MM6's character sheet is a dark tooled hide and prints white on it, so
       // whatever stock the art module hands back gets taken down a few stops.
-      ctx.globalAlpha = 0.55; ctx.fillStyle = '#1c1408';
+      ctx.globalAlpha = 0.62; ctx.fillStyle = '#1c1408';
       ctx.fillRect(x | 0, y | 0, w | 0, h | 0);
       ctx.globalAlpha = 1;
     }

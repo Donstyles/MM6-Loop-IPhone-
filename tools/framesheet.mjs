@@ -36,12 +36,14 @@ async function main() {
       '--force-device-scale-factor=1', '--hide-scrollbars'],
   });
   const page = await browser.newPage({ viewport: { width: SHOT_W, height: SHOT_H }, deviceScaleFactor: 1 });
+  // Software GL is slow; a frame grab can legitimately take a while.
+  page.setDefaultTimeout(120000);
   const errors = [];
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   page.on('pageerror', (e) => errors.push('PAGEERROR: ' + e.message));
 
   await page.goto(URL_BASE, { waitUntil: 'domcontentloaded' });
-  try { await page.waitForFunction('window.__ready === true', { timeout: 90000 }); }
+  try { await page.waitForFunction('window.__gameReady === true', { timeout: 300000 }); }
   catch { console.error('!! never ready'); }
   await page.waitForTimeout(700);
 

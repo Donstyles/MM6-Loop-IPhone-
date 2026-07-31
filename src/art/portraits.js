@@ -25,7 +25,7 @@
 // ---------------------------------------------------------------------------
 
 import { ditherImageData } from '../core/palette.js';
-import { Rand, clamp, smoothstep, valueNoise2, fbm2, hash2 } from '../core/rng.js';
+import { Rand, clamp, smoothstep, valueNoise2, hash2 } from '../core/rng.js';
 import { makeCanvas, ctx2d, rampSample, mixC } from './texcanvas.js';
 
 export const PORTRAIT_W = 63;
@@ -75,7 +75,20 @@ function segDist(px, py, ax, ay, bx, by) {
 }
 
 const nz = (x, y, s) => valueNoise2(x, y, s);                    // 0..1
-const fb = (x, y, o, s) => fbm2(x, y, o, 2, 0.5, s) * 0.5 + 0.5; // 0..1
+/**
+ * fBm over *value* noise. The shared gradNoise2 costs eight trig calls per
+ * lattice point, and this painter evaluates noise several times for every one
+ * of ~41k supersamples; value noise is five times cheaper and its slightly
+ * blockier character suits mottled paint anyway.
+ */
+function fb(x, y, oct, seed) {
+  let amp = 1, f = 1, sum = 0, norm = 0;
+  for (let i = 0; i < oct; i++) {
+    sum += amp * valueNoise2(x * f, y * f, seed + i * 1013);
+    norm += amp; amp *= 0.5; f *= 2;
+  }
+  return sum / norm;                                             // 0..1
+}
 const sq = (x) => x * x;
 const SIDES = [-1, 1];
 
@@ -125,8 +138,8 @@ function skinRamp(tone) {
       mixC(scl(base, 0.34), rs('blood', 0.24), s.ruddy * 0.9),
       mixC(scl(base, 0.62), rs('blood', 0.34), s.ruddy * 0.7),
       base,
-      desat(mixC(scl(base, 1.16), rs('sand', 0.76), 0.14), 0.06),
-      desat(mixC(scl(base, 1.34), rs('sand', 0.88), 0.26), 0.12),
+      desat(mixC(scl(base, 1.12), rs('sand', 0.74), 0.13), 0.06),
+      desat(mixC(scl(base, 1.24), rs('sand', 0.84), 0.22), 0.12),
     ],
     bounce: mixC(scl(base, 0.52), rs('fire', 0.34), 0.30),
     base, ruddy: s.ruddy,
@@ -462,6 +475,8 @@ function paint(face, ex, W, H) {
     const warm = mixC(rs('dirt', 0.40), rs('sand', 0.30), 0.35);
     const cold = mixC(rs('stone', 0.05), rs('grey', 0.03), 0.5);
     const bt = face.bgTint;
+    const w0 = warm[0] * bt[0], w1 = warm[1] * bt[1], w2 = warm[2] * bt[2];
+    const c0 = cold[0] * bt[0], c1 = cold[1] * bt[1], c2 = cold[2] * bt[2];
     for (let py = 0; py < BH; py++) {
       const Y = (py + 0.5) * px2dy;
       for (let pxi = 0; pxi < BW; pxi++) {
@@ -473,14 +488,14 @@ function paint(face, ex, W, H) {
         const cvi = 1 - smoothstep(0.50, 1.30, Math.sqrt(ell(X - DW / 2, Y - DH / 2, DW * 0.60, DH * 0.60)));
         t = t * 0.90 + cvi * 0.24;
         // Mottling: two scales of noise plus a diagonal brush drag.
-        const m1 = fb(X * 0.085, Y * 0.085, 4, sd + 3) - 0.5;
+        const m1 = fb(X * 0.085, Y * 0.085, 3, sd + 3) - 0.5;
         const m2 = fb(X * 0.26 + Y * 0.05, Y * 0.30, 2, sd + 9) - 0.5;
         const drag = nz(X * 0.10 + Y * 0.34, Y * 0.045, sd + 21) - 0.5;
         t = clamp(t + m1 * 0.36 + m2 * 0.13 + drag * 0.11, 0, 1.3);
-        let c = mixC(cold, warm, t);
-        c = [c[0] * bt[0], c[1] * bt[1], c[2] * bt[2]];
         const i = (py * BW + pxi) * 3;
-        buf[i] = c[0]; buf[i + 1] = c[1]; buf[i + 2] = c[2];
+        buf[i] = c0 + (w0 - c0) * t;
+        buf[i + 1] = c1 + (w1 - c1) * t;
+        buf[i + 2] = c2 + (w2 - c2) * t;
       }
     }
   }
@@ -584,6 +599,27 @@ function paint(face, ex, W, H) {
   const hn = 1 / Math.sqrt(LX * LX + LY * LY + (LZ + 1) * (LZ + 1));
   const HX = LX * hn, HY = LY * hn, HZ = (LZ + 1) * hn;   // half-vector, key + eye
   const featTop = browY - ry * 0.30;
+  // A hood or helm rim sits in front of the forehead and darkens the band of
+  // face just inside it.
+  const gearShadow = (() => {
+    const hd = face.gear.hood;
+    if (hd) {
+      const orx = rx * (1.03 + hd.tight), ory = ry * (1.06 + hd.tight), ocy = hcy + ry * 0.30;
+      return (X, Y) => {
+        const e = ell(X - fx, Y - ocy, orx, ory);
+        return smoothstep(0.62, 0.97, e) * (1 - smoothstep(0.99, 1.06, e));
+      };
+    }
+    if (face.gear.helm) return (X, Y) => smoothstep(browY - 4.5, browY - 1.6, Y) * (1 - smoothstep(browY - 1.6, browY + 0.6, Y));
+    if (face.gear.coif) {
+      const orx = rx * 1.00, ory = ry * 1.02, ocy = hcy + ry * 0.16;
+      return (X, Y) => {
+        const e = ell(X - fx, Y - ocy, orx, ory);
+        return smoothstep(0.70, 0.98, e) * (1 - smoothstep(1.0, 1.08, e));
+      };
+    }
+    return null;
+  })();
   const FP = { face, ex, g, SR, C, fx, browY, eyeY, noseY, mouthY, eyeSep, chinY, rx, ry, near, sd };
 
   for (let py = 0; py < BH; py++) {
@@ -628,8 +664,8 @@ function paint(face, ex, W, H) {
       const nzc = nl;
 
       const diff = Math.max(0, nx * LX + ny * LY + nzc * LZ);
-      const ambSky = 0.150 + 0.080 * Math.max(0, -ny);
-      let sh = (ambSky * ex.amb + Math.pow(diff, 1.30) * 0.86) * ex.key;
+      const ambSky = 0.160 + 0.080 * Math.max(0, -ny);
+      let sh = (ambSky * ex.amb + Math.pow(diff, 1.30) * 0.74) * ex.key;
 
       // --- occlusion --------------------------------------------------------
       const dxf = X - fx;
@@ -638,13 +674,19 @@ function paint(face, ex, W, H) {
       for (const s of [-1, 1]) {
         ao -= blob(dxf - s * eyeSep, Y - (eyeY - ry * 0.02), rx * 0.29, ry * 0.10) * 0.34;
       }
-      ao -= blob(Math.abs(dxf) - g.noseW * 1.0, Y - (noseY - ry * 0.10), g.noseW * 0.70, ry * 0.16) * 0.32;
-      ao -= blob(dxf, Y - (noseY + ry * 0.055), g.noseW * 1.30, ry * 0.045) * 0.55;  // under the nose
+      // The nose casts: a soft core shadow down its right flank (key is from
+      // the left) and a hard one onto the lip below it. Local shading alone
+      // cannot produce a cast shadow, so it is painted in here.
+      ao -= blob(dxf - g.noseW * 1.15, Y - (noseY - ry * 0.11), g.noseW * 0.85, ry * 0.19) * 0.42;
+      ao -= blob(dxf + g.noseW * 1.05, Y - (noseY - ry * 0.11), g.noseW * 0.60, ry * 0.16) * 0.16;
+      ao -= blob(dxf + g.noseW * 0.35, Y - (noseY + ry * 0.055), g.noseW * 1.35, ry * 0.050) * 0.60;
       ao -= blob(dxf, Y - (mouthY + ry * 0.10), g.mouthW * 0.85, ry * 0.045) * 0.30; // under the lip
       ao -= blob(Math.abs(dxf) - rx * 0.52, Y - (noseY + ry * 0.07), rx * 0.30, ry * 0.13)
         * (0.32 * g.hollow + 0.45 * ex.hollow);
       ao -= smoothstep(chinY - ry * 0.10, chinY + 1.5, Y) * 0.50;                   // jaw underside
       ao -= hairShadowAt(hairP, X, Y) * 0.60;
+      // headgear throws its own edge across the face
+      if (gearShadow) ao -= gearShadow(X, Y) * 0.55;
       // the far cheek turns away from the light and the viewer at once
       ao -= smoothstep(rFar * 0.45, rFar * 1.02, -dxf * near) * 0.22;
       ao = clamp(ao, 0.10, 1);
@@ -659,7 +701,7 @@ function paint(face, ex, W, H) {
       col = add3(col, C.rim, rim * (ex.arcane ? 0.60 : 0.36));
       if (ex.rimGold) col = add3(col, C.gold, rim * 0.5);
       // tight specular on nose tip / cheekbone / forehead
-      const spec = Math.pow(Math.max(0, nx * HX + ny * HY + nzc * HZ), 30) * 0.16;
+      const spec = Math.pow(Math.max(0, nx * HX + ny * HY + nzc * HZ), 34) * 0.10;
       col = add3(col, C.spec, spec * (1 - 0.4 * ex.hollow));
 
       // weathered skin: mottle, freckles, blush
@@ -672,9 +714,9 @@ function paint(face, ex, W, H) {
         }
       }
       const cheekBlush = blob(Math.abs(dxf) - rx * 0.46, Y - (noseY - ry * 0.04), rx * 0.30, ry * 0.14);
-      if (cheekBlush > 0) col = mixC(col, mixC(col, C.blush, 0.55), cheekBlush * (0.20 + ex.blush * 0.45));
+      if (cheekBlush > 0) col = mixC(col, mixC(col, C.blush, 0.45), cheekBlush * (0.11 + ex.blush * 0.50));
       const noseRed = blob(dxf, Y - (noseY - 0.6), g.noseW * 1.15, ry * 0.075);
-      if (noseRed > 0) col = mixC(col, mixC(col, C.noseRed, 0.5), noseRed * (0.22 + ex.blush * 0.5));
+      if (noseRed > 0) col = mixC(col, mixC(col, C.noseRed, 0.45), noseRed * (0.13 + ex.blush * 0.55));
       if (ex.wound) {
         const wsx = face.marks.scar ? face.marks.scar.side : near;
         const w = blob(Math.abs(dxf - wsx * rx * 0.52) - 0.6, Y - (noseY - ry * 0.08), rx * 0.26, ry * 0.15);
@@ -719,11 +761,13 @@ function paint(face, ex, W, H) {
               }
             }
           }
-          const bd = Math.max(0, 1 - Math.abs(Y - (eyeY + g.eyeW * 1.15)) / 0.6);  // eye bags
-          if (bd > 0) {
-            for (let si = 0; si < 2; si++) {
-              dk += bd * smoothstep(g.eyeW * 1.5, g.eyeW * 0.5, Math.abs(dxf - SIDES[si] * eyeSep)) * 0.55;
-            }
+          // Eye bags: two short arcs under the lower lid, not a band across
+          // the whole face.
+          for (let si = 0; si < 2; si++) {
+            const ox = dxf - SIDES[si] * eyeSep;
+            const sag = eyeY + g.eyeW * 1.05 - sq(ox / (g.eyeW * 1.15)) * 0.55;
+            dk += Math.max(0, 1 - Math.abs(Y - sag) / 0.55)
+              * smoothstep(g.eyeW * 1.25, g.eyeW * 0.85, Math.abs(ox)) * 0.6;
           }
         }
         if (dk > 0) col = mixC(col, scl(col, 0.56), Math.min(1, dk) * wr * 0.80);
@@ -775,6 +819,7 @@ function paint(face, ex, W, H) {
   // =========================================================================
   if (face.beard !== 'none') {
     const HC = face.hair;
+    const greyBeard = rs('grey', 0.52);
     const bp = beardParams(face, g, fx, mouthY, noseY, chinY, rx, ry);
     for (let py = 0; py < BH; py++) {
       const Yw = (py + 0.5) * px2dy;
@@ -786,13 +831,14 @@ function paint(face, ex, W, H) {
         const ii = py * BW + pxi;
         const a = beardCov(bp, X, Y, sd, hcv[ii]);
         if (a <= 0.004) continue;
-        // Shade the beard as a volume: lit upper left, dark under the jaw.
-        const lit = 0.28 + 0.55 * clamp(1 - ell(X - (fx - rx * 0.45), Y - (mouthY - 1), rx * 1.5, ry * 1.1), 0, 1);
+        // Shade the beard as a volume: lit upper left, dark under the jaw. It
+        // has to stay darker than the hair on the skull or it reads as a bib.
+        const lit = 0.16 + 0.48 * clamp(1 - ell(X - (fx - rx * 0.45), Y - (mouthY - 1), rx * 1.5, ry * 1.1), 0, 1);
         const strand = fb(X * 1.5 + Y * 0.3, Y * 3.2, 3, sd + 61);
-        let c = mixC(HC.dark, HC.base, clamp(lit * 1.25, 0, 1));
-        c = mixC(c, HC.lite, clamp((strand - 0.55) * 1.6, 0, 1) * 0.45 * lit);
-        if (face.age === 'old') c = mixC(c, rs('grey', 0.52), 0.30);
-        c = scl(c, 0.88 + strand * 0.24);
+        let c = mixC(HC.dark, HC.base, clamp(lit * 1.35, 0, 1));
+        c = mixC(c, HC.lite, clamp((strand - 0.62) * 1.6, 0, 1) * 0.35 * lit);
+        if (face.age === 'old') c = mixC(c, greyBeard, 0.32);
+        c = scl(c, 0.82 + strand * 0.26);
         bl(buf, ii * 3, c, a);
         subj[ii] = Math.max(subj[ii], a);
       }
@@ -1291,7 +1337,11 @@ function drawGear(buf, subj, face, ex, P) {
           a = Math.max(a, smoothstep(rx * 0.38 * (1 - t) + 0.8, rx * 0.38 * (1 - t) - 0.5, Math.abs(X - px2))
             * (1 - smoothstep(0.85, 1.0, t)) * smoothstep(0, 0.05, t));
         }
-        const holeM = ell(X - fx, Y - (hcy + ry * 0.08), rx * (1.00 + hood.tight), ry * (0.99 + hood.tight));
+        // The opening is centred well below the head so the hood frames the
+        // face and stops at the jaw instead of wrapping under the chin like a
+        // wimple - and its top edge crosses the skull a quarter of the way
+        // down, leaving forehead and hairline showing.
+        const holeM = ell(X - fx, Y - (hcy + ry * 0.30), rx * (1.03 + hood.tight), ry * (1.06 + hood.tight));
         a *= 1 - cov(holeM, 0.09);
         if (a > 0.004) {
           const ux = (X - hcx) / orx, uy = (Y - ocy) / ory;
@@ -1320,7 +1370,7 @@ function drawGear(buf, subj, face, ex, P) {
       // ---- mail coif ------------------------------------------------------
       if (gear.coif) {
         const outer = ell(X - hcx, Y - (hcy - ry * 0.03), rx * 1.13, ry * 1.10);
-        const inner = ell(X - fx, Y - (hcy + ry * 0.06), rx * 0.99, ry * 0.97);
+        const inner = ell(X - fx, Y - (hcy + ry * 0.16), rx * 1.00, ry * 1.02);
         let a = cov(outer, 0.10) * (1 - cov(inner, 0.09));
         a = Math.max(a, cov(outer, 0.10) * smoothstep(chinY - 2, chinY + 2, Y));
         if (a > 0.004) {
@@ -1403,8 +1453,8 @@ function drawGear(buf, subj, face, ex, P) {
         const brim = cov(ell(X - hcx, Y - brimY, rx * 1.42, ry * 0.19), 0.26);
         a = Math.max(a, brim);
         if (a > 0.004) {
-          const base = desat(mixC(rs('sky', 0.13), rs('arcane', 0.24), 0.5), 0.12);
-          const dark = scl(base, 0.34), lite = mixC(scl(base, 1.7), rs('arcane', 0.62), 0.30);
+          const base = desat(mixC(rs('sky', 0.13), rs('arcane', 0.22), 0.45), 0.26);
+          const dark = scl(base, 0.34), lite = desat(mixC(scl(base, 1.6), rs('arcane', 0.52), 0.22), 0.20);
           const uu = (X - cxp) / (hw + 0.001);
           let sh = 0.20 + Math.max(0, 1 - Math.pow(uu + 0.45, 2) * 1.25) * 0.80;
           if (brim > 0.5) sh = 0.26 + 0.50 * smoothstep(brimY + 1.4, brimY - 1.4, Y);
@@ -1436,7 +1486,7 @@ function drawShoulders(buf, subj, face, ex, P) {
     plate: { base: rs('stone', 0.44), dark: null, lite: null },
     leather: { base: rs('wood', 0.30), dark: null, lite: null },
     robe: { base: rs(gear.hood ? gear.hood.ramp : 'plaster', gear.hood ? gear.hood.t : 0.36), dark: null, lite: null },
-    arcane: { base: desat(mixC(rs('sky', 0.13), rs('arcane', 0.22), 0.5), 0.12), dark: null, lite: null },
+    arcane: { base: desat(mixC(rs('sky', 0.13), rs('arcane', 0.22), 0.45), 0.26), dark: null, lite: null },
     cloth: { base: rs('dirt', 0.30), dark: null, lite: null },
   }[kind] || { base: rs('dirt', 0.30), dark: null, lite: null };
   cloth.dark = scl(cloth.base, 0.30);
@@ -1500,9 +1550,10 @@ function drawShoulders(buf, subj, face, ex, P) {
           c = mixC(c, cloth.lite, st * dash * 0.5);
         }
         if (kind === 'arcane' || gear.mantle) {
-          const st = Math.exp(-Math.pow((Y - top - 1.9) / 1.0, 2));
-          const gl = nz(X * 1.1, Y * 1.1, sd + 507);
-          c = mixC(c, rs('arcane', 0.66), st * smoothstep(0.55, 0.85, gl) * 0.65);
+          // A worn embroidered band, not a string of fairy lights.
+          const st = Math.exp(-sq((Y - top - 2.2) / 1.1));
+          const gl = nz(X * 0.75, Y * 0.75, sd + 507);
+          c = mixC(c, desat(rs('arcane', 0.58), 0.30), st * smoothstep(0.50, 0.90, gl) * 0.40);
         }
       }
       bl(buf, i3, c, a);
@@ -1532,6 +1583,7 @@ function drawShoulders(buf, subj, face, ex, P) {
 
 function gradePass(buf, subj, face, ex, BW, BH, px2dx, px2dy, sd) {
   const stoneD = rs('stone', 0.10), stoneM = rs('stone', 0.44), stoneL = rs('stone', 0.84);
+  const tinted = ex.tint[0] !== 1 || ex.tint[1] !== 1 || ex.tint[2] !== 1;
   for (let py = 0; py < BH; py++) {
     const Y = (py + 0.5) * px2dy;
     for (let pxi = 0; pxi < BW; pxi++) {
@@ -1565,24 +1617,22 @@ function gradePass(buf, subj, face, ex, BW, BH, px2dx, px2dy, sd) {
       }
 
       if (ex.sat !== 1) c = desat(c, 1 - ex.sat);
-      if (ex.tint[0] !== 1 || ex.tint[1] !== 1 || ex.tint[2] !== 1) {
+      let r = c[0], gc = c[1], b = c[2];
+      if (tinted) {
         const k = 0.35 + 0.65 * s;
-        c = [c[0] * mix(1, ex.tint[0], k), c[1] * mix(1, ex.tint[1], k), c[2] * mix(1, ex.tint[2], k)];
+        r *= 1 + (ex.tint[0] - 1) * k;
+        gc *= 1 + (ex.tint[1] - 1) * k;
+        b *= 1 + (ex.tint[2] - 1) * k;
       }
-
-      const gr = (fb(X * 1.15, Y * 1.15, 2, sd + 701) - 0.5);
-      c = scl(c, 1 + gr * (0.045 + 0.03 * (1 - s)));
-      const vg = 1 - smoothstep(0.60, 1.30,
-        Math.sqrt(ell(X - DW * 0.5, Y - DH * 0.5, DW * 0.58, DH * 0.60))) * 0.55;
-      c = scl(c, vg);
-      c = [
-        (c[0] / 255 - 0.5) * 1.10 * 255 + 0.5 * 255 + 1,
-        (c[1] / 255 - 0.5) * 1.10 * 255 + 0.5 * 255,
-        (c[2] / 255 - 0.5) * 1.10 * 255 + 0.5 * 255,
-      ];
-      buf[i3] = clamp(c[0], 0, 255);
-      buf[i3 + 1] = clamp(c[1], 0, 255);
-      buf[i3 + 2] = clamp(c[2], 0, 255);
+      // paint grain, corner vignette, and a small contrast lift - these plates
+      // sit inside a dark carved-stone bar
+      const k2 = (1 + (fb(X * 1.15, Y * 1.15, 2, sd + 701) - 0.5) * (0.045 + 0.03 * (1 - s)))
+        * (1 - smoothstep(0.60, 1.30,
+          Math.sqrt(ell(X - DW * 0.5, Y - DH * 0.5, DW * 0.58, DH * 0.60))) * 0.55) * 1.10;
+      const lift = -0.05 * 255;
+      buf[i3] = clamp(r * k2 + lift + 1, 0, 255);
+      buf[i3 + 1] = clamp(gc * k2 + lift, 0, 255);
+      buf[i3 + 2] = clamp(b * k2 + lift, 0, 255);
     }
   }
 }

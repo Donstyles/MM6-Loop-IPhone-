@@ -18,13 +18,14 @@ import { PROP_DEFS, buildProp } from './models/props.js';
 //   - each (action, frame, angle) cell is drawn with viewport + scissor into
 //     its slot, so the entire sheet costs one render target and no readbacks
 //     until the very end
-//   - one readback, then the CPU flips, cuts the alpha to 1 bit, adds a dark
-//     rim and palettises with an ordered dither
+//   - one readback, then the CPU flips, cuts the alpha to 1 bit and palettises
+//     with an ordered dither
 //
-// The shading is deliberately not photoreal: a fixed key/fill rig in *view*
-// space (the model turns, the lights do not - which is what makes all 8 angles
-// look like they came off the same turntable) and the diffuse term is
-// quantised into ~5 bands so the result reads as painted cel art.
+// The shading is a fixed key/fill rig in *view* space - the model turns, the
+// lights do not, which is what makes all eight octants look like they came off
+// the same turntable, and why an MM6 sprite stays lit from the left no matter
+// where the sun is. It is smooth-shaded and un-outlined; the hard banding comes
+// from the 256-colour palettisation, exactly as it did in 1998.
 // ---------------------------------------------------------------------------
 
 export const ANGLES = 8;
@@ -52,9 +53,9 @@ const LIGHT_D = {
   keyDir: [-0.46, 0.62, 0.64],
   fillDir: [0.58, -0.30, 0.30],
   fillCol: [0.30, 0.38, 0.58],
-  ambient: 0.34,
-  key: 0.78,
-  fill: 0.14,
+  ambient: 0.28,
+  key: 0.92,
+  fill: 0.16,
   bands: 0,
 };
 
@@ -145,10 +146,10 @@ function restoreMaterials(saved) { for (const [o, m] of saved) o.material = m; }
 
 /**
  * Choose a cell size and a block layout that packs `frames * angles` cells
- * into at most `maxAtlas` square. Columns come in blocks of `angles`, so a row
- * of the atlas holds one or more complete angle strips; that keeps the "rows
- * are frames, columns are angles" reading of the sheet while still fitting a
- * 35-frame humanoid (280 cells) inside 1024x1024.
+ * into at most `maxAtlas` square. Columns come in blocks of `views`, so a row
+ * of the atlas holds one or more complete view strips; that keeps the "rows are
+ * frames, columns are views" reading of the sheet while still fitting a
+ * 31-frame humanoid (155 cells) inside 1024x1024.
  */
 function fitAtlas(frames, angles, aspect, maxAtlas, maxCellH) {
   let best = null;
@@ -206,7 +207,7 @@ const _v = new THREE.Vector3();
 // edge a little rather than shrinking the sprite you look at 95% of the time.
 const POSE_WEIGHT = [
   ['stand', 0, 1], ['walk', 0.25, 1], ['bored', 0.25, 1],
-  ['attack_melee', 0.55, 0.85], ['attack_ranged', 0.5, 0.75], ['dying', 1, 0.40],
+  ['attack_melee', 0.55, 0.60], ['attack_ranged', 0.5, 0.55], ['dying', 1, 0.35],
 ];
 
 function measure(model, actionList) {
@@ -540,8 +541,7 @@ export function bakeNPCSheet(renderer, archetype, seed = 1, opts = {}) {
 export function bakeFloraSheet(renderer, kind, seed = 1, opts = {}) {
   const def = FLORA_DEFS[kind];
   return bakeSheet(renderer, (s) => buildFlora(kind, s), {
-    kind, seed, actions: STATIC_ACTIONS, maxCellH: 224, maxAtlas: 1024,
-    aspect: def ? def.aspect : 0, margin: 1.04, ...opts,
+    kind, seed, actions: STATIC_ACTIONS, maxCellH: 224, maxAtlas: 1024, margin: 1.04, ...opts,
   });
 }
 
@@ -549,8 +549,7 @@ export function bakePropSheet(renderer, kind, seed = 1, opts = {}) {
   const def = PROP_DEFS[kind];
   return bakeSheet(renderer, (s) => buildProp(kind, s), {
     kind, seed, actions: STATIC_ACTIONS,
-    maxCellH: def && def.item ? 48 : 96, maxAtlas: 1024,
-    aspect: def ? def.aspect : 0, margin: 1.06, ...opts,
+    maxCellH: def && def.item ? 48 : 96, maxAtlas: 1024, margin: 1.06, ...opts,
   });
 }
 

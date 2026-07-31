@@ -274,7 +274,12 @@ export class SpellbookScreen extends Screen {
     const able = canCast(ch, sp);
 
     schoolGlyph(ctx, this.school, px(x), py(RIGHT.y + 8), 18, tint);
-    F.drawText(ctx, sp.name, px(x + 24), py(RIGHT.y + 8), { face: 'title', color: '#2a1a06' });
+    // Long names (Protection from Fire) will not fit the title face on a
+    // half-page, so the face steps down rather than running off the edge.
+    const wide = F.measure(sp.name, 'title').w > w - 26;
+    F.drawText(ctx, sp.name, px(x + 24), py(RIGHT.y + (wide ? 12 : 8)), {
+      face: wide ? 'normal' : 'title', color: '#2a1a06', maxWidth: w - 26,
+    });
     A.rule(ctx, px(x), py(RIGHT.y + 30), w, '#6b5636', 0.6);
 
     let y = RIGHT.y + 38;

@@ -56,12 +56,13 @@ function acForLevel(level, mul) {
 }
 
 /**
- * Damage dice. Aims for an average swing of (2 + level * 1.1) * mul, spread
+ * Damage dice. Aims for an average swing of (5 + level) * mul, spread
  * across bigger dice as the monster grows so the numbers still feel rolled.
- * The flat +2 keeps the first few levels from being completely toothless.
+ * The flat +5 keeps the first few levels from being completely toothless: a
+ * pack of goblins has to be a threat to a starting party or nothing is.
  */
 function attackForLevel(level, mul, element) {
-  const target = (2 + level * 1.1) * (mul === undefined ? 1 : mul);
+  const target = (5 + level * 1.0) * (mul === undefined ? 1 : mul);
   const n = Math.max(1, Math.min(8, 1 + Math.floor(level / 10)));
   const s = Math.max(4, Math.min(12, 4 + Math.floor(level / 12)));
   const avg = (n * (s + 1)) / 2;

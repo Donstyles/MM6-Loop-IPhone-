@@ -462,6 +462,7 @@ export const REAGENTS = [
   { id: 'ancient_stone', name: 'Ancient Stone', base: 'catalyst', power: 30, value: 800, tier: 5 },
 ];
 const REAGENT_MAP = new Map(REAGENTS.map((r) => [r.id, r]));
+export function reagentById(id) { return REAGENT_MAP.get(id) || null; }
 for (const r of REAGENTS) DEFS.set(r.id, Object.assign({ type: 'reagent', gw: 1, gh: 1 }, r));
 
 // The mixing lattice. Key is the two potion ids sorted and joined.

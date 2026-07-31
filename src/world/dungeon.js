@@ -37,57 +37,57 @@ export const TORCHLIGHT_RADIUS = 800;
 const THEME = {
   cave: {
     wall: 'dun_cave', floor: 'dun_floor_dirt', ceil: 'dun_ceiling_cave',
-    ambDim: 30, torch: [1.00, 0.62, 0.26], torchRange: 1050,
+    ambDim: 28, torch: [1.00, 0.62, 0.26], torchRange: 1133,
     roomH: [560, 1000], corrH: 560, organic: 0.42, liquid: 'water', pillars: 0.15,
   },
   crypt: {
     wall: 'dun_tomb', floor: 'dun_floor_stone', ceil: 'dun_ceiling_stone',
-    ambDim: 30, torch: [0.96, 0.60, 0.30], torchRange: 950,
+    ambDim: 27, torch: [0.96, 0.60, 0.30], torchRange: 1025,
     roomH: [520, 780], corrH: 512, organic: 0, liquid: 'water', pillars: 0.45,
   },
   sewer: {
     wall: 'dun_sewer', floor: 'dun_floor_stone', ceil: 'dun_ceiling_stone',
-    ambDim: 29, torch: [0.90, 0.68, 0.34], torchRange: 900,
+    ambDim: 27, torch: [0.90, 0.68, 0.34], torchRange: 972,
     roomH: [512, 700], corrH: 512, organic: 0.1, liquid: 'swamp_water', liquidChance: 0.5, pillars: 0.3,
   },
   temple: {
     wall: 'dun_temple', floor: 'dun_floor_tile', ceil: 'dun_ceiling_stone',
-    ambDim: 27, torch: [1.00, 0.80, 0.44], torchRange: 1150,
+    ambDim: 25, torch: [1.00, 0.80, 0.44], torchRange: 1241,
     roomH: [700, 1150], corrH: 620, organic: 0, liquid: 'water', pillars: 0.6,
   },
   mine: {
     wall: 'dun_cave_dark', floor: 'dun_floor_dirt', ceil: 'dun_ceiling_cave',
-    ambDim: 30, torch: [1.00, 0.58, 0.22], torchRange: 900,
+    ambDim: 28, torch: [1.00, 0.58, 0.22], torchRange: 972,
     roomH: [520, 820], corrH: 512, organic: 0.3, liquid: 'water', pillars: 0.35,
   },
   castle: {
     wall: 'dun_brick', floor: 'dun_floor_stone', ceil: 'dun_ceiling_stone',
-    ambDim: 28, torch: [1.00, 0.72, 0.36], torchRange: 1050,
+    ambDim: 26, torch: [1.00, 0.72, 0.36], torchRange: 1133,
     roomH: [620, 1000], corrH: 560, organic: 0, liquid: 'water', pillars: 0.4,
   },
   tower: {
     wall: 'dun_brick_mossy', floor: 'dun_floor_stone', ceil: 'dun_ceiling_stone',
-    ambDim: 28, torch: [0.96, 0.70, 0.38], torchRange: 1000,
+    ambDim: 26, torch: [0.96, 0.70, 0.38], torchRange: 1080,
     roomH: [560, 900], corrH: 512, organic: 0, liquid: 'water', pillars: 0.3,
   },
   lair: {
     wall: 'dun_cave', floor: 'dun_floor_dirt', ceil: 'dun_ceiling_cave',
-    ambDim: 30, torch: [1.00, 0.52, 0.20], torchRange: 1000,
+    ambDim: 28, torch: [1.00, 0.52, 0.20], torchRange: 1080,
     roomH: [700, 1250], corrH: 620, organic: 0.5, liquid: 'lava', liquidChance: 0.25, pillars: 0.2,
   },
   ruins: {
     wall: 'dun_brick_mossy', floor: 'dun_floor_stone', ceil: 'dun_ceiling_stone',
-    ambDim: 28, torch: [0.94, 0.66, 0.34], torchRange: 1000,
+    ambDim: 27, torch: [0.94, 0.66, 0.34], torchRange: 1080,
     roomH: [560, 900], corrH: 520, organic: 0.25, liquid: 'water', liquidChance: 0.35, pillars: 0.5,
   },
   ice: {
     wall: 'dun_ice', floor: 'dun_ice', ceil: 'dun_ice',
-    ambDim: 26, torch: [0.72, 0.86, 1.00], torchRange: 1200,
+    ambDim: 24, torch: [0.72, 0.86, 1.00], torchRange: 1296,
     roomH: [620, 1050], corrH: 560, organic: 0.35, liquid: 'water', pillars: 0.25,
   },
   volcano: {
     wall: 'dun_lava_rock', floor: 'dun_lava_rock', ceil: 'dun_ceiling_cave',
-    ambDim: 28, torch: [1.00, 0.48, 0.16], torchRange: 1100,
+    ambDim: 27, torch: [1.00, 0.48, 0.16], torchRange: 1188,
     roomH: [660, 1200], corrH: 620, organic: 0.4, liquid: 'lava', liquidChance: 0.6, pillars: 0.25,
   },
 };
@@ -271,7 +271,7 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
 
   // --- connect: nearest-neighbour spanning tree plus a few loops ----------
   prog(0.15, 'linking corridors');
-  const inTree = [0];
+  const inTree = [rooms[0]];
   const rest = rooms.slice(1);
   const links = [];
   while (rest.length) {
@@ -430,15 +430,19 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
   for (const [k, c] of cells) {
     const wx = c.i * CELL + CELL / 2, wz = c.j * CELL + CELL / 2;
     const rm = c.room >= 0 ? rooms[c.room] : null;
-    const density = c.kind === 'corridor' ? 5 : (rm && rm.boss ? 2 : 3);
+    // Torches have to be *sparse*. The MM6 dungeon image is a pool of warm
+    // light with black corridor either side of it; space them closer than
+    // about two light radii apart and the pools merge into flat room lighting,
+    // which is the single easiest way to lose the look.
+    const density = c.kind === 'corridor' ? 6 : (rm && rm.boss ? 4 : 5);
     if ((c.i * 7 + c.j * 13) % density !== 0) continue;
     // Hang the torch on whichever side has a wall.
     const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
     for (const [di, dj] of dirs) {
       if (!solid(c.i + di, c.j + dj)) continue;
-      if (hash2(c.i, c.j, 99) < 0.45) continue;
+      if (hash2(c.i, c.j, 99) < 0.35) continue;
       const tx = wx + di * (CELL / 2 - 60), tz = wz + dj * (CELL / 2 - 60);
-      addTorch(tx, c.fy + 330, tz, T.torch, 1.0, T.torchRange, 'wall');
+      addTorch(tx, c.fy + 330, tz, T.torch, 1.45, T.torchRange, 'wall');
       torches[torches.length - 1].nx = -di; torches[torches.length - 1].nz = -dj;
       break;
     }
@@ -449,7 +453,7 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
     for (const [oi, oj] of [[1, 1], [rm.w - 2, 1], [1, rm.h - 2], [rm.w - 2, rm.h - 2]]) {
       const i = rm.i0 + oi, j = rm.j0 + oj;
       if (!cells.has(key(i, j))) continue;
-      addTorch(i * CELL + CELL / 2, rm.floorY + 300, j * CELL + CELL / 2, T.torch, 1.5, T.torchRange * 1.35, 'brazier');
+      addTorch(i * CELL + CELL / 2, rm.floorY + 300, j * CELL + CELL / 2, T.torch, 1.9, T.torchRange * 1.35, 'brazier');
     }
   }
   for (const p of pools) {

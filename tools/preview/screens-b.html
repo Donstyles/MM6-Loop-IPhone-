@@ -3,11 +3,19 @@
 <head>
   <meta charset="utf-8">
   <title>MM6 - NPC / shop / menu screens</title>
+  <!-- Stub the HMR socket: this page bakes for a while and a hot reload from a
+       neighbouring file edit would restart the whole render. -->
+  <script>
+    window.WebSocket = function () {
+      return { send() {}, close() {}, addEventListener() {}, removeEventListener() {}, readyState: 3 };
+    };
+  </script>
   <style>
-    body { background: #16171a; color: #b8ad8c; font: 12px monospace; margin: 0; padding: 10px; }
+    body { background: #16171a; color: #b8ad8c; font: 12px monospace; margin: 0; padding: 2px; }
     h1 { font-size: 13px; color: #e1cd23; margin: 4px 0 10px; }
-    .grid { display: flex; flex-wrap: wrap; gap: 10px; }
+    .grid { display: flex; flex-wrap: wrap; gap: 4px; }
     .cell { width: 640px; }
+    h1 { margin: 2px 0 4px; }
     .cell h2 { font-size: 11px; margin: 0 0 2px; color: #ffff9b; font-weight: normal; }
     canvas { display: block; image-rendering: pixelated; background: #000; }
     #err { color: #ff6060; white-space: pre-wrap; }
@@ -20,7 +28,6 @@
 
   <script type="module">
     import { UIContext, MessageLog } from '/src/ui/uikit.js';
-    import { GameClock } from '/src/game/session.js';
     import { computeLayout, layout } from '/src/core/layout.js';
     import * as F from '/src/art/font.js';
     import * as UI from '/src/art/uiart.js';
@@ -44,6 +51,27 @@
 
     const errs = [];
     window.addEventListener('error', (e) => { errs.push(String(e.message)); });
+
+    // A copy of session.js's GameClock, so the preview does not pull in three.js.
+    const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
+      'August', 'September', 'October', 'November', 'December'];
+    const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    class GameClock {
+      constructor(m) { this.minutes = m; }
+      advanceMinutes(m) { this.minutes += m; }
+      get hour() { return Math.floor((this.minutes % 1440) / 60); }
+      get minute() { return Math.floor(this.minutes % 60); }
+      get day() { return Math.floor(this.minutes / 1440) % 28 + 1; }
+      get month() { return Math.floor(this.minutes / (1440 * 28)) % 12; }
+      get year() { return 1165 + Math.floor(this.minutes / (1440 * 28 * 12)); }
+      get weekday() { return WEEKDAYS[Math.floor(this.minutes / 1440) % 7]; }
+      format() {
+        const h24 = this.hour, ampm = h24 < 12 ? 'am' : 'pm';
+        const h = h24 % 12 === 0 ? 12 : h24 % 12;
+        return `${h}:${String(this.minute).padStart(2, '0')}${ampm}`;
+      }
+      formatDate() { return `${this.weekday}  ${MONTHS[this.month]} ${this.day}, ${this.year}`; }
+    }
 
     computeLayout(640, 480, false);
 
@@ -73,6 +101,7 @@
       cleric.conditions = { poisoned_weak: true };
       sorc.conditions = { cursed: true };
       archer.conditions = { dead: true };
+      knight.xp = 16400;          // enough to buy level 6 at the training hall
       knight.skills.sword = { level: 6, mastery: 2 };
       cleric.skills.body = { level: 5, mastery: 2 };
       cleric.skills.spirit = { level: 4, mastery: 1 };
@@ -172,7 +201,12 @@
 
     let session = makeSession();
 
-    function panel(label, make, opts = {}) {
+    // Panels are queued and rendered one per frame: baking a painted interior
+    // takes long enough that doing all twenty inline would block the load event.
+    const QUEUE = [];
+    function panel(...args) { QUEUE.push(args); }
+
+    function renderPanel(label, make, opts = {}) {
       const cell = document.createElement('div');
       cell.className = 'cell';
       const h2 = document.createElement('h2');
@@ -302,8 +336,23 @@
         character: s.party.members[0], level: 6, hp: 9, sp: 0, skillPoints: 5,
       }), { mx: 320, my: 330, steps: 8 });
 
-    document.getElementById('err').textContent = errs.length ? errs.join('\n') : '';
-    window.__ready = true;
+    (async () => {
+      const t0 = performance.now();
+      // Portraits are the expensive shared dependency; warm them once so the
+      // per-panel timings below measure this set's own drawing.
+      const tp = performance.now();
+      for (const ch of session.party.members) { portraitOf(ch, 'normal'); portraitOf(ch, 'dead'); }
+      console.log(`portrait warm ${(performance.now() - tp).toFixed(0)}ms for 8`);
+      for (const args of QUEUE) {
+        const t = performance.now();
+        renderPanel(...args);
+        console.log(`${args[0]} ${(performance.now() - t).toFixed(0)}ms`);
+        await new Promise((r) => setTimeout(r, 0));
+      }
+      console.log(`total ${(performance.now() - t0).toFixed(0)}ms`);
+      document.getElementById('err').textContent = errs.length ? errs.join('\n') : '';
+      window.__ready = true;
+    })();
   </script>
 </body>
 </html>

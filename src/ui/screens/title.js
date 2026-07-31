@@ -31,26 +31,37 @@ const MENU = [
 export function paintTitleArt(g, w, h) {
   const horizon = Math.round(h * 0.62);
 
-  // Sky: hard bands, warm at the horizon, storm-dark at the zenith.
+  // Sky: a dusk gradient in hard bands, storm-dark at the zenith and burning
+  // out to orange behind the castle. Streaked noise breaks the bands up.
+  const sunX = w * 0.62, sunY = horizon - 30;
   washPixels(g, 0, 0, w, horizon + 2, (u, v) => {
-    const t = v / horizon;
-    const band = Math.round(t * 15);
-    const n = fbm2(u * 0.012, v * 0.03, 4, 2, 0.55, 3) * 0.5 + 0.5;
-    // Streaked cloud bands: noise pushes the shade up and down a step.
-    const s = clamp(band * 0.7 + 3 + (n - 0.5) * 5.5, 0, 15);
-    const warm = t > 0.72 ? (t - 0.72) * 3.2 : 0;
-    const c = ramp(warm > 0.2 ? 'fire' : 'sky', Math.round(warm > 0.2 ? 4 + warm * 7 : s));
-    return c;
+    const t = v / horizon;                       // 0 zenith, 1 horizon
+    const n = fbm2(u * 0.010, v * 0.045, 3, 2, 0.55, 3) * 0.5 + 0.5;
+    // Distance from the sun drives how far the sky burns toward fire.
+    const d = Math.hypot((u - sunX) / (w * 0.55), (v - sunY) / (horizon * 0.9));
+    const heat = clamp(1.15 - d, 0, 1);
+    const streak = (n - 0.5) * 3.2;
+    if (heat > 0.42) {
+      // Fire ramp near the sun: bright core, deep ember at the edge.
+      const s = clamp(3 + (heat - 0.42) * 20 + streak, 1, 15);
+      return ramp('fire', Math.round(s));
+    }
+    // Cold sky elsewhere, darkest at the top of the frame.
+    const s = clamp(1.5 + t * 5.5 + heat * 5 + streak, 0, 12);
+    return ramp('sky', Math.round(s));
   }, 11);
 
-  // The sun low behind the castle, glowing through the cloud.
-  glow(g, w * 0.62, horizon - 46, 150, '#ffb040', 0.85);
+  // The sun's disc sits low behind the towers.
+  g.fillStyle = rampCss('fire', 14);
+  g.beginPath(); g.arc(sunX | 0, sunY | 0, 34, 0, Math.PI * 2); g.fill();
+  glow(g, sunX, sunY, 170, '#ff9820', 0.75);
 
-  // Far hills.
+  // Far hills, each nearer layer darker: aerial perspective in reverse, the
+  // way a backlit dusk landscape actually reads.
   for (let layer = 0; layer < 3; layer++) {
     const base = horizon - 30 + layer * 16;
-    const shade = 3 + layer * 2;
-    g.fillStyle = rampCss('foliage', shade);
+    const shade = 4 - layer;
+    g.fillStyle = rampCss(layer === 0 ? 'sky' : 'foliage', layer === 0 ? 4 : shade);
     g.beginPath();
     g.moveTo(0, h);
     for (let x = 0; x <= w; x += 8) {
@@ -63,12 +74,14 @@ export function paintTitleArt(g, w, h) {
     g.fill();
   }
 
-  // The castle: keep, curtain wall, towers, banners.
+  // The castle: keep, curtain wall, towers, banners - all in near-silhouette
+  // against the burning sky, with a warm rim on every left-facing edge.
   const cx = w * 0.62, cy = horizon - 26;
-  const dark = rampCss('stone', 2);
-  const darker = rampCss('stone', 1);
+  const dark = rampCss('stone', 1);
+  const darker = rampCss('stone', 0);
+  const rim = rampCss('fire', 9);
   // Motte.
-  g.fillStyle = rampCss('foliage', 2);
+  g.fillStyle = rampCss('foliage', 1);
   g.beginPath();
   g.moveTo(cx - 200, horizon + 30);
   g.quadraticCurveTo(cx, horizon - 66, cx + 200, horizon + 30);
@@ -78,22 +91,33 @@ export function paintTitleArt(g, w, h) {
   g.fillStyle = dark;
   g.fillRect(cx - 118, cy - 44, 236, 52);
   for (let i = 0; i < 20; i++) g.fillRect(cx - 118 + i * 12, cy - 52, 7, 9);
+  g.fillStyle = rim;
+  g.fillRect(cx - 118, cy - 44, 1, 52);
+  for (let i = 0; i < 20; i++) g.fillRect(cx - 118 + i * 12, cy - 52, 7, 1);
   // Towers.
   for (const [tx, th, tw] of [[cx - 128, 96, 30], [cx + 98, 108, 32], [cx - 18, 150, 44]]) {
     g.fillStyle = darker;
     g.fillRect(tx, cy - th, tw, th + 10);
     for (let i = 0; i < tw / 10; i++) g.fillRect(tx + i * 10, cy - th - 8, 6, 9);
-    // Conical roof.
-    poly(g, [tx - 5, cy - th - 8, tx + tw + 5, cy - th - 8, tx + tw / 2, cy - th - 40], rampCss('blood', 2));
+    // Conical roof, dark against the sky with a lit windward edge.
+    poly(g, [tx - 5, cy - th - 8, tx + tw + 5, cy - th - 8, tx + tw / 2, cy - th - 40], rampCss('blood', 1));
+    g.strokeStyle = rim; g.lineWidth = 1;
+    g.beginPath();
+    g.moveTo(tx - 5, cy - th - 8); g.lineTo(tx + tw / 2, cy - th - 40);
+    g.stroke();
+    // Rim down the left face.
+    g.fillStyle = rim;
+    g.fillRect(tx, cy - th, 1, th + 10);
+    g.fillRect(tx, cy - th - 8, tw, 1);
     // Lit windows.
     g.fillStyle = '#ffc860';
-    g.fillRect(tx + tw / 2 - 2, cy - th + 22, 4, 7);
-    g.fillRect(tx + tw / 2 - 2, cy - th + 46, 4, 7);
+    g.fillRect(tx + tw / 2 - 2, cy - th + 22, 3, 6);
+    g.fillRect(tx + tw / 2 - 2, cy - th + 46, 3, 6);
     // Banner.
-    g.fillStyle = rampCss('blood', 6);
+    g.fillStyle = rampCss('blood', 4);
     g.fillRect(tx + tw / 2, cy - th - 40, 1, 16);
     poly(g, [tx + tw / 2 + 1, cy - th - 38, tx + tw / 2 + 15, cy - th - 34, tx + tw / 2 + 1, cy - th - 28],
-      rampCss('blood', 7));
+      rampCss('blood', 5));
   }
   // Gatehouse.
   g.fillStyle = darker;
@@ -108,31 +132,30 @@ export function paintTitleArt(g, w, h) {
   g.fill();
   glow(g, cx, cy + 6, 34, '#ff9030', 0.7);
 
-  // Foreground: broken rock, a dead tree, a road running to the gate.
+  // Foreground: broken rock, a dead tree, a road running to the gate. It is
+  // nearly black - all the light in this painting is behind the castle.
   washPixels(g, 0, horizon + 10, w, h - horizon - 10, (u, v, r, ww, hh) => {
     const t = v / hh;
-    const n = fbm2(u * 0.03, v * 0.05, 4, 2, 0.5, 21) * 0.5 + 0.5;
-    const s = clamp(1 + n * 5 - t * 1.5, 0, 15);
+    const n = fbm2(u * 0.03, v * 0.05, 3, 2, 0.5, 21) * 0.5 + 0.5;
+    const s = clamp(0.5 + n * 3.2 - t * 1.2, 0, 15);
     return ramp(t > 0.55 ? 'dirt' : 'foliage', Math.round(s));
   }, 21);
 
-  // Road.
-  g.fillStyle = rampCss('dirt', 6);
-  poly(g, [cx - 16, horizon + 8, cx + 16, horizon + 8, w * 0.62 + 150, h, w * 0.62 - 130, h], rampCss('dirt', 6));
-  g.fillStyle = rampCss('dirt', 4);
-  poly(g, [cx - 8, horizon + 8, cx + 2, horizon + 8, w * 0.62 + 40, h, w * 0.62 - 30, h], rampCss('dirt', 4));
+  // Road, catching a little of the sky.
+  poly(g, [cx - 16, horizon + 8, cx + 16, horizon + 8, w * 0.62 + 150, h, w * 0.62 - 130, h], rampCss('dirt', 4));
+  poly(g, [cx - 8, horizon + 8, cx + 2, horizon + 8, w * 0.62 + 40, h, w * 0.62 - 30, h], rampCss('dirt', 6));
 
-  // Rocks.
+  // Rocks: dark masses with a single lit facet facing the sun.
   const rnd = new Rand(9);
   for (let i = 0; i < 26; i++) {
     const rx = rnd.int(0, w);
     const ry = horizon + 24 + rnd.int(0, h - horizon - 30);
     const rs = 6 + rnd.int(0, 22) * ((ry - horizon) / (h - horizon));
-    g.fillStyle = rampCss('stone', 2 + rnd.int(0, 3));
+    const sh = 1 + rnd.int(0, 2);
     poly(g, [rx - rs, ry + rs * 0.5, rx - rs * 0.6, ry - rs * 0.5, rx + rs * 0.3, ry - rs * 0.7,
-      rx + rs, ry + rs * 0.4], rampCss('stone', 2 + rnd.int(0, 3)));
-    g.fillStyle = rampCss('stone', 6);
-    g.fillRect(rx - rs * 0.5, ry - rs * 0.5, rs * 0.7, 2);
+      rx + rs, ry + rs * 0.4], rampCss('stone', sh));
+    poly(g, [rx - rs * 0.6, ry - rs * 0.5, rx + rs * 0.3, ry - rs * 0.7, rx + rs * 0.1, ry - rs * 0.3,
+      rx - rs * 0.4, ry - rs * 0.1], rampCss('stone', sh + 3));
   }
 
   // Dead tree on the left, framing the composition.
@@ -154,31 +177,50 @@ export function paintTitleArt(g, w, h) {
   vignette(g, w, h, 0.62);
 }
 
-/** Big title lettering with a drop shadow and a gold inner bevel. */
-function titleBanner(w) {
-  return baked('title:banner', w, 72, (g) => {
-    const scale = 3;
-    const line1 = 'MIGHT AND MAGIC';
-    const line2 = 'VI';
-    const cw = Math.ceil(w / scale);
-    const c = document.createElement('canvas');
-    c.width = cw; c.height = 24;
-    const gg = c.getContext('2d');
-    gg.imageSmoothingEnabled = false;
-    // Body in gold, a canary highlight up-left, a dark lip down-right: the
-    // three passes that read as a bevelled metal letterform once scaled.
-    F.drawText(gg, line1, cw / 2, 1, { face: 'title', align: 'center', color: '#8a6a10', shadow: null });
-    F.drawText(gg, line1, cw / 2 - 1, 0, { face: 'title', align: 'center', color: C_GOLD, shadow: null });
-    F.drawText(gg, line1, cw / 2 - 1, -1, { face: 'title', align: 'center', color: '#fff6c0', shadow: null });
-    F.drawText(gg, line1, cw / 2, 0, { face: 'title', align: 'center', color: null, shadow: null });
+/**
+ * Big title lettering. The letterform is drawn small and magnified with
+ * nearest sampling, which is what gives it the chunky cast-metal look: a dark
+ * lip below right, a pale bevel above left and gold in between.
+ */
+function lettering(textStr, scale, faceName = 'title') {
+  const m = F.measure(textStr, faceName);
+  const cw = m.w + 4, chh = F.lineHeightOf(faceName) + 4;
+  const c = document.createElement('canvas');
+  c.width = cw; c.height = chh;
+  const gg = c.getContext('2d');
+  gg.imageSmoothingEnabled = false;
+  const o = { face: faceName, align: 'center', shadow: null };
+  F.drawText(gg, textStr, cw / 2 + 1, 3, Object.assign({ color: '#3a2606' }, o));
+  F.drawText(gg, textStr, cw / 2, 2, Object.assign({ color: '#8a6a10' }, o));
+  F.drawText(gg, textStr, cw / 2 - 1, 1, Object.assign({ color: '#fff2b8' }, o));
+  F.drawText(gg, textStr, cw / 2, 2, Object.assign({ color: C_GOLD }, o));
+  const out = document.createElement('canvas');
+  out.width = cw * scale; out.height = chh * scale;
+  const og = out.getContext('2d');
+  og.imageSmoothingEnabled = false;
+  og.drawImage(c, 0, 0, cw, chh, 0, 0, cw * scale, chh * scale);
+  return out;
+}
+
+function titleBanner() {
+  return baked('title:banner2', 600, 96, (g, w, h) => {
+    const a = lettering('MIGHT AND MAGIC', 3);
+    const b = lettering('VI', 2);
     g.imageSmoothingEnabled = false;
-    // Shadow pass, then the letters.
-    g.globalAlpha = 0.7;
-    g.drawImage(c, 0, 0, cw, 24, 4, 8, cw * scale, 24 * scale);
+    // Cast shadow: a black copy of the letterform offset down-right.
+    const sh = document.createElement('canvas');
+    sh.width = a.width; sh.height = a.height;
+    const sg = sh.getContext('2d');
+    sg.imageSmoothingEnabled = false;
+    sg.drawImage(a, 0, 0);
+    sg.globalCompositeOperation = 'source-in';
+    sg.fillStyle = '#000000';
+    sg.fillRect(0, 0, a.width, a.height);
+    g.globalAlpha = 0.55;
+    g.drawImage(sh, Math.round((w - a.width) / 2) + 5, 5);
     g.globalAlpha = 1;
-    g.drawImage(c, 0, 0, cw, 24, 0, 4, cw * scale, 24 * scale);
-    // Sub-line.
-    F.drawText(g, line2, w / 2, 56, { face: 'title', align: 'center', color: C_CANARY });
+    g.drawImage(a, Math.round((w - a.width) / 2), 0);
+    g.drawImage(b, Math.round((w - b.width) / 2), a.height - 6);
   });
 }
 
@@ -209,8 +251,8 @@ export class TitleScreen extends Screen {
     this.drawTorches(ctx, W, H);
 
     // Title banner.
-    const banner = titleBanner(Math.min(W - 40, 560));
-    ctx.drawImage(banner, Math.round((W - banner.width) / 2), 28);
+    const banner = titleBanner();
+    ctx.drawImage(banner, Math.round((W - banner.width) / 2), 22);
 
     this.drawMenu(ctx, W, H);
 
@@ -273,10 +315,15 @@ export class TitleScreen extends Screen {
     A.bevel(ctx, x + 4, y + 4, w - 8, h - 8, { depth: 1, raised: false });
     A.filigree(ctx, x + 14, y + 6, w - 28);
 
+    // Hit-test the whole menu first: hovering must move the selection before
+    // anything is drawn, or two rows light up in the same frame.
+    const hits = MENU.map((m, i) => this.ui.region(`title:${m.id}`, x + 10, y + 16 + i * 30, w - 20, 26, null));
+    const hovered = hits.findIndex((hh) => hh.hover);
+    if (hovered >= 0) this.selected = hovered;
+
     MENU.forEach((m, i) => {
       const my = y + 16 + i * 30;
-      const hit = this.ui.region(`title:${m.id}`, x + 10, my, w - 20, 26, null);
-      if (hit.hover) this.selected = i;
+      const hit = hits[i];
       const on = i === this.selected;
       if (on) {
         ctx.save();

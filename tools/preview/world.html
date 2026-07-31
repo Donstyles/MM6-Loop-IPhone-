@@ -111,12 +111,25 @@ async function boot() {
     scene.add(dungeon.group);
     scene.fog = new THREE.Fog(0x000000, DUNGEON_FOG_NEAR, DUNGEON_FOG_FAR);
     scene.background = new THREE.Color(0x000000);
-    // Stand in the start room looking down the longest sight line.
+    // Frame the signature image: stand back from a torch so its pool of light
+    // sits in surrounding black, rather than pointing at a random wall.
     const s = dungeon.start;
-    const target = dungeon.rooms.find((r) => !r.start) || dungeon.rooms[0];
-    camera.position.set(s.x, s.y + 160, s.z);
-    camera.rotation.y = Math.atan2(s.x - target.x, s.z - target.z) + Math.PI;
-    camera.rotation.x = -0.06;
+    let t = null;
+    for (const w of dungeon.torches) {
+      const d = Math.hypot(w.x - s.x, w.z - s.z);
+      if (d > 300 && (!t || d < t.d)) t = { ...w, d };
+    }
+    if (t) {
+      const back = 1250 / Math.max(1, t.d);
+      const x = t.x + (s.x - t.x) * back * 1.0;
+      const z = t.z + (s.z - t.z) * back * 1.0;
+      camera.position.set(x, t.y - 170, z);
+      camera.rotation.y = Math.atan2(t.x - x, t.z - z) + Math.PI;
+      camera.rotation.x = -0.04;
+    } else {
+      camera.position.set(s.x, s.y + 160, s.z);
+      camera.rotation.x = -0.06;
+    }
   } else {
     const stages = []; let tPrev = performance.now();
     world = await generateRegion(regionId, seed, (p, label) => {
@@ -141,13 +154,22 @@ async function boot() {
       camera.position.set(t.x, world.heightAt(t.x, t.z) + 6000, t.z + 7000);
       camera.rotation.set(-0.72, 0, 0);
     } else if (mode === 'town' && town) {
-      // Stand on the approach road just outside the gate, looking in.
-      const a = 2.35;
-      const d = town.radius + 2200;
-      const x = town.x + Math.cos(a) * d, z = town.z + Math.sin(a) * d;
-      camera.position.set(x, world.heightAt(x, z) + 420, z);
-      camera.rotation.y = Math.atan2(town.x - x, town.z - z) + Math.PI;
-      camera.rotation.x = -0.08;
+      if (shot === 'street') {
+        // Standing in the plaza, looking down the main street.
+        const p = town.plaza;
+        camera.position.set(p.x - p.radius * 0.8, town.y + 160, p.z + p.radius * 0.5);
+        camera.rotation.y = Math.atan2(-1, -0.55);
+        camera.rotation.x = -0.02;
+      } else {
+        // Approach along the main street, aimed at a gate (the gates sit at the
+        // midpoint of each wall, the corners are towers - don't frame a tower).
+        const a = Math.PI;
+        const d = town.radius + 3000;
+        const x = town.x + Math.cos(a) * d, z = town.z + Math.sin(a) * d;
+        camera.position.set(x, world.heightAt(x, z) + 1500, z);
+        camera.rotation.y = Math.atan2(town.x - x, town.z - z) + Math.PI;
+        camera.rotation.x = -0.17;
+      }
     } else {
       // Region: find a local high point with open ground in front of it and
       // stand there at eye height, the way MM6's own box art shots are framed.

@@ -77,6 +77,50 @@ export class Spawner {
     for (const s of region.spawns || []) {
       this.spawnGroup(s, rnd, ground);
     }
+
+    // Towns are part of the outdoor map in MM6 - you walk up to a shop's door
+    // and the establishment opens over the world view.
+    for (const town of region.towns || []) this.populateTown(town, ground, rnd);
+  }
+
+  populateTown(town, ground, rnd) {
+    const S = this.session;
+
+    for (const p of town.props || []) {
+      const sh = this.sheet('prop', p.kind, p.seed || 1);
+      if (!sh) continue;
+      S.entities.add(new Entity({
+        category: CATEGORY.PROP, kind: p.kind, sheet: sh, static: true,
+        x: p.x, y: p.y ?? ground(p.x, p.z), z: p.z,
+        scale: p.scale || 1, solid: p.solid ?? false, label: p.label || null,
+      }));
+    }
+
+    for (const n of town.npcSpawns || []) this.spawnNPC(n, ground);
+
+    // Sprite-less markers at each door: they never draw, they just give the
+    // party something to activate.
+    for (const shop of town.shops || []) {
+      const d = shop.door || {};
+      S.entities.add(new Entity({
+        category: CATEGORY.PROP, kind: 'shopdoor', sheet: null, static: true,
+        x: d.x ?? shop.x, y: d.y ?? ground(d.x ?? 0, d.z ?? 0), z: d.z ?? shop.z,
+        radius: 120, solid: false,
+        interact: { kind: 'shop', shopKind: shop.kind, shop, town },
+        label: shop.name || shopLabel(shop.kind),
+      }));
+    }
+
+    for (const door of town.doors || []) {
+      if (!door.userData || !door.userData.door) continue;
+      const p = door.position;
+      S.entities.add(new Entity({
+        category: CATEGORY.PROP, kind: 'door', sheet: null, static: true,
+        x: p.x, y: p.y, z: p.z, radius: 110, solid: false,
+        interact: { kind: 'door', ...door.userData.door, mesh: door },
+        label: 'Door',
+      }));
+    }
   }
 
   populateDungeon(dungeon, seed) {
@@ -178,3 +222,12 @@ export class Spawner {
     }));
   }
 }
+
+const SHOP_LABELS = {
+  weapon: 'Weapon Smith', armor: 'Armourer', magic: 'Magic Shop',
+  alchemy: 'Alchemist', general: 'General Store', tavern: 'Tavern',
+  temple: 'Temple', training: 'Training Hall', bank: 'Bank',
+  townhall: 'Town Hall', stables: 'Stables', docks: 'Docks', guild: 'Guild',
+};
+
+function shopLabel(kind) { return SHOP_LABELS[kind] || 'Shop'; }

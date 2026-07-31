@@ -47,16 +47,25 @@ export function drawItemIcon(ctx, item, cx, cy, s = 28) {
   const def = itemDef(item.def) || {};
   const type = item.type || def.type || 'misc';
   const skill = def.skill || '';
-  const steel = (t) => rampCss('grey', t);
+  // Steel comes off the stone ramp, not grey: MM6's metal is cool and slightly
+  // blue-green, and pure grey reads as plastic against the painted interiors.
+  const steel = (t) => rampCss('stone', Math.max(1, t - 1));
   const wood = (t) => rampCss('wood', t);
   const brass = (t) => rampCss('gold', t);
   const half = s / 2;
   ctx.save();
   ctx.translate(cx | 0, cy | 0);
 
-  const blade = (len, wdt, tipUp = true) => {
-    poly(ctx, [-wdt, half - len, wdt, half - len, wdt, half - 6, 0, half - 2, -wdt, half - 6], steel(11));
-    poly(ctx, [-wdt, half - len, 0, half - len - (tipUp ? 5 : 0), 0, half - 6, -wdt, half - 6], steel(13));
+  // A blade points up: tapered point, flat edges, a lit left facet and a
+  // shadowed right one so it does not read as a candle.
+  const blade = (len, wdt) => {
+    const top = -half + (s - len) * 0.4;
+    const bot = top + len;
+    poly(ctx, [0, top, wdt, top + wdt * 2, wdt, bot, -wdt, bot, -wdt, top + wdt * 2], steel(9));
+    poly(ctx, [0, top, 0, bot, -wdt, bot, -wdt, top + wdt * 2], steel(13));
+    ctx.fillStyle = steel(4);
+    ctx.fillRect(wdt - 1, top + wdt * 2, 1, bot - top - wdt * 2);
+    return { top, bot };
   };
 
   switch (type) {
@@ -71,9 +80,21 @@ export function drawItemIcon(ctx, item, cx, cy, s = 28) {
         ctx.fillStyle = wood(9); ctx.fillRect(-2, -half + 2, 1, s - 4);
         A.gem(ctx, -3, -half + 1, 6, 'arcane');
       } else if (skill === 'axe') {
-        ctx.fillStyle = wood(6); ctx.fillRect(-2, -half + 4, 3, s - 6);
-        poly(ctx, [1, -half + 4, half, -half + 2, half - 1, 2, 1, 0], steel(11));
-        poly(ctx, [1, -half + 4, half - 3, -half + 5, half - 4, 0, 1, 0], steel(13));
+        ctx.fillStyle = wood(6); ctx.fillRect(-2, -half + 4, 4, s - 6);
+        ctx.fillStyle = wood(9); ctx.fillRect(-2, -half + 4, 1, s - 6);
+        // Crescent head: a bitten arc rather than a slab.
+        ctx.fillStyle = steel(10);
+        ctx.beginPath();
+        ctx.moveTo(2, -half + 3);
+        ctx.quadraticCurveTo(half + 2, -half + 6, half - 1, 3);
+        ctx.quadraticCurveTo(half - 6, -half + 10, 2, -half + 9);
+        ctx.closePath(); ctx.fill();
+        ctx.fillStyle = steel(13);
+        ctx.beginPath();
+        ctx.moveTo(2, -half + 4);
+        ctx.quadraticCurveTo(half - 1, -half + 7, half - 3, 0);
+        ctx.quadraticCurveTo(half - 7, -half + 9, 2, -half + 8);
+        ctx.closePath(); ctx.fill();
       } else if (skill === 'spear') {
         ctx.fillStyle = wood(6); ctx.fillRect(-1, -half + 8, 3, s - 8);
         poly(ctx, [-3, -half + 9, 0, -half, 3, -half + 9], steel(12));
@@ -84,14 +105,16 @@ export function drawItemIcon(ctx, item, cx, cy, s = 28) {
         ctx.fillStyle = steel(13);
         ctx.beginPath(); ctx.arc(-2, -half + 5, 2, 0, Math.PI * 2); ctx.fill();
       } else if (skill === 'dagger') {
-        blade(s * 0.5, 2);
-        ctx.fillStyle = brass(8); ctx.fillRect(-5, half - 7, 10, 2);
-        ctx.fillStyle = wood(5); ctx.fillRect(-2, half - 5, 4, 5);
+        const b = blade(s * 0.46, 2);
+        ctx.fillStyle = brass(8); ctx.fillRect(-5, b.bot, 10, 2);
+        ctx.fillStyle = wood(5); ctx.fillRect(-2, b.bot + 2, 4, 6);
+        ctx.fillStyle = brass(11); ctx.fillRect(-3, b.bot + 8, 6, 2);
       } else {
-        blade(s * 0.78, 3);
-        ctx.fillStyle = brass(9); ctx.fillRect(-7, half - 8, 14, 2);
-        ctx.fillStyle = wood(5); ctx.fillRect(-2, half - 6, 4, 5);
-        ctx.fillStyle = brass(11); ctx.fillRect(-3, half - 2, 6, 2);
+        const b = blade(s * 0.62, 3);
+        ctx.fillStyle = brass(9); ctx.fillRect(-8, b.bot, 16, 3);
+        ctx.fillStyle = brass(12); ctx.fillRect(-8, b.bot, 16, 1);
+        ctx.fillStyle = wood(5); ctx.fillRect(-2, b.bot + 3, 4, 7);
+        ctx.fillStyle = brass(11); ctx.fillRect(-4, b.bot + 10, 8, 3);
       }
       break;
     case 'bow':
@@ -105,14 +128,32 @@ export function drawItemIcon(ctx, item, cx, cy, s = 28) {
       poly(ctx, [-half + 5, -half + 5, 0, -half + 5, 0, half - 6, -half + 6, 0], steel(11));
       A.gem(ctx, -3, -3, 6, 'blood');
       break;
-    case 'armor':
-      poly(ctx, [-half + 4, -half + 6, -3, -half + 3, 3, -half + 3, half - 4, -half + 6,
-        half - 6, half - 3, -half + 6, half - 3], steel(9));
-      ctx.fillStyle = steel(12);
-      ctx.fillRect(-half + 6, -half + 8, 3, s - 12);
-      ctx.fillStyle = steel(5);
-      ctx.fillRect(-1, -half + 6, 2, s - 10);
+    case 'armor': {
+      // Leather is hide-brown, mail and plate are steel; the mail gets a ring
+      // stipple so the two read differently at icon size.
+      const leather = skill === 'leather';
+      const body = leather ? wood(6) : steel(8);
+      const lit = leather ? wood(9) : steel(12);
+      const dk = leather ? wood(3) : steel(4);
+      poly(ctx, [-half + 5, -half + 7, -4, -half + 3, 4, -half + 3, half - 5, -half + 7,
+        half - 7, half - 4, -half + 7, half - 4], body);
+      ctx.fillStyle = lit;
+      poly(ctx, [-half + 5, -half + 7, -4, -half + 3, -1, -half + 3, -1, half - 4,
+        -half + 7, half - 4], lit);
+      ctx.fillStyle = dk;
+      ctx.fillRect(-1, -half + 5, 2, s - 10);
+      if (skill === 'chain') {
+        ctx.fillStyle = dk;
+        for (let yy = -half + 9; yy < half - 6; yy += 3) {
+          for (let xx = -half + 8; xx < half - 8; xx += 3) {
+            ctx.fillRect(xx + ((yy / 3) & 1), yy, 1, 1);
+          }
+        }
+      }
+      ctx.fillStyle = brass(9);
+      ctx.fillRect(-half + 6, -half + 6, s - 12, 2);
       break;
+    }
     case 'helm':
       ctx.fillStyle = steel(9);
       ctx.beginPath(); ctx.arc(0, 1, half - 4, Math.PI, Math.PI * 2); ctx.fill();
@@ -208,16 +249,16 @@ export function drawItemIcon(ctx, item, cx, cy, s = 28) {
       ctx.fillStyle = wood(9); ctx.fillRect(-3, -half + 4, 6, 3);
   }
 
-  // Broken items are tinted red, unidentified green - as in the inventory.
-  if (item.broken || item.identified === false) {
-    ctx.globalCompositeOperation = 'source-atop';
-    ctx.globalAlpha = 0.35;
-    ctx.fillStyle = item.broken ? '#ff0000' : '#00e100';
-    ctx.fillRect(-half, -half, s, s);
-    ctx.globalAlpha = 1;
-    ctx.globalCompositeOperation = 'source-over';
-  }
   ctx.restore();
+
+  // Broken items are marked red and unidentified ones green. The inventory
+  // tints the bitmap itself; here the icons sit on a painted interior, so the
+  // state goes on a corner flash that cannot be lost in the backdrop.
+  if (item.broken || item.identified === false) {
+    ctx.fillStyle = item.broken ? '#ff0000' : '#00e100';
+    ctx.fillRect((cx - half) | 0, (cy - half) | 0, 4, 4);
+    ctx.fillRect((cx + half - 4) | 0, (cy + half - 4) | 0, 4, 4);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -546,7 +587,10 @@ export class ShopScreen extends HouseScreen {
 
     const gx = GRID.x, gy = GRID.y;
     const gw = GRID.cols * GRID.cw + 8;
-    const gh = GRID.rows * GRID.ch + 24;
+    // Only plate the rows in use, so a shop with three items does not black out
+    // the whole painting behind it.
+    const rows = Math.max(1, Math.min(GRID.rows, Math.ceil(list.length / GRID.cols)));
+    const gh = rows * GRID.ch + 22;
     plate(ctx, gx - 8, gy - 20, gw, gh, 0.58);
     F.drawText(ctx, heading, gx - 2, gy - 16, { color: C_CANARY });
 

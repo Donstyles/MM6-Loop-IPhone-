@@ -75,6 +75,7 @@ export class MapScreen extends Screen {
 
   draw(ctx) {
     this.drawPage(ctx, 'sheet');
+    this.status = 'Arrow keys pan by one tile; + and - change the zoom.';
     const map = this.session.map || null;
     const rect = { x: px(VIEW.x), y: py(VIEW.y), w: VIEW.w, h: VIEW.h };
 
@@ -105,7 +106,12 @@ export class MapScreen extends Screen {
     this.drawZoomButtons(ctx, rect);
     this.drawLegend(ctx, map);
 
-    this.drawHelpLine(ctx, 306);
+    // The map fills the page, so the help line rides inside the window rather
+    // than under it.
+    const tip = this.ui.hoverText || this.status;
+    if (tip) {
+      F.drawText(ctx, tip, rect.x + 4, rect.y + 4, { face: 'small', color: CANARY });
+    }
     const r = { x: px(EXIT_X), y: py(TAB_Y), w: EXIT_W, h: TAB_H };
     const hit = this.ui.region(`${this.id}:exit`, r.x, r.y, r.w, r.h, 'Close the map');
     A.button(ctx, r.x, r.y, r.w, r.h, null, hit.down ? 'down' : 'up');
@@ -210,18 +216,23 @@ export class MapScreen extends Screen {
     const p = this.player;
     const cx = Math.round(rect.x + rect.w / 2 - this.pan.x * (rect.w / ZOOMS[this.zoom]));
     const cy = Math.round(rect.y + rect.h / 2 - this.pan.z * (rect.w / ZOOMS[this.zoom]));
-    // MM6 draws one of eight fixed arrow sprites; snap the yaw the same way.
-    const dir = Math.round((p.yaw / (Math.PI * 2)) * 8 + 8) % 8;
+    // MM6 draws one of eight fixed arrow sprites (MAPDIR1..8); snap the yaw the
+    // same way rather than rotating anything.
+    const dir = ((Math.round((p.yaw / (Math.PI * 2)) * 8) % 8) + 8) % 8;
     const ang = (dir / 8) * Math.PI * 2;
-    const dx = -Math.sin(ang), dy = -Math.cos(ang);
+    const fx = -Math.sin(ang), fy = -Math.cos(ang);
+    const sx = -fy, sy = fx;                 // side vector
+    const pt = (a, b) => [Math.round(cx + fx * a + sx * b), Math.round(cy + fy * a + sy * b)];
+    const tri = [pt(7, 0), pt(-5, 5), pt(-2, 0), pt(-5, -5)];
+    ctx.beginPath();
+    ctx.moveTo(tri[0][0], tri[0][1]);
+    for (let i = 1; i < tri.length; i++) ctx.lineTo(tri[i][0], tri[i][1]);
+    ctx.closePath();
     ctx.fillStyle = CANARY;
-    for (let i = -5; i <= 5; i++) {
-      const w = Math.max(1, 5 - Math.abs(i));
-      const bx = Math.round(cx + dx * i), by = Math.round(cy + dy * i);
-      ctx.fillRect(bx - (w >> 1), by - (w >> 1), w, w);
-    }
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(Math.round(cx + dx * 5) - 1, Math.round(cy + dy * 5) - 1, 2, 2);
+    ctx.fill();
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 1;
+    ctx.stroke();
   }
 
   drawZoomButtons(ctx, rect) {
@@ -242,8 +253,8 @@ export class MapScreen extends Screen {
   }
 
   drawLegend(ctx, map) {
-    const y = VIEW.y + VIEW.h + 8;
-    A.inset(ctx, px(VIEW.x), py(y), VIEW.w, 22);
+    const y = VIEW.y + VIEW.h + 6;
+    A.inset(ctx, px(VIEW.x), py(y), VIEW.w, 24);
     const name = (map && (map.name || map.id)) || 'Unknown Region';
     F.drawText(ctx, name, px(VIEW.x + 6), py(y + 6), { face: 'small', color: CANARY });
 
@@ -258,7 +269,6 @@ export class MapScreen extends Screen {
       F.drawText(ctx, label, px(x + 8), py(y + 6), { face: 'small', color: WHITE });
       x += 12 + F.measure(label, 'small').w + 8;
     }
-    this.status = 'Arrow keys pan by one tile; + and - change the zoom.';
   }
 }
 

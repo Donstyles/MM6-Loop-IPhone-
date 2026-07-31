@@ -120,8 +120,32 @@ export function itemIcon(item, cell = CELL) {
   const g = c.getContext('2d');
   g.imageSmoothingEnabled = false;
   paintIcon(g, item.icon || t.icon, c.width, c.height, tones(item), item);
+  outline(g, c.width, c.height);
   ICON_CACHE.set(key, c);
   return c;
+}
+
+/**
+ * MM6's item bitmaps are outlined in near-black, which is what stops them
+ * dissolving into the wooden grid. Ring the painted pixels the same way.
+ */
+function outline(g, w, h) {
+  const img = g.getImageData(0, 0, w, h);
+  const d = img.data;
+  const src = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) src[i] = d[i * 4 + 3] > 8 ? 1 : 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (src[i]) continue;
+      const near = (x > 0 && src[i - 1]) || (x < w - 1 && src[i + 1])
+        || (y > 0 && src[i - w]) || (y < h - 1 && src[i + w]);
+      if (!near) continue;
+      const p = i * 4;
+      d[p] = 14; d[p + 1] = 12; d[p + 2] = 10; d[p + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
 }
 
 function paintIcon(g, kind, w, h, T, item) {
@@ -148,15 +172,20 @@ function paintIcon(g, kind, w, h, T, item) {
       break;
     }
     case 'axe': {
-      pxl(g, cx - 1, 2, 3, h - 4, grip);
-      pxl(g, cx - 1, 2, 1, h - 4, gripLite);
-      const ay = 3, ah = Math.max(9, (h * 0.44) | 0);
+      // Haft down the left third, a bearded head bulging out to the right.
+      const hx = Math.max(2, (w * 0.24) | 0);
+      pxl(g, hx, 2, 3, h - 3, grip);
+      pxl(g, hx, 2, 1, h - 3, gripLite);
+      const ay = 3, ah = Math.max(10, (h * 0.44) | 0);
+      const inner = hx + 2, outer = w - 2;
       for (let y = 0; y < ah; y++) {
-        const bulge = Math.max(1, Math.round(Math.sin((y / ah) * Math.PI) * (w * 0.4)));
-        pxl(g, cx + 1, ay + y, bulge, 1, T.mid);
-        pxl(g, cx + bulge, ay + y, 1, 1, T.lite);
-        pxl(g, cx - 1 - Math.round(bulge * 0.35), ay + y, Math.round(bulge * 0.35), 1, T.dark);
+        const t = y / (ah - 1);
+        const edge = inner + Math.round((outer - inner) * (0.5 + 0.5 * Math.sin(t * Math.PI)));
+        pxl(g, inner, ay + y, edge - inner, 1, T.mid);
+        pxl(g, edge - 2, ay + y, 2, 1, T.lite);
+        pxl(g, inner, ay + y, 1, 1, T.dark);
       }
+      pxl(g, hx - 2, ay + 2, 2, ah - 4, T.dark);      // poll behind the haft
       break;
     }
     case 'mace': {
@@ -404,7 +433,7 @@ function equipOf(ch) {
 function bodySilhouette(ctx, r) {
   const cx = (r.x + r.w / 2) | 0;
   const top = r.y + 8;
-  const sk = rampCss('flesh', 3), skD = rampCss('flesh', 1), cloth = rampCss('dirt', 3);
+  const sk = rampCss('flesh', 6), skD = rampCss('flesh', 4), cloth = rampCss('dirt', 7);
   const headR = 14;
   ctx.save();
   for (let y = -headR; y <= headR; y++) {
@@ -445,7 +474,7 @@ export function drawPaperdoll(ctx, screen, ch) {
   A.inset(ctx, r.x, r.y, r.w, r.h);
   ctx.save();
   ctx.beginPath(); ctx.rect(r.x + 1, r.y + 1, r.w - 2, r.h - 2); ctx.clip();
-  ctx.fillStyle = rampCss('stone', 2);
+  ctx.fillStyle = rampCss('stone', 4);
   ctx.fillRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2);
   bodySilhouette(ctx, r);
 
@@ -457,20 +486,25 @@ export function drawPaperdoll(ctx, screen, ch) {
     const accepts = carried ? !!slotFor(carried, slot) : false;
     const hit = ui.region(`doll:${slot}`, x, y, sw, sh, item ? itemLabel(item) : slotLabel(slot));
 
-    ctx.globalAlpha = 0.5;
-    ctx.fillStyle = '#0c0a08';
-    ctx.fillRect(x, y, sw, sh);
-    ctx.globalAlpha = 1;
-    A.bevel(ctx, x, y, sw, sh, { sunken: true, size: 1 });
-
     if (item) {
+      // Worn gear is painted straight onto the body, as a paperdoll should be;
+      // only the empty slots show their well.
       const ic = itemIcon(item);
-      const s = Math.min(1, (sw - 4) / ic.width, (sh - 4) / ic.height);
+      const s = Math.min(1, (sw - 2) / ic.width, (sh - 2) / ic.height);
       const dw = Math.max(1, (ic.width * s) | 0), dh = Math.max(1, (ic.height * s) | 0);
-      ctx.drawImage(ic, 0, 0, ic.width, ic.height,
-        (x + (sw - dw) / 2) | 0, (y + (sh - dh) / 2) | 0, dw, dh);
-      if (item.broken) { ctx.fillStyle = 'rgba(200,32,16,0.35)'; ctx.fillRect(x + 1, y + 1, sw - 2, sh - 2); }
+      const dx = (x + (sw - dw) / 2) | 0, dy = (y + (sh - dh) / 2) | 0;
+      ctx.globalAlpha = 0.35;
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(dx + 2, dy + 2, dw, dh);
+      ctx.globalAlpha = 1;
+      ctx.drawImage(ic, 0, 0, ic.width, ic.height, dx, dy, dw, dh);
+      if (item.broken) { ctx.fillStyle = 'rgba(255,0,0,0.35)'; ctx.fillRect(dx, dy, dw, dh); }
     } else {
+      ctx.globalAlpha = 0.45;
+      ctx.fillStyle = '#0c0a08';
+      ctx.fillRect(x, y, sw, sh);
+      ctx.globalAlpha = 1;
+      A.bevel(ctx, x, y, sw, sh, { sunken: true, size: 1 });
       ctx.globalAlpha = 0.5;
       A.icon(ctx, icon, (x + (sw - 16) / 2) | 0, (y + (sh - 16) / 2) | 0, 16);
       ctx.globalAlpha = 1;
@@ -650,8 +684,10 @@ export class InventoryScreen extends Screen {
       const iw = itemW(it) * CELL, ih = itemH(it) * CELL;
       const hit = this.ui.region(`${this.id}:it:${it.uid || it.id || it.name}:${it.x},${it.y}`,
         ix, iy, iw, ih, itemLabel(it));
-      ctx.fillStyle = rampCss('wood', hit.hover ? 5 : 3);
-      ctx.fillRect(ix + 1, iy + 1, iw - 1, ih - 1);
+      if (hit.hover) {
+        ctx.fillStyle = rampCss('wood', 6);
+        ctx.fillRect(ix + 1, iy + 1, iw - 1, ih - 1);
+      }
       const ic = itemIcon(it);
       ctx.drawImage(ic, (ix + (iw - ic.width) / 2) | 0, (iy + (ih - ic.height) / 2) | 0);
       if (it.broken) tint(ctx, ix + 1, iy + 1, iw - 1, ih - 1, 'rgba(255,0,0,0.35)');

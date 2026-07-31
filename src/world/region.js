@@ -3,9 +3,9 @@ import { Rand, clamp, smoothstep, lerpN, fbm2, hash2 } from '../core/rng.js';
 import {
   generateHeightmap, paintTiles, buildTerrain, heightAt, slopeAt, normalAt,
   flattenArea, carveRoad, stampTiles, makeBillboardField, floraTexture,
-  getTexture, texturesReady, TILE, MAP_TILES, PLAYABLE_EXTENT,
+  getTexture, textureTint, texturesReady, TILE, MAP_TILES, PLAYABLE_EXTENT,
 } from './terrain.js';
-import { buildSky, FAR_CLIP, SHADE_DIST, timeTint, sunTerms } from './sky.js';
+import { buildSky, FAR_CLIP, SHADE_DIST, timeTint, sunTerms, sunDirection, quantiseShade } from './sky.js';
 import { generateTown } from './town.js';
 import { MeshBuilder, buildRuins, buildHouse, addProp, materialFor, setBuildingLight } from './building.js';
 
@@ -30,12 +30,12 @@ export const REGIONS = {
     water: -960,
     cliffTex: 'cliff_rock', cliffSlope: 0.81, cliffDarken: 0.80,
     bands: [
-      { tex: 'beach_wet', h: [0, 0.035] },
-      { tex: 'sand', h: [0, 0.085] },
-      { tex: 'gravel', s: [0.71, 9] },
-      { tex: 'dirt', s: [0.48, 9] },
-      { tex: 'forest_floor', m: [0.70, 1] },
-      { tex: 'grass_lush', m: [0.52, 1] },
+      { tex: 'beach_wet', h: [0, 0.028] },
+      { tex: 'sand', h: [0, 0.06] },
+      { tex: 'gravel', s: [0.86, 9] },
+      { tex: 'dirt', s: [0.66, 9] },
+      { tex: 'forest_floor', m: [0.84, 1] },
+      { tex: 'grass_lush', m: [0.40, 1] },
       { tex: 'grass' },
     ],
     fogClass: 'none', hazeTint: [0.62, 0.67, 0.73], sky: 'plansky3',
@@ -64,11 +64,11 @@ export const REGIONS = {
     coast: null, water: -14336,
     cliffTex: 'cliff_rock', cliffSlope: 0.78, cliffDarken: 0.78,
     bands: [
-      { tex: 'gravel', s: [0.68, 9] },
-      { tex: 'dirt', s: [0.44, 9] },
+      { tex: 'gravel', s: [0.86, 9] },
+      { tex: 'dirt', s: [0.66, 9] },
       { tex: 'farmland', h: [0.18, 0.44], m: [0, 0.34] },
-      { tex: 'forest_floor', m: [0.72, 1] },
-      { tex: 'grass_lush', m: [0.46, 1] },
+      { tex: 'forest_floor', m: [0.84, 1] },
+      { tex: 'grass_lush', m: [0.40, 1] },
       { tex: 'grass' },
     ],
     fogClass: 'light', hazeTint: [0.60, 0.64, 0.70], sky: 'plansky3',
@@ -100,9 +100,9 @@ export const REGIONS = {
     bands: [
       { tex: 'beach_wet', h: [0, 0.04] },
       { tex: 'sand', h: [0, 0.09] },
-      { tex: 'dirt', s: [0.51, 9] },
+      { tex: 'dirt', s: [0.66, 9] },
       { tex: 'farmland', m: [0, 0.30] },
-      { tex: 'grass_lush', m: [0.58, 1] },
+      { tex: 'grass_lush', m: [0.40, 1] },
       { tex: 'grass' },
     ],
     fogClass: 'none', hazeTint: [0.64, 0.69, 0.74], sky: 'plansky3',
@@ -131,10 +131,10 @@ export const REGIONS = {
     cliffTex: 'cliff_rock', cliffSlope: 0.70, cliffDarken: 0.72,
     bands: [
       { tex: 'beach_wet', h: [0, 0.05] },
-      { tex: 'gravel', s: [0.65, 9] },
-      { tex: 'moss_rock', s: [0.44, 9] },
+      { tex: 'gravel', s: [0.86, 9] },
+      { tex: 'moss_rock', s: [0.60, 9] },
       { tex: 'swamp_muck', h: [0, 0.14] },
-      { tex: 'grass_lush', m: [0.5, 1] },
+      { tex: 'grass_lush', m: [0.40, 1] },
       { tex: 'grass_dry' },
     ],
     fogClass: 'dense', hazeTint: [0.55, 0.58, 0.60], sky: 'plansky1',
@@ -165,8 +165,8 @@ export const REGIONS = {
     bands: [
       { tex: 'beach_wet', h: [0, 0.06] },
       { tex: 'sand', h: [0, 0.22] },
-      { tex: 'sand_dune', s: [0.51, 9], h: [0, 0.5] },
-      { tex: 'grass_lush', m: [0.55, 1] },
+      { tex: 'sand_dune', s: [0.62, 9], h: [0, 0.5] },
+      { tex: 'grass_lush', m: [0.40, 1] },
       { tex: 'grass_dry' },
     ],
     fogClass: 'none', hazeTint: [0.72, 0.75, 0.74], sky: 'plansky2',
@@ -196,8 +196,8 @@ export const REGIONS = {
     bands: [
       { tex: 'beach_wet', h: [0, 0.04] },
       { tex: 'gravel', h: [0, 0.10] },
-      { tex: 'moss_rock', s: [0.58, 9] },
-      { tex: 'forest_floor', m: [0.5, 1] },
+      { tex: 'moss_rock', s: [0.60, 9] },
+      { tex: 'forest_floor', m: [0.84, 1] },
       { tex: 'grass' },
     ],
     fogClass: 'light', hazeTint: [0.54, 0.60, 0.67], sky: 'plansky1',
@@ -227,8 +227,8 @@ export const REGIONS = {
     bands: [
       { tex: 'swamp_muck', h: [0, 0.16] },
       { tex: 'mud', h: [0, 0.28], m: [0.5, 1] },
-      { tex: 'moss_rock', s: [0.58, 9] },
-      { tex: 'forest_floor', m: [0.42, 1] },
+      { tex: 'moss_rock', s: [0.60, 9] },
+      { tex: 'forest_floor', m: [0.84, 1] },
       { tex: 'grass_dry' },
     ],
     fogClass: 'medium', hazeTint: [0.36, 0.40, 0.36], sky: 'plansky1',
@@ -258,7 +258,7 @@ export const REGIONS = {
     bands: [
       { tex: 'snow_rock', s: [0.68, 9] },
       { tex: 'snow', h: [0.42, 1] },
-      { tex: 'gravel', s: [0.51, 9] },
+      { tex: 'gravel', s: [0.86, 9] },
       { tex: 'tundra', m: [0, 0.45] },
       { tex: 'snow' },
     ],
@@ -289,7 +289,7 @@ export const REGIONS = {
       { tex: 'volcanic_rock', s: [0.68, 9] },
       { tex: 'ash', h: [0.5, 1] },
       { tex: 'volcanic_rock', h: [0.66, 1] },
-      { tex: 'gravel', s: [0.44, 9] },
+      { tex: 'gravel', s: [0.86, 9] },
       { tex: 'ash' },
     ],
     fogClass: 'medium', hazeTint: [0.46, 0.38, 0.35], sky: 'plansky1',
@@ -318,7 +318,7 @@ export const REGIONS = {
     bands: [
       { tex: 'swamp_muck', h: [0, 0.20] },
       { tex: 'mud', h: [0, 0.36] },
-      { tex: 'grass_lush', m: [0.6, 1] },
+      { tex: 'grass_lush', m: [0.40, 1] },
       { tex: 'swamp_muck', m: [0, 0.30] },
       { tex: 'grass_dry' },
     ],
@@ -347,7 +347,7 @@ export const REGIONS = {
     coast: null, water: -20480,
     cliffTex: 'cliff_sand', cliffSlope: 0.73, cliffDarken: 0.86,
     bands: [
-      { tex: 'gravel', s: [0.68, 9] },
+      { tex: 'gravel', s: [0.86, 9] },
       { tex: 'sand_dune', h: [0.45, 1] },
       { tex: 'sand', m: [0.3, 1] },
       { tex: 'sand_dune' },
@@ -378,7 +378,7 @@ export const REGIONS = {
     bands: [
       { tex: 'snow_rock', s: [0.65, 9] },
       { tex: 'snow', h: [0.55, 1] },
-      { tex: 'gravel', s: [0.48, 9] },
+      { tex: 'gravel', s: [0.86, 9] },
       { tex: 'tundra' },
     ],
     fogClass: 'light', hazeTint: [0.68, 0.74, 0.80], sky: 'plansky2',
@@ -405,9 +405,9 @@ export const REGIONS = {
     coast: null, water: -9216,
     cliffTex: 'cliff_rock', cliffSlope: 0.76, cliffDarken: 0.82,
     bands: [
-      { tex: 'moss_rock', s: [0.68, 9] },
-      { tex: 'dirt', s: [0.44, 9] },
-      { tex: 'forest_floor', m: [0.72, 1] },
+      { tex: 'moss_rock', s: [0.60, 9] },
+      { tex: 'dirt', s: [0.66, 9] },
+      { tex: 'forest_floor', m: [0.84, 1] },
       { tex: 'grass_lush' },
     ],
     fogClass: 'none', hazeTint: [0.62, 0.72, 0.64], sky: 'plansky3',
@@ -668,17 +668,65 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
   }
 
   // --- sky ----------------------------------------------------------------
-  let sky = null;
-  if (opts.scene) {
-    sky = buildSky(opts.scene, { camera: opts.camera, region: def });
-    sky.setRegion(def);
-  }
+  // Always built, and parented to the region group rather than the scene, so a
+  // host that adds `region.group` and never passes us a scene still gets a sky.
+  // It drives itself from onBeforeRender, so it also survives a host that never
+  // calls region.update().
+  const sky = buildSky(opts.scene || null, { camera: opts.camera, region: def });
+  sky.setRegion(def);
+  if (!opts.scene) group.add(sky.group);
 
   const water = [{ level: hm.water, tex: def.waterTex || 'water', mesh: terrain.water }];
+
+  // --- automap plate ------------------------------------------------------
+  prog(0.97, 'drawing the map');
+  const minimap = buildMinimapPlate(hm, def, towns, dungeons, roads);
 
   prog(1, 'ready');
 
   return {
+    minimap,
+    /**
+     * Blit the pre-rendered top-down plate, MM6-style: outdoors the automap is
+     * an image, not a vector redraw. `zoom` is the world span the rect covers.
+     */
+    drawMinimap(ctx, rect, player, zoom = 16384) {
+      const span = (MAP_TILES * TILE);
+      const px = ((player ? player.x : 0) - hm.origin) / span * minimap.width;
+      const pz = ((player ? player.z : 0) - hm.origin) / span * minimap.height;
+      const crop = (zoom / span) * minimap.width;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(rect.x, rect.y, rect.w, rect.h);
+      ctx.clip();
+      ctx.imageSmoothingEnabled = false;
+      const aspect = rect.h / rect.w;
+      ctx.drawImage(
+        minimap,
+        px - crop / 2, pz - crop * aspect / 2, crop, crop * aspect,
+        rect.x, rect.y, rect.w, rect.h,
+      );
+      ctx.restore();
+    },
+    /** Grey world light at a point, for tinting sprites the same as geometry. */
+    lightAt(x, y, z) {
+      const st = sunTerms(sky.state.tod);
+      const n = normalAt(hm, x, z);
+      const sun = sunDirection(sky.state.tod);
+      const ndl = Math.max(0, n.x * sun.x + n.y * sun.y + n.z * sun.z);
+      // Standing on a slope should not darken a sprite, so use a flat-ish
+      // normal blend; MM6 tints billboards by the sector/terrain light only.
+      const s = clamp(st.ambient * 0.75 + clamp(st.diffuse * (0.55 + 0.45 * ndl), 0, 0.85) * 0.68, 0, 1);
+      const g = quantiseShade(s) * sky.state.tint;
+      return { r: g, g, b: g };
+    },
+    /** Footstep / splash surface class under a point. */
+    surfaceAt(x, z) {
+      if (heightAt(hm, x, z) < hm.water) return 'water';
+      const i = clamp(Math.floor((x - hm.origin) / hm.tile), 0, hm.size - 1);
+      const j = clamp(Math.floor((z - hm.origin) / hm.tile), 0, hm.size - 1);
+      return SURFACE_OF[hm.texIds[hm.tileTex[j * hm.size + i]]] || 'grass';
+    },
     id, name: def.name, def, hm, terrain, sky, group,
     towns, dungeons, props, spawns, colliders, water, roads,
     flora,
@@ -717,6 +765,94 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
 }
 
 // ---------------------------------------------------------------------------
+
+/** Which footstep sound each terrain texture belongs to. */
+const SURFACE_OF = {
+  grass: 'grass', grass_dry: 'grass', grass_lush: 'grass', farmland: 'grass',
+  forest_floor: 'grass', tundra: 'grass', moss_rock: 'stone',
+  dirt: 'grass', mud: 'grass', swamp_muck: 'water', beach_wet: 'water',
+  road_dirt: 'grass', road_cobble: 'stone', gravel: 'stone',
+  sand: 'grass', sand_dune: 'grass',
+  snow: 'snow', snow_rock: 'snow', cliff_snow: 'snow',
+  ash: 'stone', volcanic_rock: 'stone',
+  cliff_rock: 'stone', cliff_sand: 'stone', cliff_volcanic: 'stone',
+  water: 'water', water_deep: 'water', swamp_water: 'water', lava: 'stone',
+};
+
+/**
+ * Pre-render the top-down automap plate once.
+ *
+ * MM6's outdoor automap is a bitmap the game samples and blits, not a vector
+ * redraw, so the panel just crops this image around the party. Tile colours
+ * come from the terrain palette, then roads, water and settlements go on top.
+ */
+function buildMinimapPlate(hm, def, towns, dungeons, roads) {
+  const S = 256;
+  const c = document.createElement('canvas');
+  c.width = S; c.height = S;
+  const g = c.getContext('2d');
+  const step = hm.size / S;
+
+  const tint = {};
+  for (const id of hm.texIds) tint[id] = textureTint(id);
+  const img = g.createImageData(S, S);
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const i = Math.min(hm.size - 1, (x * step) | 0);
+      const j = Math.min(hm.size - 1, (y * step) | 0);
+      const id = hm.texIds[hm.tileTex[j * hm.size + i]];
+      const t = tint[id] || tint[hm.texIds[0]];
+      const h = hm.height[j * (hm.size + 1) + i];
+      let r = t.r * 255, gg = t.g * 255, b = t.b * 255;
+      if (h < hm.water) { r = 34; gg = 62; b = 96; }
+      else {
+        // Relief shading so the plate reads as landform, not a colour blob.
+        const hl = hm.height[j * (hm.size + 1) + Math.max(0, i - 1)];
+        const k = clamp(1 + (h - hl) / 700, 0.62, 1.38);
+        r *= k; gg *= k; b *= k;
+      }
+      const o = (y * S + x) * 4;
+      img.data[o] = clamp(r, 0, 255);
+      img.data[o + 1] = clamp(gg, 0, 255);
+      img.data[o + 2] = clamp(b, 0, 255);
+      img.data[o + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+
+  const toPx = (wx, wz) => [
+    (wx - hm.origin) / (hm.size * hm.tile) * S,
+    (wz - hm.origin) / (hm.size * hm.tile) * S,
+  ];
+
+  g.lineCap = 'round';
+  g.lineJoin = 'round';
+  g.strokeStyle = '#b09468';
+  g.lineWidth = 1.6;
+  for (const rd of roads) {
+    g.beginPath();
+    rd.points.forEach((p, i) => {
+      const [x, y] = toPx(p.x, p.z);
+      i ? g.lineTo(x, y) : g.moveTo(x, y);
+    });
+    g.stroke();
+  }
+  for (const t of towns) {
+    const [x, y] = toPx(t.x, t.z);
+    const r = Math.max(2.5, t.radius / (hm.size * hm.tile) * S);
+    g.fillStyle = '#d8cba0';
+    g.fillRect(x - r, y - r, r * 2, r * 2);
+    g.strokeStyle = '#4a4030';
+    g.lineWidth = 1;
+    g.strokeRect(x - r, y - r, r * 2, r * 2);
+  }
+  for (const d of dungeons) {
+    const [x, y] = toPx(d.x, d.z);
+    g.fillStyle = '#201814';
+    g.beginPath(); g.arc(x, y, 2.2, 0, 6.2832); g.fill();
+  }
+  return c;
+}
 
 const FLORA_BUCKET = 16;   // tiles per flora batch, 8192 units
 

@@ -138,8 +138,6 @@ export function resistForElement(element) {
 // spStat: which primary stat feeds spell points. Druids uniquely average
 // Intellect and Personality.
 
-const K = (id, name, tier, base, over) => Object.assign({ id, name, tier }, base, over || {});
-
 /** All 18 classes: 6 base classes, each with two promotion tiers. */
 export const CLASSES = {};
 

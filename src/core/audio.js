@@ -51,6 +51,52 @@ export function renderOffline(off) {
   });
 }
 
+/**
+ * Seeded noise samples, cached across every render in the session.
+ *
+ * Each recipe draws its own random start offset out of the bed and puts its own
+ * filters on it, so sharing the underlying samples is inaudible - and it turns
+ * "generate 100k samples" into a memcpy, which is what keeps init inside the
+ * gesture budget.
+ */
+const noiseCache = new Map();
+function noiseData(color, n) {
+  const key = color + ':' + n;
+  const hit = noiseCache.get(key);
+  if (hit) return hit;
+  const d = new Float32Array(n);
+  let a = hashStr('mm6noise:' + color) >>> 0;
+  // mulberry32 inlined; the per-sample method call is not free at this size.
+  const rnd = () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  if (color === 'pink') {
+    let b0 = 0, b1 = 0, b2 = 0;
+    for (let i = 0; i < n; i++) {
+      const w = rnd() * 2 - 1;
+      b0 = 0.99765 * b0 + w * 0.0990460;
+      b1 = 0.96300 * b1 + w * 0.2965164;
+      b2 = 0.57000 * b2 + w * 1.0526913;
+      d[i] = (b0 + b1 + b2 + w * 0.1848) * 0.32;
+    }
+  } else if (color === 'brown') {
+    let last = 0;
+    for (let i = 0; i < n; i++) {
+      const w = rnd() * 2 - 1;
+      last = (last + 0.035 * w) / 1.035;
+      d[i] = last * 3.2;
+    }
+  } else {
+    for (let i = 0; i < n; i++) d[i] = rnd() * 2 - 1;
+  }
+  noiseCache.set(key, d);
+  return d;
+}
+
 /** Cheap curve builder for pitch/filter contours. */
 function curveOf(points, n = 64) {
   const out = new Float32Array(n);
@@ -98,36 +144,23 @@ class Rig {
     this.rng = rng;
     this._noise = new Map();
     this._verb = null;
+    // Non-zero when this recipe is being baked as one slot of a batch render.
+    this.offset = 0;
   }
 
-  /** Cached noise bed for this render. Sources loop it, so 2 s is plenty. */
+  /**
+   * Noise bed for this render; sources loop it, so a couple of seconds covers
+   * everything. The samples come from the shared cache - filling one of these
+   * by hand was, measurably, most of the cost of baking a footstep.
+   */
   noise(color = 'white', dur = 2.2) {
     const key = color + dur;
     let b = this._noise.get(key);
     if (b) return b;
-    const ctx = this.ctx, rng = this.rng;
+    const ctx = this.ctx;
     const n = Math.max(1, Math.ceil(dur * ctx.sampleRate));
     b = ctx.createBuffer(1, n, ctx.sampleRate);
-    const d = b.getChannelData(0);
-    if (color === 'pink') {
-      let b0 = 0, b1 = 0, b2 = 0;
-      for (let i = 0; i < n; i++) {
-        const w = rng.float(-1, 1);
-        b0 = 0.99765 * b0 + w * 0.0990460;
-        b1 = 0.96300 * b1 + w * 0.2965164;
-        b2 = 0.57000 * b2 + w * 1.0526913;
-        d[i] = (b0 + b1 + b2 + w * 0.1848) * 0.32;
-      }
-    } else if (color === 'brown') {
-      let last = 0;
-      for (let i = 0; i < n; i++) {
-        const w = rng.float(-1, 1);
-        last = (last + 0.035 * w) / 1.035;
-        d[i] = last * 3.2;
-      }
-    } else {
-      for (let i = 0; i < n; i++) d[i] = rng.float(-1, 1);
-    }
+    b.getChannelData(0).set(noiseData(color, n));
     this._noise.set(key, b);
     return b;
   }
@@ -153,7 +186,7 @@ class Rig {
   /** Pitched oscillator with optional glide and an ADR body. */
   tone(o = {}) {
     const ctx = this.ctx;
-    const t = o.t || 0;
+    const t = (o.t || 0) + this.offset;
     const dur = o.dur ?? 0.25;
     const osc = ctx.createOscillator();
     osc.type = o.type || 'sine';
@@ -191,7 +224,7 @@ class Rig {
   /** Filtered noise burst - the backbone of impacts, whooshes and ambience. */
   nz(o = {}) {
     const ctx = this.ctx;
-    const t = o.t || 0;
+    const t = (o.t || 0) + this.offset;
     const dur = o.dur ?? 0.2;
     const src = ctx.createBufferSource();
     src.buffer = this.noise(o.color || 'white', o.bed || 2.2);
@@ -226,7 +259,7 @@ class Rig {
   /** Two-operator FM - bells, metal, ice, coins. */
   bell(o = {}) {
     const ctx = this.ctx;
-    const t = o.t || 0;
+    const t = (o.t || 0) + this.offset;
     const dur = o.dur ?? 1;
     const f = o.f ?? 660;
     const car = ctx.createOscillator();
@@ -255,7 +288,7 @@ class Rig {
    */
   vox(o = {}) {
     const ctx = this.ctx;
-    const t = o.t || 0;
+    const t = (o.t || 0) + this.offset;
     const dur = o.dur ?? 0.5;
     const src = ctx.createOscillator();
     src.type = o.wave || 'sawtooth';
@@ -1287,11 +1320,17 @@ export const SFX_GROUPS = {
   ambience: ['amb_wind', 'amb_forest', 'amb_town', 'amb_cave', 'amb_sea', 'amb_dungeon', 'amb_rain', 'amb_night'],
 };
 
-/** Rendered eagerly at init - the things that fire in the first second of play. */
-const HOT = [
-  'click', 'click_soft', 'step_grass', 'step_stone', 'step_wood',
-  'swing_light', 'hit_flesh', 'hit_armor', 'miss', 'party_hurt',
-  'item_pickup', 'error', 'page_turn',
+// Baked inside the gesture handler: only what can fire before the next frame,
+// which in practice is whatever the player just tapped.
+const HOT = ['click', 'click_soft', 'error', 'item_pickup'];
+
+// Baked immediately afterwards on a timer, so init() returns to the caller at
+// once. A cold sound bakes in a few milliseconds anyway - the warm set exists
+// to make sure not even that shows up on the first swing.
+const WARM = [
+  'step_grass', 'step_stone', 'step_wood', 'step_water', 'step_snow', 'jump', 'land',
+  'swing_light', 'swing_heavy', 'hit_flesh', 'hit_armor', 'hit_bone', 'miss',
+  'party_hurt', 'page_turn', 'coin', 'gold_pickup', 'door_open', 'door_close',
 ];
 
 const SFX_META = R;
@@ -1430,9 +1469,14 @@ export class Audio {
     await this.resume();
     this.resumeMs = now() - t0 - this.ctxMs;
     const tb = now();
-    await Promise.all(HOT.map((id) => this._ensure(id)));
+    await this._bakeBatch(HOT);
     this.bakeMs = now() - tb;
     this.initMs = now() - t0;
+
+    // Everything else the first minute of play needs, off the critical path.
+    const warm = () => { this._bakeBatch(WARM); };
+    if (typeof requestIdleCallback === 'function') requestIdleCallback(warm, { timeout: 400 });
+    else setTimeout(warm, 0);
 
     if (typeof document !== 'undefined' && !this._visBound) {
       this._visBound = true;
@@ -1508,14 +1552,78 @@ export class Audio {
   renderToBuffer(id) { return this._ensure(id); }
 
   /**
+   * Bake several short sounds in a single OfflineAudioContext, laid end to end
+   * and sliced apart afterwards.
+   *
+   * Spinning up an offline context costs far more than the DSP for a 200 ms
+   * footstep does, so doing thirteen of them one at a time is most of the init
+   * budget. One context for the lot turns that into one fixed cost. Loops and
+   * anything long stay on the individual path.
+   */
+  async _bakeBatch(ids) {
+    const OAC = typeof window !== 'undefined' && (window.OfflineAudioContext || window.webkitOfflineAudioContext);
+    if (!OAC || !this.ok) return;
+    const todo = ids.filter((id) => SFX_META[id] && !SFX_META[id].loop && !this.buffers.has(id) && !this.pending.has(id));
+    if (!todo.length) return;
+    const sr = this.ctx.sampleRate;
+    const GUARD = 0.15;               // room for a recipe that rings past its slot
+    const slots = [];
+    let cursor = 0;
+    for (const id of todo) {
+      slots.push({ id, spec: SFX_META[id], offset: cursor });
+      cursor += SFX_META[id].dur + GUARD;
+    }
+    const off = new OAC(2, Math.ceil(cursor * sr), sr);
+    const ws = off.createWaveShaper();
+    ws.curve = SOFT_CLIP;
+    ws.connect(off.destination);
+    for (const slot of slots) {
+      const bus = off.createGain();
+      bus.gain.value = 1;
+      bus.connect(ws);
+      const rig = new Rig(off, bus, new Rand(hashStr('mm6sfx:' + slot.id)));
+      rig.offset = slot.offset;
+      try { slot.spec.build(rig); } catch (e) { /* a broken recipe must not kill audio */ }
+    }
+    const p = renderOffline(off).then((big) => {
+      for (const slot of slots) {
+        const n = Math.max(64, Math.ceil(slot.spec.dur * sr));
+        const start = Math.floor(slot.offset * sr);
+        const cut = this.ctx.createBuffer(big.numberOfChannels, n, sr);
+        for (let c = 0; c < big.numberOfChannels; c++) {
+          cut.getChannelData(c).set(big.getChannelData(c).subarray(start, start + n));
+        }
+        this.buffers.set(slot.id, finish(this.ctx, cut, slot.spec));
+        this.pending.delete(slot.id);
+      }
+    }).catch(() => { for (const s of slots) this.pending.delete(s.id); });
+    // Anything asking for one of these mid-bake waits on the whole batch.
+    for (const slot of slots) this.pending.set(slot.id, p.then(() => this.buffers.get(slot.id) || null));
+    return p;
+  }
+
+  /**
    * Bake a named set ahead of time. The loading screen should hand this the
    * sounds the region about to load will actually use - ambience beds are the
    * expensive ones (7 s each) and are worth paying for behind a progress bar.
    */
   async prerender(ids, onProgress) {
-    for (let i = 0; i < ids.length; i += 8) {
-      await Promise.all(ids.slice(i, i + 8).map((id) => this._ensure(id)));
-      if (onProgress) onProgress(Math.min(1, (i + 8) / ids.length));
+    const short = ids.filter((id) => SFX_META[id] && !SFX_META[id].loop);
+    const long = ids.filter((id) => SFX_META[id] && SFX_META[id].loop);
+    let done = 0;
+    const total = Math.max(1, short.length + long.length);
+    // Batch the one-shots a dozen at a time so the loading bar still moves.
+    for (let i = 0; i < short.length; i += 12) {
+      const chunk = short.slice(i, i + 12);
+      await this._bakeBatch(chunk);
+      done += chunk.length;
+      if (onProgress) onProgress(done / total);
+    }
+    // Ambience beds are seven seconds each and get their own render.
+    for (const id of long) {
+      await this._ensure(id);
+      done++;
+      if (onProgress) onProgress(done / total);
     }
   }
 

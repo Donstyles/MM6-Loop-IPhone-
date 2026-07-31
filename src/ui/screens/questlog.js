@@ -14,9 +14,10 @@ import {
 
 const PAGES = ['Quests', 'Notes', 'Awards', 'History'];
 const PAGE_TITLES = ['Current Quests', 'Auto Notes', 'Awards', 'History'];
-/** Sub-page buttons down the right inner margin, panel-relative. */
+/** Sub-page buttons down the right inner margin, panel-relative. MM6 spaces
+ *  its six book buttons 37 px apart; with four pages they run consecutively. */
 const SUB_X = 398;
-const SUB_Y = [1, 38, 113, 150];
+const SUB_Y = [1, 38, 75, 112];
 const SUB_W = 50;
 const SUB_H = 34;
 

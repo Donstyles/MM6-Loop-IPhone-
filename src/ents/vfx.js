@@ -1,4 +1,5 @@
-import { getEffectSheet, effectDef } from '../art/vfxart.js';
+import * as THREE from 'three';
+import { getEffectSheet, resolveEffectId } from '../art/vfxart.js';
 
 // ---------------------------------------------------------------------------
 // The effect runtime.
@@ -75,6 +76,20 @@ export const DAMAGE_STYLE = {
 const NUMBER_RISE = 120;   // world units
 const NUMBER_LIFE = 1.1;   // seconds
 
+const _warned = new Set();
+const _proj = new THREE.Vector3();
+
+/** Cylinder test against an entity's sprite volume. */
+function hitsEntity(e, x, y, z, r) {
+  if (!e || !e.pos || e.dead || e.remove) return false;
+  const h = e.sizeH || 220;
+  const rad = (e.radius || 60) + r;
+  const dx = x - e.pos.x, dz = z - e.pos.z;
+  if (dx * dx + dz * dz > rad * rad) return false;
+  const dy = y - e.pos.y;
+  return dy > -r && dy < h + r;
+}
+
 class Slot {
   constructor() {
     this.active = false;
@@ -148,6 +163,11 @@ export class VFXSystem {
     this._seq = 1;
     this._active = 0;
     this._numOut = [];
+    this._textOut = [];
+    this._textPool = new Array(MAX_NUMBERS);
+    for (let i = 0; i < MAX_NUMBERS; i++) {
+      this._textPool[i] = { x: 0, y: 0, text: '', kind: 'damage', alpha: 1, big: false };
+    }
     this._screenPool = new Array(MAX_SCREEN);
     for (let i = 0; i < MAX_SCREEN; i++) this._screenPool[i] = { kind: 'flash', r: 1, g: 1, b: 1, amount: 0 };
     this._screen = [];
@@ -209,8 +229,15 @@ export class VFXSystem {
   }
 
   _bind(s, id) {
-    const sheet = getEffectSheet(id);
-    if (!sheet) { s.active = false; this._active--; return null; }
+    let sheet = getEffectSheet(id);
+    if (!sheet) {
+      // An unknown tag must not swallow the effect: gameplay hangs off the
+      // projectile's onHit, so fall back to a generic hit rather than fail.
+      if (!_warned.has(id)) { _warned.add(id); console.warn('vfx: unknown effect id', id); }
+      sheet = getEffectSheet('spark_hit');
+      id = 'spark_hit';
+      if (!sheet) { s.active = false; this._active--; return null; }
+    }
     s.id = id;
     s.sheet = sheet;
     s.frames = sheet.frames;
@@ -359,6 +386,36 @@ export class VFXSystem {
     return out;
   }
 
+  /**
+   * Floating combat text projected into the HUD's 2D space.
+   * @param {THREE.Camera} camera
+   * @param {{x:number,y:number,w:number,h:number}} view the 3D viewport rect
+   * @returns {Array<{x,y,text,kind,alpha,big}>} reused array - read it now.
+   */
+  screenTexts(camera, view) {
+    const out = this._textOut;
+    out.length = 0;
+    if (!camera || !view) return out;
+    for (let i = 0; i < MAX_NUMBERS; i++) {
+      const d = this.numbers[i];
+      if (!d.active) continue;
+      _proj.set(d.x, d.y, d.z).project(camera);
+      // Behind the camera, or off the sides: nothing to draw.
+      if (_proj.z > 1 || _proj.x < -1.3 || _proj.x > 1.3) continue;
+      const e = this._textPool[out.length];
+      if (!e) break;
+      e.x = view.x + (_proj.x * 0.5 + 0.5) * view.w + d.jitter * 0.35;
+      e.y = view.y + (-_proj.y * 0.5 + 0.5) * view.h;
+      e.text = d.text;
+      e.kind = d.kind;
+      e.big = DAMAGE_STYLE[d.kind].big;
+      // Hold full strength for the first half, then fade out.
+      e.alpha = d.t < 0.55 ? 1 : Math.max(0, 1 - (d.t - 0.55) / 0.45);
+      out.push(e);
+    }
+    return out;
+  }
+
   _pushScreenFor(id, scale) {
     const f = SCREEN_FLASH[id];
     if (!f) return;
@@ -460,6 +517,24 @@ export class VFXSystem {
 
     let hit = null, hitTerrain = false;
     if (ctx && ctx.hitEntity) hit = ctx.hitEntity(nx, ny, nz, s.radius, s.source);
+    else if (s.target) hit = hitsEntity(s.target, nx, ny, nz, s.radius) ? s.target : null;
+    else if (ctx && ctx.entities && ctx.entities.list) {
+      // No aimed target (a monster's bolt at the party, mostly): sweep the
+      // entity list, which is short enough that a linear scan is free.
+      const list = ctx.entities.list;
+      for (let i = 0; i < list.length; i++) {
+        const e = list[i];
+        if (e === s.source || e.dead || e.remove || !e.pos) continue;
+        if (hitsEntity(e, nx, ny, nz, s.radius)) { hit = e; break; }
+      }
+    }
+    if (!hit && !s.target && ctx && ctx.player && s.source) {
+      // A monster's projectile: the party is the thing it can run into.
+      const pp = ctx.player.pos;
+      const pr = (ctx.playerRadius || 90) + s.radius;
+      const pdx = nx - pp.x, pdz = nz - pp.z, pdy = ny - (pp.y + 160);
+      if (pdx * pdx + pdz * pdz <= pr * pr && Math.abs(pdy) < 200) hitTerrain = true;
+    }
     if (!hit && ctx) {
       if (ctx.groundAt) {
         const g = ctx.groundAt(nx, nz, ny);
@@ -601,88 +676,62 @@ export class VFXSystem {
 
 const DEFAULT_VFX = { cast: 'spark_shower', projectile: null, impact: 'spark_hit' };
 
+// Effects that make sense as something flying through the air. Anything else a
+// spell asks for is played where it lands.
+const PROJECTILE_IDS = new Set(['fire_bolt', 'fireball', 'meteor', 'ice_shard', 'rock_shard',
+  'lightning', 'blades', 'dark_ray', 'acid_splash', 'mind_blast', 'arrow', 'spark_shower',
+  'starburst']);
+
+const IMPACT_FOR = {
+  fire_bolt: 'fire_burst', fireball: 'fire_burst', meteor: 'fire_burst',
+  ice_shard: 'ice_burst', rock_shard: 'earth_burst', lightning: 'spark_hit',
+  blades: 'spark_hit', dark_ray: 'soul_drain', acid_splash: 'poison_cloud',
+  mind_blast: 'mind_blast', arrow: 'spark_hit', starburst: 'holy_burst',
+  spark_shower: 'spark_hit',
+};
+
+// Tags whose cast flourish or impact is not simply derived from the tag.
 const SPELL_VFX = {
-  // Fire
-  torch_light: { cast: 'spark_shower', projectile: null, impact: 'wisp_glow' },
-  fire_bolt: { cast: 'spark_shower', projectile: 'fire_bolt', impact: 'fire_burst' },
-  fire_aura: { cast: 'spark_shower', projectile: null, impact: 'immolation_aura' },
-  fireball: { cast: 'spark_shower', projectile: 'fireball', impact: 'fire_burst' },
   fire_spike: { cast: 'spark_shower', projectile: 'fire_bolt', impact: 'flame_pillar' },
-  immolation: { cast: 'fire_burst', projectile: null, impact: 'immolation_aura' },
-  meteor_shower: { cast: 'spark_shower', projectile: 'meteor', impact: 'fire_burst' },
   inferno: { cast: 'fire_burst', projectile: null, impact: 'flame_pillar' },
-  incinerate: { cast: 'fire_burst', projectile: null, impact: 'fire_burst' },
-
-  // Air
-  sparks: { cast: 'spark_shower', projectile: 'spark_shower', impact: 'spark_hit' },
-  lightning_bolt: { cast: 'spark_shower', projectile: 'lightning', impact: 'spark_hit' },
-  jump: { cast: 'buff_shimmer', projectile: null, impact: 'dust_puff' },
-  shield: { cast: 'buff_shimmer', projectile: null, impact: 'buff_shimmer' },
-  feather_fall: { cast: 'buff_shimmer', projectile: null, impact: 'buff_shimmer' },
-  invisibility: { cast: 'buff_shimmer', projectile: null, impact: 'buff_shimmer' },
-  fly: { cast: 'buff_shimmer', projectile: null, impact: 'buff_shimmer' },
-  starburst: { cast: 'spark_shower', projectile: null, impact: 'starburst' },
-
-  // Water
-  poison_spray: { cast: 'spark_shower', projectile: 'acid_splash', impact: 'poison_cloud' },
-  ice_bolt: { cast: 'spark_shower', projectile: 'ice_shard', impact: 'ice_burst' },
-  water_walk: { cast: 'buff_shimmer', projectile: null, impact: 'frost_cloud' },
+  meteor: { cast: 'spark_shower', projectile: 'meteor', impact: 'fire_burst' },
+  dragon_breath: { cast: 'fire_burst', projectile: 'fireball', impact: 'fire_burst' },
   ice_blast: { cast: 'spark_shower', projectile: 'ice_shard', impact: 'ice_burst' },
-  town_portal: { cast: 'teleport_swirl', projectile: null, impact: 'portal' },
-  lloyds_beacon: { cast: 'teleport_swirl', projectile: null, impact: 'teleport_swirl' },
-  frost_ring: { cast: 'frost_cloud', projectile: null, impact: 'frost_cloud' },
-
-  // Earth
-  slow: { cast: 'dust_puff', projectile: null, impact: 'dust_puff' },
-  stone_skin: { cast: 'buff_shimmer', projectile: null, impact: 'dust_puff' },
-  deadly_swarm: { cast: 'spark_shower', projectile: 'poison_cloud', impact: 'poison_cloud' },
-  blades: { cast: 'spark_shower', projectile: 'blades', impact: 'spark_hit' },
+  poison_cloud: { cast: 'spark_shower', projectile: 'acid_splash', impact: 'poison_cloud' },
+  toxic_cloud: { cast: 'spark_shower', projectile: null, impact: 'poison_cloud' },
+  swarm: { cast: 'spark_shower', projectile: 'poison_cloud', impact: 'poison_cloud' },
   rock_blast: { cast: 'spark_shower', projectile: 'rock_shard', impact: 'earth_burst' },
   death_blossom: { cast: 'spark_shower', projectile: 'rock_shard', impact: 'earth_burst' },
-  mass_distortion: { cast: 'earth_burst', projectile: null, impact: 'earth_burst' },
-
-  // Body / Mind / Spirit
-  heal: { cast: 'heal_glow', projectile: null, impact: 'heal_glow' },
-  first_aid: { cast: 'heal_glow', projectile: null, impact: 'heal_glow' },
-  cure_wounds: { cast: 'heal_glow', projectile: null, impact: 'heal_glow' },
-  power_cure: { cast: 'heal_glow', projectile: null, impact: 'holy_burst' },
-  bless: { cast: 'bless_ring', projectile: null, impact: 'bless_ring' },
-  heroism: { cast: 'bless_ring', projectile: null, impact: 'bless_ring' },
-  buff: { cast: 'buff_shimmer', projectile: null, impact: 'buff_shimmer' },
-  mind_blast: { cast: 'spark_shower', projectile: 'mind_blast', impact: 'mind_blast' },
-  psychic_shock: { cast: 'spark_shower', projectile: null, impact: 'mind_blast' },
-  telekinesis: { cast: 'buff_shimmer', projectile: null, impact: 'buff_shimmer' },
-  harm: { cast: 'dark_ray', projectile: null, impact: 'blood_hit' },
-  flying_fist: { cast: 'spark_shower', projectile: 'spark_shower', impact: 'spark_hit' },
-
-  // Light / Dark
-  light_bolt: { cast: 'spark_shower', projectile: 'starburst', impact: 'holy_burst' },
-  day_of_the_gods: { cast: 'holy_burst', projectile: null, impact: 'holy_burst' },
-  prismatic_light: { cast: 'holy_burst', projectile: null, impact: 'starburst' },
-  sunray: { cast: 'holy_burst', projectile: null, impact: 'holy_burst' },
-  divine_intervention: { cast: 'holy_burst', projectile: null, impact: 'holy_burst' },
-  toxic_cloud: { cast: 'spark_shower', projectile: null, impact: 'poison_cloud' },
   shrapmetal: { cast: 'spark_shower', projectile: null, impact: 'shrapnel' },
-  dragon_breath: { cast: 'fire_burst', projectile: 'fireball', impact: 'fire_burst' },
+  light_bolt: { cast: 'spark_shower', projectile: 'starburst', impact: 'holy_burst' },
+  harm_bolt: { cast: 'dark_ray', projectile: 'dark_ray', impact: 'blood_hit' },
+  spirit_lash: { cast: 'dark_ray', projectile: 'dark_ray', impact: 'blood_hit' },
   souldrinker: { cast: 'dark_ray', projectile: null, impact: 'soul_drain' },
   armageddon: { cast: 'fire_burst', projectile: null, impact: 'armageddon' },
-  shrinking_ray: { cast: 'dark_ray', projectile: 'dark_ray', impact: 'mind_blast' },
-  pain_reflection: { cast: 'dark_ray', projectile: null, impact: 'soul_drain' },
-
-  // Non-magical
+  implosion: { cast: 'spark_shower', projectile: null, impact: 'implosion' },
+  portal_swirl: { cast: 'teleport_swirl', projectile: null, impact: 'portal' },
   arrow: { cast: null, projectile: 'arrow', impact: 'spark_hit' },
   melee: { cast: null, projectile: null, impact: 'blood_hit' },
   melee_miss: { cast: null, projectile: null, impact: 'dust_puff' },
 };
 
-/** Map a spell's `vfx` tag to the effect ids for its cast / flight / impact. */
+/**
+ * Map a spell's `vfx` tag (spells.js VFX_TAGS) to the effect ids for its cast
+ * flourish, its flight and its impact. Unknown tags resolve through the art
+ * module's alias table, so a new spell always gets something sensible.
+ */
 export function spellVFX(spellVfxTag) {
   if (!spellVfxTag) return DEFAULT_VFX;
-  const v = SPELL_VFX[spellVfxTag];
-  if (v) return v;
-  // Unknown tags still get something sensible if they name an effect directly.
-  if (effectDef(spellVfxTag)) return { cast: 'spark_shower', projectile: null, impact: spellVfxTag };
-  return DEFAULT_VFX;
+  const explicit = SPELL_VFX[spellVfxTag];
+  if (explicit) return explicit;
+  const base = resolveEffectId(spellVfxTag);
+  if (!base) return DEFAULT_VFX;
+  const v = PROJECTILE_IDS.has(base)
+    ? { cast: 'spark_shower', projectile: base, impact: IMPACT_FOR[base] || 'spark_hit' }
+    : { cast: 'spark_shower', projectile: null, impact: base };
+  // Cache so repeated casts do not rebuild the record.
+  SPELL_VFX[spellVfxTag] = v;
+  return v;
 }
 
 /** The small sprite a projectile leaves behind it, by projectile id. */

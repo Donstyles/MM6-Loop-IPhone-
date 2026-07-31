@@ -120,7 +120,12 @@ export class HUD {
 
   // --- frame ---------------------------------------------------------------
 
-  draw(ctx, dt) {
+  /**
+   * The carved surround: everything outside the 3D window. MM6 keeps this
+   * visible behind every full-screen panel - the panels replace only the world
+   * view - so screens call this before painting themselves.
+   */
+  drawFrame(ctx, dt) {
     this.t += dt || 0;
     this.buttons.length = 0;
     ctx.clearRect(0, 0, layout.w, layout.h);
@@ -134,6 +139,10 @@ export class HUD {
     this.drawBookTabs(ctx);
     this.drawPartyBar(ctx);
     this.drawStatusLine(ctx);
+  }
+
+  draw(ctx, dt) {
+    this.drawFrame(ctx, dt);
     this.drawViewportOverlays(ctx);
     this.drawFloatText(ctx);
     if (this.showTouch) this.drawTouchControls(ctx);
@@ -364,7 +373,10 @@ export class HUD {
 
   expressionFor(ch) {
     if (ch.portraitOverride) return ch.portraitOverride;
-    const conds = ch.conditions || [];
+    const raw = ch.conditions;
+    const conds = Array.isArray(raw) ? raw
+      : raw instanceof Set ? [...raw]
+        : raw && typeof raw === 'object' ? Object.keys(raw).filter((k) => raw[k]) : [];
     if (conds.length) {
       const order = ['eradicated', 'stoned', 'dead', 'unconscious', 'paralyzed',
         'insane', 'poisoned', 'diseased', 'asleep', 'drunk', 'afraid', 'cursed', 'weak'];

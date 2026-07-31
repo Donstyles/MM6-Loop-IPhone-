@@ -173,11 +173,25 @@ export function installCombat(session) {
 
 // --- internals -------------------------------------------------------------
 
+const DISABLING = ['dead', 'unconscious', 'paralyzed', 'stoned', 'eradicated', 'asleep'];
+
+/**
+ * Conditions may arrive as an array, a Set or a flags object depending on which
+ * party implementation is loaded, so normalise before testing.
+ */
+export function conditionList(ch) {
+  const c = ch && ch.conditions;
+  if (!c) return [];
+  if (Array.isArray(c)) return c;
+  if (c instanceof Set) return [...c];
+  if (typeof c === 'object') return Object.keys(c).filter((k) => c[k]);
+  return [];
+}
+
 function canAct(ch) {
   if (!ch) return false;
   if (ch.hp <= 0) return false;
-  const bad = ['dead', 'unconscious', 'paralyzed', 'stoned', 'eradicated', 'asleep'];
-  return !(ch.conditions || []).some((c) => bad.includes(c));
+  return !conditionList(ch).some((c) => DISABLING.includes(String(c).toLowerCase()));
 }
 
 function spellCost(ch, spell) {
