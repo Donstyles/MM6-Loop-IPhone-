@@ -415,21 +415,31 @@ export function paintShopInterior(g, w, h, kind) {
   g.fillStyle = rampCss('wood', 7);
   g.fillRect(0, horizon - 16, w, 2);
 
-  // Rug in the middle of the floor.
+  // Worn rug on the boards - dark and small, so it reads as floor covering
+  // rather than as a painted disc.
+  const rugRamp = kind === 'magic' ? 'arcane' : 'blood';
   g.save();
-  g.globalAlpha = 0.88;
-  g.fillStyle = rampCss(kind === 'magic' ? 'arcane' : 'blood', 3);
-  g.beginPath(); g.ellipse(w * 0.36, h - 96, 118, 26, 0, 0, Math.PI * 2); g.fill();
-  g.fillStyle = rampCss(kind === 'magic' ? 'arcane' : 'blood', 5);
-  g.beginPath(); g.ellipse(w * 0.36, h - 96, 96, 19, 0, 0, Math.PI * 2); g.fill();
+  g.globalAlpha = 0.6;
+  g.fillStyle = rampCss(rugRamp, 2);
+  g.beginPath(); g.ellipse(w * 0.34, h - 86, 92, 17, 0, 0, Math.PI * 2); g.fill();
+  g.fillStyle = rampCss(rugRamp, 4);
+  g.beginPath(); g.ellipse(w * 0.34, h - 86, 74, 12, 0, 0, Math.PI * 2); g.fill();
+  g.fillStyle = rampCss('sand', 6);
+  g.beginPath(); g.ellipse(w * 0.34, h - 86, 40, 6, 0, 0, Math.PI * 2); g.fill();
   g.restore();
 
   // The shopkeeper, large enough to read, behind a heavy counter.
-  const cy = h - 58;
-  figure(g, w * 0.70, cy + 6, 132, 'rgba(20,17,20,0.94)', 'rgba(255,214,140,0.55)', {
-    hat: kind === 'magic' || kind === 'alchemy', w: 56,
+  const cy = h - 64;
+  figure(g, w * 0.70, cy + 8, 128, 'rgba(20,17,20,0.94)', 'rgba(255,214,140,0.55)', {
+    hat: kind === 'magic' || kind === 'alchemy', w: 54,
   });
-  paintCounter(g, 0, cy, w, 30, { cloth: kind === 'magic' ? 'arcane' : null });
+  // Shadow the counter throws forward.
+  g.save();
+  g.globalAlpha = 0.35;
+  g.fillStyle = '#000000';
+  g.fillRect(0, cy - 10, w, 12);
+  g.restore();
+  paintCounter(g, 0, cy, w, 32, { cloth: kind === 'magic' ? 'arcane' : null });
 
   // Goods on the counter, different per trade.
   const props = {
@@ -500,15 +510,18 @@ export function paintShopInterior(g, w, h, kind) {
   paintClutter(g, 54, h - 2, 'crate', 26);
   paintClutter(g, w - 52, h - 2, 'sack', 30);
 
-  // Lantern hanging over the counter, and its pool of light.
-  const lx = w * 0.30, ly = horizon - 44;
-  g.fillStyle = rampCss('wood', 2);
-  g.fillRect(lx | 0, 0, 1, ly - 6);
-  g.fillStyle = rampCss('gold', 6);
-  g.fillRect((lx - 7) | 0, ly - 6, 14, 16);
+  // Lantern hanging over the counter on a chain, and its pool of light.
+  const lx = w * 0.30, ly = 62;
+  g.fillStyle = rampCss('grey', 4);
+  for (let yy = 0; yy < ly - 10; yy += 4) g.fillRect(lx | 0, yy, 2, 3);
+  g.fillStyle = rampCss('gold', 5);
+  g.fillRect((lx - 8) | 0, ly - 10, 16, 3);
+  g.fillRect((lx - 7) | 0, ly - 7, 14, 14);
   g.fillStyle = '#ffe8a0';
-  g.fillRect((lx - 5) | 0, ly - 4, 10, 12);
-  glow(g, lx, ly + 2, 120, '#ffc860', 0.75);
+  g.fillRect((lx - 5) | 0, ly - 5, 10, 10);
+  g.fillStyle = rampCss('gold', 8);
+  g.fillRect((lx - 7) | 0, ly + 7, 14, 3);
+  glow(g, lx, ly, 78, '#ffc860', 0.55);
 
   vignette(g, w, h);
 }
