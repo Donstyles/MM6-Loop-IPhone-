@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>sprite diagnosis</title>
+<style>body{margin:0;background:#111;color:#cfc;font:12px/1.45 monospace}pre{padding:10px;white-space:pre}</style>
+</head>
+<body>
+<canvas id="gl" width="64" height="64" style="display:none"></canvas>
+<pre id="out">working...</pre>
+<script type="module">
+import * as THREE from 'three';
+import { getSheet } from '/src/art/spritebake.js';
+import { SpriteBatch } from '/src/ents/billboard.js';
+
+const lines = [];
+const P = (s) => lines.push(s);
+
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('gl'), alpha: true, antialias: false });
+renderer.setPixelRatio(1);
+renderer.setSize(64, 64, false);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.NoToneMapping;
+
+const KINDS = ['Goblin', 'Rat', 'Bat', 'FighterLeath'];
+
+function cellStats(sheet, action, frame, view) {
+  const r = sheet.rect(action, frame, view);
+  const g = sheet.canvas.getContext('2d');
+  const d = g.getImageData(r.x, r.y, r.w, r.h).data;
+  let n = 0, sr = 0, sg = 0, sb = 0;
+  let mnL = 1e9, mxL = -1e9, mn = null, mx = null;
+  let magenta = 0, pure0 = 0;
+  const hist = new Map();
+  let minX = 1e9, maxX = -1, minY = 1e9, maxY = -1;
+  for (let y = 0; y < r.h; y++) for (let x = 0; x < r.w; x++) {
+    const i = (y * r.w + x) * 4;
+    if (d[i + 3] < 128) continue;
+    n++;
+    const R = d[i], G = d[i + 1], B = d[i + 2];
+    sr += R; sg += G; sb += B;
+    if (x < minX) minX = x; if (x > maxX) maxX = x;
+    if (y < minY) minY = y; if (y > maxY) maxY = y;
+    const L = 0.299 * R + 0.587 * G + 0.114 * B;
+    if (L < mnL) { mnL = L; mn = [R, G, B]; }
+    if (L > mxL) { mxL = L; mx = [R, G, B]; }
+    if (R > 120 && B > 120 && G < 80) magenta++;
+    if (R + G + B === 0) pure0++;
+    const k = (R << 16) | (G << 8) | B;
+    hist.set(k, (hist.get(k) || 0) + 1);
+  }
+  const top = [...hist.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
+    .map(([k, c]) => '#' + k.toString(16).padStart(6, '0') + '×' + c);
+  return {
+    n, mean: n ? [sr / n | 0, sg / n | 0, sb / n | 0] : [0, 0, 0],
+    meanL: n ? (0.299 * sr + 0.587 * sg + 0.114 * sb) / n : 0,
+    minL: mnL, maxL: mxL, mn, mx, magenta, pure0, top,
+    bbox: n ? [minX, minY, maxX, maxY, maxX - minX + 1, maxY - minY + 1] : null,
+    cell: [r.w, r.h],
+  };
+}
+
+const hex = (c) => '#' + c.map((v) => (v | 0).toString(16).padStart(2, '0')).join('');
+
+P('=== 1. ATLAS PIXEL STATS (stand frame 0, octant 1) ===');
+const sheets = {};
+for (const k of KINDS) {
+  const sh = getSheet(renderer, 'creature', k, 1);
+  sheets[k] = sh;
+  const s = cellStats(sh, 'stand', 0, 1);
+  P(`${k}: atlas ${sh.atlasW}x${sh.atlasH} cell ${sh.cellW}x${sh.cellH} worldW ${sh.worldW.toFixed(1)} worldH ${sh.worldH.toFixed(1)} modelH ${sh.height.toFixed(1)} groundOffset ${sh.groundOffset.toFixed(1)}`);
+  P(`    opaque ${s.n}/${s.cell[0] * s.cell[1]} (${(100 * s.n / (s.cell[0] * s.cell[1])).toFixed(1)}%)  bbox ${JSON.stringify(s.bbox)}`);
+  P(`    mean ${hex(s.mean)} L=${s.meanL.toFixed(1)}   darkest ${hex(s.mn)} L=${s.minL.toFixed(1)}   brightest ${hex(s.mx)} L=${s.maxL.toFixed(1)}`);
+  P(`    lit/shadow ratio ${(s.maxL / Math.max(1, s.minL)).toFixed(2)}:1   pure-black texels ${s.pure0}  magenta-ish ${s.magenta}`);
+  P(`    top colours ${s.top.join(' ')}`);
+}
+
+P('');
+P('=== 2. FULL-ATLAS SCAN for stray key colours + edge bleed (Goblin) ===');
+{
+  const sh = sheets.Goblin;
+  const g = sh.canvas.getContext('2d');
+  const d = g.getImageData(0, 0, sh.atlasW, sh.atlasH).data;
+  let magenta = 0, samples = [];
+  for (let y = 0; y < sh.atlasH; y++) for (let x = 0; x < sh.atlasW; x++) {
+    const i = (y * sh.atlasW + x) * 4;
+    if (d[i + 3] < 128) continue;
+    const R = d[i], G = d[i + 1], B = d[i + 2];
+    if (R > 110 && B > 110 && G < R * 0.7 && G < B * 0.7) { magenta++; if (samples.length < 8) samples.push(`(${x},${y})=${hex([R, G, B])}`); }
+  }
+  P(`  magenta-family opaque texels in whole atlas: ${magenta}  ${samples.join(' ')}`);
+  // opaque texels touching a cell boundary -> these bleed when UVs are not inset
+  let edge = 0;
+  for (let y = 0; y < sh.atlasH; y++) for (let x = 0; x < sh.atlasW; x++) {
+    const i = (y * sh.atlasW + x) * 4;
+    if (d[i + 3] < 128) continue;
+    const cx = x % sh.cellW, cy = y % sh.cellH;
+    if (cx === 0 || cx === sh.cellW - 1 || cy === 0 || cy === sh.cellH - 1) edge++;
+  }
+  P(`  opaque texels sitting ON a cell border (bleed risk): ${edge}`);
+  const uv = sh.uv('stand', 0, 1);
+  P(`  uv('stand',0,1) = [${uv.map((v) => v.toFixed(6)).join(', ')}]  (half-texel = ${(0.5 / sh.atlasW).toFixed(6)} u, ${(0.5 / sh.atlasH).toFixed(6)} v)`);
+  const r = sh.rect('stand', 0, 1);
+  P(`  rect = x${r.x} y${r.y} w${r.w} h${r.h} -> u0 exactly on texel boundary: ${(r.x / sh.atlasW)} ; sampling at u0 hits texel ${Math.floor(uv[0] * sh.atlasW)}`);
+}
+
+P('');
+P('=== 3. THROUGH THE REAL BILLBOARD SHADER (src/ents/billboard.js) ===');
+{
+  // Reproduce engine.js's render target exactly.
+  const W = 461, H = 345;
+  const rt = new THREE.WebGLRenderTarget(W, H, {
+    minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+    format: THREE.RGBAFormat, type: THREE.UnsignedByteType,
+    depthBuffer: true, stencilBuffer: false, colorSpace: THREE.SRGBColorSpace,
+  });
+  const scene = new THREE.Scene();
+  const cam = new THREE.PerspectiveCamera(59.73, 461 / 345, 32, 8192);
+  cam.rotation.order = 'YXZ';
+  cam.position.set(0, 160, 0);
+  cam.lookAt(0, 160, -1000);
+
+  const sh = sheets.Goblin;
+  const batch = new SpriteBatch(sh.texture, 8);
+  batch.setFog(new THREE.Color(0x8fa5bd), 100000, 200000); // fog off
+  scene.add(batch.mesh);
+
+  const size = 150;                    // monsters.js GoblinA size
+  const scale = size / sh.worldH;
+  const uv = sh.uv('stand', 0, 1);
+
+  const buf = new Uint8Array(W * H * 4);
+  for (const [label, dist, tint] of [['tint 1.0 @800u', 800, 1], ['tint 1.0 @1400u', 1400, 1], ['tint 0.5 @800u', 800, 0.5]]) {
+    batch.begin();
+    batch.add(0, 0, -dist, sh.worldW * scale, sh.worldH * scale, uv[0], uv[1], uv[2], uv[3], tint, tint, tint, 1, 1);
+    batch.end();
+    renderer.setRenderTarget(rt);
+    renderer.setClearColor(0x000000, 1);
+    renderer.clear();
+    renderer.render(scene, cam);
+    renderer.readRenderTargetPixels(rt, 0, 0, W, H, buf);
+    let n = 0, sr = 0, sg = 0, sb = 0, minX = 1e9, maxX = -1, minY = 1e9, maxY = -1, mx = 0;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 4;
+      if (buf[i] + buf[i + 1] + buf[i + 2] === 0) continue;
+      n++; sr += buf[i]; sg += buf[i + 1]; sb += buf[i + 2];
+      const L = 0.299 * buf[i] + 0.587 * buf[i + 1] + 0.114 * buf[i + 2];
+      if (L > mx) mx = L;
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+    }
+    P(`  ${label}: non-black px ${n}  screen bbox ${maxX - minX + 1}x${maxY - minY + 1}  mean ${n ? hex([sr / n, sg / n, sb / n]) : '-'}  maxL ${mx.toFixed(0)}`);
+  }
+  P(`  (quad is worldW ${(sh.worldW * scale).toFixed(0)} x worldH ${(sh.worldH * scale).toFixed(0)} units, scale=${scale.toFixed(3)} from def.size 150)`);
+  P(`  expected px height for a ${size}u quad at 800u: ${(345 * size / (2 * 800 * Math.tan(59.73 * Math.PI / 360))).toFixed(1)}`);
+}
+
+document.getElementById('out').textContent = lines.join('\n');
+window.__diag = lines.join('\n');
+window.__ready = true;
+</script>
+</body>
+</html>

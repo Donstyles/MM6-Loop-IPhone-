@@ -18,6 +18,7 @@ import * as UI from '../../art/uiart.js';
 import * as PORTRAITS from '../../art/portraits.js';
 import { mulberry32 } from '../../core/rng.js';
 import { rampCss } from '../../core/palette.js';
+import * as M from './mm6art.js';
 
 // --- geometry ---------------------------------------------------------------
 
@@ -142,43 +143,21 @@ export const A = {
     guard('stone', () => UI.drawStonePanel(ctx, x | 0, y | 0, w | 0, h | 0, opts || {}),
       () => ctx.drawImage(scratch(`st${w}x${h}`, w, h, fbStone), x | 0, y | 0));
   },
-  /** `tone`: 'sheet' is MM6's tooled leather sheet, 'page' the pale book page. */
+  /**
+   * Painted paper. `tone`: 'sheet' is the character sheet's #C8B48C parchment,
+   * 'page' the paler book leaf. Painted here rather than in uiart because MM6's
+   * stock has visible fibre, blotching and a worn edge - a wash will not do.
+   */
   parchment(ctx, x, y, w, h, opts) {
     const tone = (opts && opts.tone) || 'page';
     const seed = (opts && opts.seed) || 11;
-    guard('parchment', () => {
-      const c = UI.parchment(w | 0, h | 0, seed);
-      if (!c || !c.width) throw new Error('no parchment');
-      ctx.drawImage(c, x | 0, y | 0);
-    }, () => {
-      const key = `pa${w}x${h}`;
-      ctx.drawImage(scratch(key, w, h, parchmentPainter(10.6, 12.8, 0x5eed01)), x | 0, y | 0);
-    });
-    if (tone === 'sheet') {
-      // MM6's character sheet is a dark tooled hide and prints white on it, so
-      // whatever stock the art module hands back gets taken down a few stops.
-      ctx.globalAlpha = 0.62; ctx.fillStyle = '#1c1408';
-      ctx.fillRect(x | 0, y | 0, w | 0, h | 0);
-      ctx.globalAlpha = 1;
-    }
+    M.paper(ctx, x | 0, y | 0, w | 0, h | 0, tone === 'sheet' ? 'sheet' : 'book', seed);
   },
   /** An open book page. `side` is 'left'|'right' so the spine shades inward. */
   book(ctx, x, y, w, h, side, kind) {
-    guard('book', () => {
-      const c = UI.bookPage(w | 0, h | 0, side === 'right' ? 29 : 23, kind || 'spell');
-      if (!c || !c.width) throw new Error('no page');
-      ctx.drawImage(c, x | 0, y | 0);
-    }, () => {
-      ctx.drawImage(scratch(`bk${w}x${h}`, w, h, parchmentPainter(11.2, 13.2, 0x7a11)), x | 0, y | 0);
-    });
-    // Shade towards the spine: it is what makes the spread read as a book.
-    const inner = side === 'right' ? x : x + w - 10;
-    for (let i = 0; i < 10; i++) {
-      ctx.globalAlpha = 0.16 * (1 - i / 10);
-      ctx.fillStyle = '#2a1c0a';
-      ctx.fillRect(((side === 'right' ? inner + i : inner + 9 - i)) | 0, y | 0, 1, h | 0);
-    }
-    ctx.globalAlpha = 1;
+    M.paper(ctx, x | 0, y | 0, w | 0, h | 0, kind === 'book' ? 'book' : 'spell',
+      side === 'right' ? 29 : 23);
+    M.gutter(ctx, side === 'right' ? (x | 0) : (x + w - 1) | 0, y | 0, h | 0, side);
   },
   /** opts: { sunken, size } - translated to uiart's { raised, depth }. */
   bevel(ctx, x, y, w, h, opts) {
@@ -219,20 +198,22 @@ export const A = {
     ctx.fillRect(x | 0, y | 0, w | 0, 1);
     ctx.globalAlpha = 1;
   },
-  button(ctx, x, y, w, h, label, state) {
-    guard('button', () => UI.drawButton(ctx, x | 0, y | 0, w | 0, h | 0, '', state || 'up'), () => {
-      ctx.fillStyle = rampCss('stone', state === 'down' ? 4 : 6);
-      ctx.fillRect(x, y, w, h);
-      A.bevel(ctx, x, y, w, h, { sunken: state === 'down' });
-      ctx.fillStyle = rampCss('stone', state === 'down' ? 3 : 7);
-      ctx.fillRect(x + 2, y + 2, w - 4, h - 4);
+  /**
+   * A carved plate. MM6 has no rounded rectangles and no flat fills: this is a
+   * chiselled slab, lit along the top-left arris and shadowed along the
+   * bottom-right, inverted and shifted +1,+1 when pressed.
+   */
+  button(ctx, x, y, w, h, label, state, opts) {
+    const o = opts || {};
+    const d = M.carvedPlate(ctx, x | 0, y | 0, w | 0, h | 0, {
+      state: state || 'up', material: o.material || 'stone', seed: o.seed === undefined ? 5 : o.seed,
     });
     if (label) {
-      const d = state === 'down' ? 1 : 0;
       F.drawText(ctx, label, (x + w / 2 + d) | 0, (y + (h - 10) / 2 + d) | 0, {
         align: 'center', color: state === 'hot' ? HILITE : CANARY,
       });
     }
+    return d;
   },
   icon(ctx, name, x, y, size) {
     guard('icon', () => UI.drawIcon(ctx, name, x | 0, y | 0, size | 0), () => {
@@ -254,45 +235,29 @@ export const A = {
     guard('portraitFrame', () => UI.drawPortraitFrame(ctx, x | 0, y | 0, w | 0, h | 0, state || 'normal'),
       () => A.bevel(ctx, x - 1, y - 1, w + 2, h + 2, { sunken: true }));
   },
+  /** A sunken well with a painted tick. No checkbox chrome. */
   check(ctx, x, y, on, hot) {
-    guard('check', () => UI.drawCheck(ctx, x | 0, y | 0, !!on), () => {
-      ctx.fillStyle = '#0e0c08'; ctx.fillRect(x, y, 12, 12);
-      A.bevel(ctx, x, y, 12, 12, { sunken: true });
-      if (on) {
-        ctx.fillStyle = hot ? HILITE : CANARY;
-        for (let i = 0; i < 5; i++) ctx.fillRect(x + 2 + i, y + 6 + (i < 2 ? i : 4 - i), 2, 2);
-      }
-    });
+    M.tickBox(ctx, x | 0, y | 0, 13, !!on, !!hot);
   },
+  /** A cut groove with a metal plate riding it. */
   slider(ctx, x, y, w, t, hot) {
-    guard('slider', () => UI.drawSlider(ctx, x | 0, y | 0, w | 0, t), () => {
-      const cy = y + 5;
-      ctx.fillStyle = '#0e0c08'; ctx.fillRect(x, cy - 1, w, 4);
-      A.bevel(ctx, x, cy - 1, w, 4, { sunken: true });
-      // Notches, the way MM6's volume sliders are stepped.
-      ctx.fillStyle = rampCss('stone', 8);
-      for (let i = 0; i <= 8; i++) ctx.fillRect((x + (w - 2) * (i / 8)) | 0, cy + 4, 1, 3);
-      const kx = (x + Math.round((w - 9) * Math.max(0, Math.min(1, t)))) | 0;
-      ctx.fillStyle = rampCss('gold', hot ? 12 : 9);
-      ctx.fillRect(kx, y - 2, 9, 14);
-      A.bevel(ctx, kx, y - 2, 9, 14, {});
-    });
+    M.groove(ctx, x | 0, y + 4, w | 0, 5);
+    const kx = (x + Math.round((w - 7) * Math.max(0, Math.min(1, t)))) | 0;
+    M.handle(ctx, kx, (y | 0) - 1, 7, 15, !!hot);
   },
-  /** Wooden scrollbar, 12 px wide with an arrow button at each end. */
+  /**
+   * A cut channel with a wooden runner in it - no track, no thumb outline and
+   * no arrow buttons, none of which exist in 1998 art.
+   */
   scrollbar(ctx, x, y, h, t, frac) {
-    guard('scrollbar', () => UI.drawScrollbar(ctx, x | 0, y | 0, h | 0, t, frac), () => {
-      ctx.fillStyle = rampCss('wood', 3);
-      ctx.fillRect(x, y, 12, h);
-      A.bevel(ctx, x, y, 12, h, { sunken: true });
-      const gh = Math.max(14, Math.round(h * Math.max(0.06, Math.min(1, frac))));
-      const gy = (y + (h - gh) * Math.max(0, Math.min(1, t))) | 0;
-      ctx.fillStyle = rampCss('wood', 9);
-      ctx.fillRect(x + 1, gy, 8, gh);
-      A.bevel(ctx, x + 1, gy, 8, gh, {});
-      ctx.fillStyle = rampCss('wood', 6);
-      ctx.fillRect(x + 2, gy + (gh >> 1) - 2, 6, 1);
-      ctx.fillRect(x + 2, gy + (gh >> 1) + 1, 6, 1);
-    });
+    x |= 0; y |= 0; h |= 0;
+    M.carvedWell(ctx, x, y, 10, h, { material: 'wood', seed: 61 });
+    const gh = Math.max(16, Math.round((h - 4) * Math.max(0.08, Math.min(1, frac))));
+    const gy = (y + 2 + (h - 4 - gh) * Math.max(0, Math.min(1, t))) | 0;
+    M.carvedPlate(ctx, x + 1, gy, 8, gh, { material: 'wood', seed: 29 });
+    const my = gy + (gh >> 1);
+    M.rct(ctx, x + 3, my - 2, 4, 1, [136, 104, 66]);
+    M.rct(ctx, x + 3, my + 1, 4, 1, [136, 104, 66]);
   },
   /** `ramp` is a palette ramp name, as uiart expects ('blood', 'ice', ...). */
   gem(ctx, x, y, size, ramp) {
@@ -520,17 +485,17 @@ export class Screen {
     });
   }
 
-  /** Vertical scrollbar with wheel, arrow buttons and drag. Returns the value. */
+  /**
+   * Vertical runner: wheel and drag only. MM6 has no arrow buttons on a book
+   * page, so neither does this - it is a channel with a wooden slider in it.
+   */
   scrollbar(ctx, id, x, y, h, scroll, total, visible) {
     const maxScroll = Math.max(0, total - visible);
     let s = Math.max(0, Math.min(maxScroll, scroll));
-    const ARROW = 11;
-    const hit = this.ui.region(`${this.id}:${id}`, x, y, 12, h);
+    const hit = this.ui.region(`${this.id}:${id}`, x, y, 10, h);
     if (hit.hover && this.ui.mouse.wheel) s += Math.sign(this.ui.mouse.wheel);
-    if (hit.click && this.ui.mouse.y < y + ARROW) s -= 1;
-    else if (hit.click && this.ui.mouse.y > y + h - ARROW) s += 1;
     else if (hit.down && maxScroll > 0) {
-      const t = (this.ui.mouse.y - y - ARROW) / Math.max(1, h - ARROW * 2);
+      const t = (this.ui.mouse.y - y - 2) / Math.max(1, h - 4);
       s = Math.round(Math.max(0, Math.min(1, t)) * maxScroll);
     }
     s = Math.max(0, Math.min(maxScroll, s));

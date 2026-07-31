@@ -45,15 +45,19 @@ export class Spawner {
     const rnd = new Rand(seed ^ 0x5eed);
     const ground = (x, z) => S.map.groundAt(x, z, 0);
 
-    for (const f of region.flora || []) {
+    // `floraPlan` is the region's placement list: one entry per instance with
+    // the world height it should stand at. Scale each baked sheet to that
+    // height so a 900-unit oak really is 900 units tall.
+    for (const f of region.floraPlan || region.flora || []) {
       const sh = this.sheet('flora', f.kind, f.seed || 1);
       if (!sh) continue;
-      S.entities.add(new Entity({
+      const e = new Entity({
         category: CATEGORY.FLORA, kind: f.kind, sheet: sh, static: true,
         x: f.x, y: f.y ?? ground(f.x, f.z), z: f.z,
-        scale: f.scale || 1, radius: f.radius ?? 70,
-        solid: f.solid ?? true, action: 'stand',
-      }));
+        radius: f.radius ?? 70, solid: f.solid ?? true, action: 'stand',
+      });
+      e.scale = f.height && sh.worldH ? f.height / sh.worldH : (f.scale || 1);
+      S.entities.add(e);
     }
 
     for (const p of region.props || []) {

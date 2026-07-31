@@ -139,6 +139,7 @@ export function outdoorMap(region) {
     lightAt: region.lightAt || (() => ({ r: 1, g: 1, b: 1 })),
     surfaceAt: region.surfaceAt || (() => 'grass'),
     drawMinimap: region.drawMinimap || null,
+    setTimeOfDay: region.setTimeOfDay ? (h) => region.setTimeOfDay(h) : null,
     setFogColor(c) { if (region.setFogColor) region.setFogColor(c); },
     populate(entities) { if (region.populate) region.populate(entities); },
     dispose() { if (region.dispose) region.dispose(); },
@@ -161,7 +162,9 @@ export function dungeonMap(dungeon) {
     indoor: true,
     group: dungeon.group,
     dungeon,
-    start: dungeon.start || { x: 0, y: 0, z: 0, yaw: 0 },
+    start: dungeon.start
+      ? { ...dungeon.start, yaw: dungeon.start.yaw ?? dungeon.startYaw ?? 0 }
+      : { x: 0, y: 0, z: 0, yaw: dungeon.startYaw || 0 },
     fog: { color: fogColor, near: dungeon.fogNear ?? 300, far: dungeon.fogFar ?? 3400 },
     colliders: grid,
 
@@ -176,6 +179,7 @@ export function dungeonMap(dungeon) {
     lightAt: dungeon.lightAt || (() => ({ r: 0.35, g: 0.34, b: 0.4 })),
     surfaceAt: dungeon.surfaceAt || (() => 'stone'),
     drawMinimap: dungeon.drawMinimap || null,
+    setTimeOfDay: null,
     setFogColor() {},
     populate(entities) { if (dungeon.populate) dungeon.populate(entities); },
     dispose() { if (dungeon.dispose) dungeon.dispose(); },

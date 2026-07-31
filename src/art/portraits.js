@@ -575,7 +575,9 @@ function paint(face, ex, W, H) {
     scar: mixC(scl(SR.ramp[4], 0.94), rs('blood', 0.34), 0.14),
     lash: mixC(face.hair.dark, [14, 10, 11], 0.5),
     nostril: mixC(SR.ramp[0], [16, 9, 9], 0.4),
-    sclera: mixC(rs('sand', 0.62), rs('stone', 0.70), 0.46),
+    // Sclera tracks the skin: a bright warm grey against ebony skin reads as
+    // two headlights, which is the classic tell of a badly painted dark face.
+    sclera: mixC(mixC(rs('sand', 0.62), rs('stone', 0.70), 0.46), SR.ramp[2], SR.lift * 0.85),
     vessel: rs('blood', 0.38),
     iris: EYE_COLOURS[face.eyeName](),
     pupil: ex.glow ? rs('arcane', 0.85) : [11, 8, 9],
@@ -734,9 +736,9 @@ function paint(face, ex, W, H) {
   const gearShadow = (() => {
     const hd = face.gear.hood;
     if (hd) {
-      const orx = rx * (1.03 + hd.tight), ory = ry * (1.06 + hd.tight), ocy = hcy + ry * 0.30;
+      const hole = hoodHoleFn(hd, fx, hcy, rx, ry);
       return (X, Y) => {
-        const e = ell(X - fx, Y - ocy, orx, ory);
+        const e = hole(X, Y);
         return smoothstep(0.62, 0.97, e) * (1 - smoothstep(0.99, 1.06, e));
       };
     }
@@ -987,12 +989,48 @@ function paint(face, ex, W, H) {
     hcx, hcy, fx, rx, ry, browY, eyeY, noseY, mouthY, chinY, sd, LX, LY, near,
   });
 
+  // Wisps escaping a hood at the temples and forehead. Painted after the hood
+  // so the cloth edge is broken by hair instead of cutting it off dead.
+  if (face.gear.hood && face.gear.hairVisible > 0.2 && !hairP.bald) {
+    const HC = face.hair;
+    const y0 = Math.max(0, Math.floor(((hairP.hairlineY - ry * 0.60) / DH) * BH));
+    const y1 = Math.min(BH, Math.ceil(((hairP.hairlineY + ry * 0.75) / DH) * BH));
+    for (let py = y0; py < y1; py++) {
+      const Yw = (py + 0.5) * px2dy;
+      for (let pxi = 0; pxi < BW; pxi++) {
+        const ii = py * BW + pxi;
+        let a = hair[ii];
+        if (a <= 0.02) continue;
+        const Xw = (pxi + 0.5) * px2dx;
+        const ddx = Xw - pvx, ddy = Yw - pvy;
+        const X = pvx + ddx * ca + ddy * sa;
+        const Y = pvy - ddx * sa + ddy * ca;
+        // Strongest at the temples, thinning towards the middle of the brow.
+        const band = smoothstep(rx * 0.30, rx * 0.80, Math.abs(X - fx));
+        const wisp = smoothstep(0.42, 0.72, nz(X * 1.7, Y * 2.6, sd + 233));
+        a *= band * wisp * 0.85;
+        if (a <= 0.01) continue;
+        bl(buf, ii * 3, hairColourAt(HC, hairP, X, Y, sd, LX, LY, ex), a);
+        subj[ii] = Math.max(subj[ii], a);
+      }
+    }
+  }
+
   // =========================================================================
   // 7. shoulders and collar
   // =========================================================================
   drawShoulders(buf, subj, face, ex, {
     BW, BH, px2dx, px2dy, hcx, fx, rx, ry, chinY, neckCX, neckW, sd,
   });
+
+  // Hair that falls in *front* of the shoulders, which is why this runs after
+  // the collar. Whether a long-haired character's hair is pushed back or lies
+  // over the chest is one of the loudest silhouette cues at this size.
+  if (hairP.front && face.gear.hairVisible > 0.4 && !face.gear.coif) {
+    drawFrontLocks(buf, subj, face, hairP, ex, {
+      BW, BH, px2dx, px2dy, pvx, pvy, ca, sa, sd, LX, LY, chinY,
+    });
+  }
 
   // =========================================================================
   // 8. grade, grain, vignette
@@ -1221,55 +1259,90 @@ function drawFeatures(buf, i3, X, Y, hc, P) {
 
 // --- hair ------------------------------------------------------------------
 
+// Hairline archetypes. templeA > 0 means the hairline drops at the temples
+// (a low, round hairline); < 0 means it climbs (receding). `peak` is the
+// central widow's-peak spike.
+const HAIRLINES = {
+  peak: { templeA: 1.4, peak: 1.9, lift: 0.02 },
+  straight: { templeA: 0.15, peak: 0.0, lift: 0.00 },
+  round: { templeA: 2.3, peak: 0.3, lift: -0.03 },
+  high: { templeA: 0.9, peak: 0.4, lift: -0.10 },
+  receded: { templeA: -3.0, peak: 1.5, lift: -0.13 },
+};
+
 function hairParams(face, g, hairlineY, hcx, hcy, rx, ry, fx, near) {
   const st = face.hairStyle;
+  const cut = face.cut || { style: st, hairline: 'round', part: 0, partGap: 0.7, slant: 0, volume: 1, length: 1, front: false, frontSide: 0, sideburn: 0 };
   const r = new Rand((face.noiseSeed ^ 0x77) >>> 0);
+  const hl = HAIRLINES[cut.hairline] || HAIRLINES.round;
+  const V = cut.volume, L = cut.length;
   const p = {
     style: st, hcx, hcy, rx, ry, g, fx, near,
-    hairlineY,
-    capRX: rx * 1.10, capRY: ry * 1.13,
+    hairlineY: hairlineY + ry * hl.lift,
+    capRX: rx * 1.10 * V, capRY: ry * 1.13 * V,
     capCY: hcy - ry * 0.14,
-    templeA: 1.6,      // >0 hairline drops at the temples
-    peak: 0.0,
+    templeA: hl.templeA,
+    peak: hl.peak,
+    slant: cut.slant,
+    part: cut.part, partGap: cut.part === 0 ? 0 : cut.partGap,
     sideEndY: hcy + ry * 0.45,
     backEndY: hcy + ry * 0.5,
     backW: 0,
     rough: 0.35,
-    showEars: st === 'short' || st === 'bald' || st === 'receding' || st === 'ponytail',
+    showEars: st === 'crop' || st === 'short' || st === 'bald'
+      || st === 'receding' || st === 'ponytail',
+    sideburn: cut.sideburn,
+    front: false, frontSide: cut.frontSide, frontLen: 1,
     tail: null, braid: null, bald: false,
   };
   switch (st) {
+    case 'crop':
+      p.capRX = rx * 1.04 * V; p.capRY = ry * 1.05 * V; p.sideEndY = hcy + ry * 0.22;
+      p.backW = 0; p.backEndY = hcy + ry * 0.30; p.rough = 0.22;
+      break;
     case 'short':
-      p.capRX = rx * 1.08; p.capRY = ry * 1.10; p.sideEndY = hcy + ry * 0.32;
-      p.backW = rx * 0.07; p.backEndY = hcy + ry * 0.46; p.rough = 0.30;
+      p.capRX = rx * 1.09 * V; p.capRY = ry * 1.11 * V; p.sideEndY = hcy + ry * 0.34;
+      p.backW = rx * 0.08; p.backEndY = hcy + ry * 0.48; p.rough = 0.30;
+      break;
+    case 'medium':
+      // Jaw-length: stops short of the shoulders, which is a different
+      // silhouette from both a crop and a full mane.
+      p.capRX = rx * 1.13 * V; p.capRY = ry * 1.13 * V;
+      p.sideEndY = hcy + ry * (0.85 + 0.35 * L);
+      p.backW = rx * 0.24; p.backEndY = hcy + ry * (0.95 + 0.35 * L); p.rough = 0.40;
       break;
     case 'long':
-      p.capRX = rx * 1.15; p.capRY = ry * 1.15; p.sideEndY = DH + 4;
+      p.capRX = rx * 1.15 * V; p.capRY = ry * 1.15 * V; p.sideEndY = DH + 4;
       p.backW = rx * 0.40; p.backEndY = DH + 4; p.rough = 0.45;
       break;
     case 'ponytail':
-      p.capRX = rx * 1.05; p.capRY = ry * 1.08; p.sideEndY = hcy + ry * 0.18;
+      p.capRX = rx * 1.05 * V; p.capRY = ry * 1.08 * V; p.sideEndY = hcy + ry * 0.18;
       p.backW = rx * 0.11; p.backEndY = hcy + ry * 0.35;
-      p.tail = { side: r.bool() ? 1 : -1, len: r.float(0.8, 1.2) };
+      p.tail = { side: r.bool() ? 1 : -1, len: r.float(0.8, 1.2) * L };
       break;
     case 'bald':
       p.bald = true; p.sideEndY = hcy + ry * 0.30; p.backW = 0;
       break;
     case 'receding':
-      p.templeA = -2.8; p.hairlineY = hairlineY - ry * 0.12; p.peak = 1.2;
-      p.capRX = rx * 1.06; p.capRY = ry * 1.08; p.sideEndY = hcy + ry * 0.34;
+      p.hairlineY = hairlineY - ry * 0.12; p.templeA = -3.2; p.peak = 1.2;
+      p.capRX = rx * 1.06 * V; p.capRY = ry * 1.08 * V; p.sideEndY = hcy + ry * 0.34;
       break;
     case 'braided':
-      p.capRX = rx * 1.11; p.capRY = ry * 1.11; p.sideEndY = DH + 4;
+      p.capRX = rx * 1.11 * V; p.capRY = ry * 1.11 * V; p.sideEndY = DH + 4;
       p.backW = rx * 0.28; p.backEndY = DH + 4;
       p.braid = { side: r.bool() ? 1 : -1 };
       break;
     case 'wild':
-      p.capRX = rx * 1.24; p.capRY = ry * 1.28; p.sideEndY = hcy + ry * 0.80;
-      p.backW = rx * 0.34; p.backEndY = hcy + ry * 0.90; p.rough = 1.05;
+      p.capRX = rx * 1.26 * V; p.capRY = ry * 1.30 * V; p.sideEndY = hcy + ry * (0.70 + 0.30 * L);
+      p.backW = rx * 0.36; p.backEndY = hcy + ry * (0.80 + 0.40 * L); p.rough = 1.05;
       break;
   }
-  if (face.age === 'old' && (st === 'short' || st === 'long')) p.templeA -= 1.0;
+  // Hair in front of the shoulders is a separate pass over the collar; the
+  // mass behind the head stops at the shoulder line as usual.
+  p.front = !!cut.front && !p.bald && st !== 'crop' && st !== 'short'
+    && st !== 'receding' && st !== 'ponytail';
+  p.frontLen = L;
+  if (face.age === 'old' && (st === 'short' || st === 'long' || st === 'medium')) p.templeA -= 1.0;
   p.bottomY = Math.max(p.sideEndY, p.backEndY, p.tail || p.braid ? DH + 4 : 0) + 4;
   return p;
 }
@@ -1277,7 +1350,13 @@ function hairParams(face, g, hairlineY, hcx, hcy, rx, ry, fx, near) {
 /** Hairline y at a given x (larger y = hair reaches further down the forehead). */
 function hairlineAt(p, X) {
   const u = (X - p.fx) / p.rx;
-  return p.hairlineY + p.templeA * u * u + p.peak * Math.exp(-(u * u) / 0.05);
+  let y = p.hairlineY + p.templeA * u * u + p.peak * Math.exp(-(u * u) / 0.05)
+    + p.slant * u;
+  // The parting: a notch where the hair is swept apart, sitting off centre.
+  if (p.partGap > 0) {
+    y -= p.partGap * 3.0 * Math.exp(-sq((u - p.part * 0.34) / 0.16));
+  }
+  return y;
 }
 
 function hairCov(p, X, Y, sd) {
@@ -1306,6 +1385,17 @@ function hairCov(p, X, Y, sd) {
   let a = capE * smoothstep(hl + 0.9, hl - 0.9, Y);            // fringe, over the face
   a = Math.max(a, capE * outside * (1 - smoothstep(p.sideEndY - 3, p.sideEndY + 1.5, Y)));
 
+  // Sideburns: a tongue of hair in front of the ear, over the skin. Length
+  // here separates otherwise identical crops.
+  if (p.sideburn > 0.12) {
+    const adx = Math.abs(X - p.hcx);
+    const sbBot = p.hairlineY + p.ry * (0.40 + p.sideburn * 0.85);
+    const sb = smoothstep(p.rx * 0.98, p.rx * 0.78, adx) * smoothstep(p.rx * 0.62, p.rx * 0.76, adx)
+      * smoothstep(p.hairlineY - 1.5, p.hairlineY + 1.5, Y)
+      * (1 - smoothstep(sbBot - 1.6, sbBot + 0.6, Y + rough * 1.6));
+    a = Math.max(a, sb * 0.92);
+  }
+
   if (p.backW > 0) {
     const w = p.rx * 1.00 + p.backW * (0.4 + 0.9 * smoothstep(p.hcy - p.ry * 0.3, p.backEndY, Y));
     const inX = smoothstep(w + 1.0, w - 0.6, Math.abs(X - p.hcx) - rough * 1.4);
@@ -1331,6 +1421,57 @@ function hairCov(p, X, Y, sd) {
   return clamp(a, 0, 1);
 }
 
+/**
+ * Two tresses hanging down the front of the shoulders. Drawn after the collar,
+ * shaded as cylinders rather than as part of the skull cap.
+ */
+function drawFrontLocks(buf, subj, face, p, ex, P) {
+  const { BW, BH, px2dx, px2dy, pvx, pvy, ca, sa, sd, chinY } = P;
+  const HC = face.hair;
+  const startY = p.hcy + p.ry * 0.42;
+  const endY = Math.min(DH + 2, chinY + 6 + p.ry * 1.5 * p.frontLen);
+  const span = Math.max(1, endY - startY);
+  const y0 = Math.max(0, Math.floor((startY / DH) * BH));
+  for (let py = y0; py < BH; py++) {
+    const Yw = (py + 0.5) * px2dy;
+    for (let pxi = 0; pxi < BW; pxi++) {
+      const Xw = (pxi + 0.5) * px2dx;
+      const ddx = Xw - pvx, ddy = Yw - pvy;
+      const X = pvx + ddx * ca + ddy * sa;
+      const Y = pvy - ddx * sa + ddy * ca;
+      if (Y < startY || Y > endY + 2) continue;
+      const t = clamp((Y - startY) / span, 0, 1);
+      let a = 0, cxBest = 0, wBest = 1;
+      for (let si = 0; si < 2; si++) {
+        const s = SIDES[si];
+        if (p.frontSide !== 0 && p.frontSide !== s) continue;
+        // The lock leaves the head just in front of the ear and swings out a
+        // little as it falls.
+        const cx = p.hcx + s * p.rx * (0.80 + t * 0.34) + s * Math.sin(t * 2.6 + si) * 1.1;
+        const w = p.rx * (0.26 + 0.10 * Math.sin(t * 3.1 + si * 2)) * (1 - t * 0.18);
+        const wob = (fb(X * 0.45, Y * 0.40, 2, sd + 220 + si) - 0.5) * 2.4;
+        const k = smoothstep(w + 1.3, w - 0.9, Math.abs(X - cx) + wob);
+        if (k > a) { a = k; cxBest = cx; wBest = w; }
+      }
+      a *= 1 - smoothstep(endY - 4.5, endY, Y);
+      if (a <= 0.01) continue;
+      // Cylinder shading: lit on the light side of each tress, dark at the
+      // edges, with vertical strand strokes.
+      const u = clamp((X - cxBest) / (wBest + 0.001), -1, 1);
+      const strand = fb(X * 3.0, Y * 0.7, 2, sd + 224);
+      let sh = 0.20 + Math.max(0, 1 - sq((u + 0.45) / 0.95)) * 0.80;
+      sh *= 0.78 + strand * 0.46;
+      sh *= mix(0.70, 1.0, 1 - t * 0.5) * ex.key;
+      let c = mixC(HC.dark, HC.base, clamp(sh * 1.45, 0, 1));
+      c = mixC(c, HC.lite, clamp((sh - 0.62) * 1.7, 0, 1) * 0.7 * HC.sheen);
+      bl(buf, ii3(py, pxi, BW), c, a);
+      const ii = py * BW + pxi;
+      subj[ii] = Math.max(subj[ii], a);
+    }
+  }
+}
+const ii3 = (py, pxi, BW) => (py * BW + pxi) * 3;
+
 /** How much shadow the hairline casts on the forehead at this point. */
 function hairShadowAt(p, X, Y) {
   if (p.bald) return 0;
@@ -1342,32 +1483,53 @@ function hairColourAt(HC, p, X, Y, sd, LX, LY, ex) {
   // Pseudo-normal from the hair volume so the mass reads as a rounded shape.
   const ux = (X - p.hcx) / (p.capRX * 1.05);
   const uy = (Y - p.capCY) / (p.capRY * 1.15);
-  const r2 = clamp(ux * ux + uy * uy, 0, 1);
+  const r2c = ux * ux + uy * uy;
+  const r2 = clamp(r2c, 0, 1);
   const zc = Math.sqrt(1 - r2);
   const nl = 1 / Math.sqrt(ux * ux + uy * uy + zc * zc + 1e-6);
-  const diff = Math.max(0, (ux * LX + uy * LY + zc * 0.72) * nl);
+  let diff = Math.max(0, (ux * LX + uy * LY + zc * 0.72) * nl);
+
+  // Hair hanging past the skull is a pair of falling masses, not part of the
+  // cranial sphere. Shading it off the cap normal leaves it flat and almost
+  // black - a curtain, which is what made every long-haired face look alike.
+  const cu = clamp((X - p.hcx) / (p.rx * 1.28), -1, 1);
+  const fall = smoothstep(0.80, 1.45, r2c) * smoothstep(-0.15, 0.45, uy);
+  if (fall > 0.004) {
+    const cz = Math.sqrt(Math.max(0, 1 - cu * cu));
+    const cn = 1 / Math.sqrt(cu * cu + 0.10 + cz * cz);
+    const cd = Math.max(0, (cu * LX - 0.32 * LY + cz * 0.82) * cn);
+    diff = mix(diff, cd, fall);
+  }
 
   const s1 = fb(X * 2.6 + Y * 0.55, Y * 0.85, 2, sd + 210);
   const s2 = nz(X * 6.0, Y * 1.1, sd + 211);
   const clump = s1 * 0.7 + s2 * 0.3;
 
-  let shade = 0.24 + diff * 0.92;
-  shade *= 0.78 + clump * 0.50;
+  let shade = 0.30 + diff * 1.00;
+  shade *= 0.76 + clump * 0.54;
   shade *= ex.key;
-  let c = mixC(HC.dark, HC.base, clamp(shade * 1.5, 0, 1));
-  c = mixC(c, HC.lite, clamp((shade - 0.55) * 1.5, 0, 1) * 0.7);
+  let c = mixC(HC.dark, HC.base, clamp(shade * 1.45, 0, 1));
+  c = mixC(c, HC.lite, clamp((shade - 0.52) * 1.5, 0, 1) * 0.8);
 
-  // Strand strokes: narrow arcs of light following the curve of the skull,
-  // concentrated where the key light grazes it.
+  // Strand strokes: narrow arcs of light following the curve of the skull on
+  // the cap, running vertically down the falling mass.
   const ang = Math.atan2(uy + 0.15, ux);
-  const sheen = Math.exp(-sq((ux + 0.44) / 0.40)) * Math.exp(-sq((uy + 0.48) / 0.48));
-  const phase = ang * 7.5 + (nz(X * 0.45, Y * 0.45, sd + 215) - 0.5) * 4.0 + r2 * 2.5;
-  const stroke = Math.pow(Math.abs(Math.sin(phase)), 7);
-  c = mixC(c, HC.lite, sheen * HC.sheen * 0.62 * (0.30 + stroke * 0.70));
+  const jit = (nz(X * 0.45, Y * 0.45, sd + 215) - 0.5) * 4.0;
+  const capPhase = ang * 7.5 + jit + r2 * 2.5;
+  const fallPhase = (X - p.hcx) * 2.1 + jit * 0.8 + (nz(X * 0.3, Y * 0.9, sd + 217) - 0.5) * 3.0;
+  const stroke = Math.pow(Math.abs(Math.sin(mix(capPhase, fallPhase, fall))), 6);
+  const capSheen = Math.exp(-sq((ux + 0.44) / 0.42)) * Math.exp(-sq((uy + 0.48) / 0.50));
+  // The falling mass catches a long vertical highlight on its light side.
+  const fallSheen = Math.exp(-sq((cu + 0.62) / 0.34)) * 0.9
+    + Math.exp(-sq((cu - 0.72) / 0.26)) * 0.25;
+  const sheen = mix(capSheen, fallSheen, fall);
+  c = mixC(c, HC.lite, sheen * HC.sheen * 0.68 * (0.28 + stroke * 0.72));
   // dark layer where the hair meets the forehead, and at the outer edge
   const hl = hairlineAt(p, X);
   c = scl(c, mix(0.52, 1, smoothstep(hl - 0.5, hl - 4.5, Y)));
-  c = scl(c, mix(0.84, 1.04, clamp(1 - r2 * 0.85, 0, 1)));
+  c = scl(c, mix(0.86, 1.05, clamp(1 - r2 * 0.75, 0, 1)));
+  // Ends go darker and dustier so a long mane does not read as a solid slab.
+  c = scl(c, mix(1, 0.78, fall * smoothstep(p.hcy + p.ry * 0.5, p.bottomY, Y)));
   return c;
 }
 
@@ -1411,6 +1573,15 @@ function beardCov(p, X, Y, sd, headCov) {
       a *= 0.66 * p.tone;
       break;
     case 'moustache': a = moustache(); break;
+    case 'chin': {
+      // Goatee: a patch under the lip and on the chin only, no jaw line. Very
+      // different silhouette from a full beard at 63 px.
+      const cy = (p.mouthY + p.chinY) * 0.5;
+      a = cov(ell(dx, Y - cy, p.mouthW * 0.72, p.ry * 0.115), 0.35);
+      a = Math.max(a, moustache() * 0.9);
+      a *= 1 - smoothstep(p.chinY, p.chinY + 2.5, Y);
+      break;
+    }
     case 'short':
       a = jaw(p.mouthY + p.ry * 0.045, 1.0);
       a = Math.max(a, moustache() * 0.85);
@@ -1440,6 +1611,26 @@ function beardCov(p, X, Y, sd, headCov) {
 
 // --- headgear --------------------------------------------------------------
 
+/**
+ * The metric of a hood's face opening: <1 inside, 1 on the edge. Off-centre,
+ * rotated, and modulated by two angular lobes so the cloth edge is irregular
+ * and asymmetric rather than a drawn ellipse.
+ */
+function hoodHoleFn(hd, fx, hcy, rx, ry) {
+  const ocx = fx + (hd.ox || 0), ocy = hcy + ry * 0.24 + (hd.oy || 0);
+  const orx = rx * (1.03 + hd.tight), ory = ry * (1.06 + hd.tight);
+  const rot = hd.rot || 0;
+  const cr = Math.cos(rot), sr = Math.sin(rot);
+  const l1 = hd.lobe1 || 0, l2 = hd.lobe2 || 0, ph = hd.ph || 0;
+  return (X, Y) => {
+    const dx = X - ocx, dy = Y - ocy;
+    const qx = dx * cr + dy * sr, qy = -dx * sr + dy * cr;
+    const ang = Math.atan2(qy, qx);
+    const mod = 1 + l1 * Math.sin(ang * 2 + ph) + l2 * Math.sin(ang * 3 - ph * 1.7);
+    return ell(qx, qy, orx * mod, ory * mod);
+  };
+}
+
 function drawGear(buf, subj, face, ex, P) {
   const { BW, BH, px2dx, px2dy, pvx, pvy, ca, sa, hcx, hcy, fx, rx, ry,
     browY, noseY, chinY, sd, LX, LY } = P;
@@ -1451,6 +1642,7 @@ function drawGear(buf, subj, face, ex, P) {
   const hoodBase = hood ? desat(rs(hood.ramp, hood.t), 0.22) : null;
   const hoodDark = hood ? scl(hoodBase, 0.30) : null;
   const hoodLite = hood ? mixC(scl(hoodBase, 1.55), rs('sand', 0.78), 0.16) : null;
+  const hole = hood ? hoodHoleFn(hood, fx, hcy, rx, ry) : null;
 
   // Rows the gear can reach: a hood drapes to the bottom edge, a helm stops
   // at the brow. Everything above the crown is background.
@@ -1470,11 +1662,14 @@ function drawGear(buf, subj, face, ex, P) {
       if (hood) {
         const orx = rx * 1.20, ory = ry * (1.12 + hood.peak * 0.10);
         const ocy = hcy - ry * (0.05 + hood.peak * 0.08);
-        const em = ell(X - hcx, Y - ocy, orx, ory);
-        const rough = em > 0.6 && em < 1.6 ? (fb(X * 0.4, Y * 0.4, 2, sd + 401) - 0.5) * 0.10 : 0;
+        // Outer silhouette: the two sides drape by different amounts and the
+        // edge is broken by fold noise, so the hood is not a symmetric shell.
+        const oside = X > hcx ? hood.drapeR : hood.drapeL;
+        const em = ell((X - hcx) / oside, Y - ocy, orx, ory);
+        const rough = em > 0.5 && em < 1.7 ? (fb(X * 0.4, Y * 0.4, 2, sd + 401) - 0.5) * 0.22 : 0;
         let a = cov(em + rough, 0.09);
-        const dw = orx + (Y - hcy) * 0.72;
-        a = Math.max(a, smoothstep(dw + 1.2, dw - 0.8, Math.abs(X - hcx))
+        const dw = orx * oside + (Y - hcy) * 0.72;
+        a = Math.max(a, smoothstep(dw + 1.2, dw - 0.8, Math.abs(X - hcx) + rough * 6)
           * smoothstep(hcy - 1, hcy + 5, Y));
         if (hood.peak > 0.2) {
           // A soft fold of cloth standing off the crown, tapering out - a hard
@@ -1487,8 +1682,10 @@ function drawGear(buf, subj, face, ex, P) {
         // The opening is centred well below the head so the hood frames the
         // face and stops at the jaw instead of wrapping under the chin like a
         // wimple - and its top edge crosses the skull a quarter of the way
-        // down, leaving forehead and hairline showing.
-        const holeM = ell(X - fx, Y - (hcy + ry * 0.30), rx * (1.03 + hood.tight), ry * (1.06 + hood.tight));
+        // down, leaving forehead and hairline showing. It is deliberately
+        // off-centre, rotated and lobed: a clean ellipse here turns the face
+        // into an oval mask set in a hole.
+        const holeM = hole(X, Y) + rough * 0.9;
         a *= 1 - cov(holeM, 0.09);
         if (a > 0.004) {
           const ux = (X - hcx) / orx, uy = (Y - ocy) / ory;
@@ -1516,10 +1713,14 @@ function drawGear(buf, subj, face, ex, P) {
 
       // ---- mail coif ------------------------------------------------------
       if (gear.coif) {
-        const outer = ell(X - hcx, Y - (hcy - ry * 0.02), rx * 1.07, ry * 1.05);
+        // Scalloped lower edge. An even ellipse edge is what made the coif read
+        // as a smooth grey bonnet; mail hangs in a wavy fringe of ring ends.
+        const scal = Math.sin((X - hcx) * 0.78 + 0.6) * 0.055
+          * smoothstep(hcy - ry * 0.10, hcy + ry * 0.55, Y);
+        const outer = ell(X - hcx, Y - (hcy - ry * 0.02), rx * 1.07, ry * 1.05) + scal;
         const inner = ell(X - fx, Y - (hcy + ry * 0.16), rx * 1.00, ry * 1.02);
-        let a = cov(outer, 0.10) * (1 - cov(inner, 0.09));
-        a = Math.max(a, cov(outer, 0.10) * smoothstep(chinY - 3, chinY - 0.5, Y));
+        let a = cov(outer, 0.06) * (1 - cov(inner, 0.09));
+        a = Math.max(a, cov(outer, 0.06) * smoothstep(chinY - 3, chinY - 0.5, Y));
         if (a > 0.004) {
           // Rings on a staggered lattice - fine enough to read as mail at 1:1.
           const gx = X * 1.35, gy = Y * 1.35;
@@ -1532,7 +1733,12 @@ function drawGear(buf, subj, face, ex, P) {
           const nl = 1 / Math.sqrt(ux * ux + uy * uy + zc * zc + 1e-6);
           let sh = 0.10 + Math.max(0, (ux * LX + uy * LY + zc * 0.8) * nl) * 0.72;
           sh *= 0.46 + ring * 0.85;
-          sh += hash2(cx2, row, sd) * 0.12 - 0.05;
+          // A few whole rows sit darker than their neighbours, and the rows
+          // near the terminator go darker still. An even lattice of identical
+          // rings averages to flat grey once it is box-filtered down to 1:1.
+          sh *= 0.74 + 0.42 * hash2(0, row, sd + 7);
+          sh *= mix(1.0, 0.62, smoothstep(-0.05, 0.55, ux));
+          sh += hash2(cx2, row, sd) * 0.14 - 0.06;
           sh *= ex.key;
           let c = mixC(steel.dark, steel.base, clamp(sh * 1.5, 0, 1));
           c = mixC(c, steel.lite, clamp((sh - 0.62) * 1.7, 0, 1) * 0.8 * ring);
@@ -1637,9 +1843,9 @@ function drawShoulders(buf, subj, face, ex, P) {
   const cloth = {
     plate: { base: rs('stone', 0.44), dark: null, lite: null },
     leather: { base: rs('wood', 0.30), dark: null, lite: null },
-    robe: { base: rs(gear.hood ? gear.hood.ramp : 'plaster', gear.hood ? gear.hood.t : 0.36), dark: null, lite: null },
+    robe: { base: rs(gear.hood ? gear.hood.ramp : gear.robe.ramp, gear.hood ? gear.hood.t : gear.robe.t), dark: null, lite: null },
     arcane: { base: desat(mixC(rs('sky', 0.13), rs('arcane', 0.22), 0.45), 0.26), dark: null, lite: null },
-    cloth: { base: rs('dirt', 0.30), dark: null, lite: null },
+    cloth: { base: rs(gear.robe.ramp, gear.robe.t), dark: null, lite: null },
   }[kind] || { base: rs('dirt', 0.30), dark: null, lite: null };
   cloth.dark = scl(cloth.base, 0.30);
   cloth.lite = mixC(scl(cloth.base, 1.5), rs('sand', 0.80), 0.18);

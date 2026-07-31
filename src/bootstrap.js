@@ -235,9 +235,12 @@ export async function loadRegion(session, regionId, seed, entry = null) {
     session.setMap(emptyMap(), regionId);
     return;
   }
-  const region = await regionMod.generateRegion(regionId, seed, null);
+  // The region draws its own stand-in flora billboards by default; we turn that
+  // off and place the real baked sprites from its `floraPlan` instead, so every
+  // tree in the world is a Y-locked billboard rather than a leaning mesh.
+  const region = await regionMod.generateRegion(regionId, seed, null, { flora: false });
   const map = outdoorMap(region);
-  session.setMap(map, regionId, entry);
+  session.setMap(map, regionId, entry || region.spawnPoint || null);
   populateRegion(session, region, seed);
   session.musicTrack = region.music || 'field';
   session.ambienceId = region.ambience || 'amb_forest';

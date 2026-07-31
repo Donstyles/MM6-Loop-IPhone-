@@ -129,9 +129,10 @@ export class Session {
     if (map.group) this.mapGroup.add(map.group);
 
     const s = entry || map.start || { x: 0, y: 0, z: 0, yaw: 0 };
-    this.player.pos.set(s.x, s.y, s.z);
+    const spot = this.findClearSpot(map, s);
+    this.player.pos.set(spot.x, spot.y, spot.z);
     this.player.vel.set(0, 0, 0);
-    this.player.yaw = s.yaw || 0;
+    this.player.yaw = spot.yaw;
     this.player.pitch = 0;
 
     this.applyFog();
@@ -141,11 +142,44 @@ export class Session {
   }
 
   /**
-   * MM6's day/night is a single greyscale multiply applied identically to the
-   * sky, the terrain and every sprite - which is exactly why the world reads as
-   * tonally unified despite mixing polygons and billboards. Returns 1.0 at
-   * 13:00, 0.373 (#5F5F5F) at dawn and dusk, and 0.153 (#272727) at night.
+   * A map's nominal entry point can land inside a wall or nose-first against a
+   * building, so spiral outwards for somewhere the party actually fits, and
+   * turn to face whichever direction has the most open ground.
    */
+  findClearSpot(map, s) {
+    const R = PLAYER.radius, H = PLAYER.height;
+    const at = (x, z) => ({ x, y: map.groundAt(x, z, s.y ?? 0), z });
+    const free = (p) => !map.blocked(p.x, p.y + 8, p.z, R, H);
+
+    let best = at(s.x, s.z);
+    if (!free(best)) {
+      outer:
+      for (let ring = 1; ring <= 12; ring++) {
+        const r = ring * 140;
+        for (let i = 0; i < ring * 8; i++) {
+          const a = (i / (ring * 8)) * Math.PI * 2;
+          const p = at(s.x + Math.cos(a) * r, s.z + Math.sin(a) * r);
+          if (free(p)) { best = p; break outer; }
+        }
+      }
+    }
+
+    // Face the clearest direction: sample eight headings and take the one with
+    // the most unobstructed distance in front of it.
+    let yaw = s.yaw || 0, bestOpen = -1;
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const fx = -Math.sin(a), fz = -Math.cos(a);
+      let open = 0;
+      for (let d = 200; d <= 1600; d += 200) {
+        if (map.blocked(best.x + fx * d, best.y + 60, best.z + fz * d, R, H)) break;
+        open = d;
+      }
+      if (open > bestOpen) { bestOpen = open; yaw = a; }
+    }
+    return { ...best, yaw };
+  }
+
   /** 1 in full daylight, 0 at night, ramping across the hour either side. */
   sunLevel() {
     const h = this.clock.hour + this.clock.minute / 60;
@@ -219,6 +253,19 @@ export class Session {
     this.engine.setIndoor(indoor);
   }
 
+  /**
+   * Terrain light is baked into vertex colours, so the map has to be told when
+   * the hour has moved far enough to be worth re-baking. Without this the sky
+   * changes through the day while the ground does not, and the two come apart.
+   */
+  syncTimeOfDay() {
+    if (!this.map || !this.map.setTimeOfDay) return;
+    const h = this.clock.hour + this.clock.minute / 60;
+    if (this._bakedHour !== undefined && Math.abs(h - this._bakedHour) < 0.25) return;
+    this._bakedHour = h;
+    try { this.map.setTimeOfDay(h); } catch (e) { /* a map may not support it */ }
+  }
+
   /** Retained for callers that want a simple 0..1 darkness value. */
   nightFactor() { return 1 - this.dayTint(); }
 
@@ -259,6 +306,7 @@ export class Session {
     if (this.vfx) this.vfx.update(dt, ectx);
 
     this.updateCombatState();
+    this.syncTimeOfDay();
     this.applyFog();
     this.updateTint();
 
