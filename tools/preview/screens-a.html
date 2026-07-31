@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>MM6 full-screen panels — set A</title>
+<style>
+  body { margin: 0; background: #101012; color: #d8c47a; font: 12px/1.4 monospace; }
+  h1 { font-size: 14px; padding: 8px 12px; margin: 0; color: #e8dca8; }
+  .grid { display: flex; flex-wrap: wrap; gap: 12px; padding: 10px; }
+  .cell { width: 640px; }
+  .cell canvas { display: block; width: 640px; height: 480px; image-rendering: pixelated; border: 1px solid #000; background: #000; }
+  .cell .lbl { padding: 3px 0 0; color: #c8bc98; }
+  #err { color: #ff8080; padding: 0 12px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1 id="head">building…</h1>
+<div id="err"></div>
+<div class="grid" id="grid"></div>
+
+<!-- ------------------------------------------------------------------ -->
+<!-- Local stand-ins for art modules that are still being written by the -->
+<!-- other owners. They are installed through an import map ONLY when the -->
+<!-- real file is missing or does not export what the screens call.       -->
+<!-- ------------------------------------------------------------------ -->
+
+<script type="text/plain" id="stub-uiart">
+import { rampCss } from '/src/core/palette.js';
+import { mulberry32 } from '/src/core/rng.js';
+
+const cache = new Map();
+function mk(key, w, h, paint) {
+  let c = cache.get(key);
+  if (c) return c;
+  c = document.createElement('canvas');
+  c.width = Math.max(1, w | 0); c.height = Math.max(1, h | 0);
+  const g = c.getContext('2d');
+  g.imageSmoothingEnabled = false;
+  paint(g, c.width, c.height);
+  cache.set(key, c);
+  return c;
+}
+function speckle(g, w, h, ramp, lo, hi, seed) {
+  const r = mulberry32(seed);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    g.fillStyle = rampCss(ramp, lo + (hi - lo) * r());
+    g.fillRect(x, y, 1, 1);
+  }
+}
+export function drawBevel(ctx, x, y, w, h, o) {
+  const sunken = o && o.sunken, s = (o && o.size) || 1;
+  for (let i = 0; i < s; i++) {
+    ctx.fillStyle = rampCss('stone', sunken ? 1 + i : 12 - i);
+    ctx.fillRect(x + i, y + i, w - i * 2, 1); ctx.fillRect(x + i, y + i, 1, h - i * 2);
+    ctx.fillStyle = rampCss('stone', sunken ? 12 - i : 1 + i);
+    ctx.fillRect(x + i, y + h - 1 - i, w - i * 2, 1); ctx.fillRect(x + w - 1 - i, y + i, 1, h - i * 2);
+  }
+}
+export function drawRivets(ctx, x, y, w, h) {
+  const pts = [[x + 5, y + 5], [x + w - 7, y + 5], [x + 5, y + h - 7], [x + w - 7, y + h - 7]];
+  for (const p of pts) {
+    ctx.fillStyle = rampCss('grey', 11); ctx.fillRect(p[0], p[1], 3, 3);
+    ctx.fillStyle = rampCss('grey', 4); ctx.fillRect(p[0] + 1, p[1] + 1, 2, 2);
+    ctx.fillStyle = rampCss('grey', 13); ctx.fillRect(p[0], p[1], 1, 1);
+  }
+}
+export function stonePanel(w, h, opts) {
+  const o = opts || {};
+  return mk('stone' + w + 'x' + h + (o.gold ? 'g' : '') + (o.rivets ? 'r' : ''), w, h, (g, W, H) => {
+    speckle(g, W, H, 'stone', 3.6, 6.2, 0x51a3);
+    for (let y = 0; y < H; y += 9) { g.fillStyle = rampCss('stone', 2); g.globalAlpha = 0.35; g.fillRect(0, y, W, 1); }
+    g.globalAlpha = 1;
+    drawBevel(g, 0, 0, W, H, { size: 2 });
+    if (o.gold) { g.fillStyle = rampCss('gold', 7); g.fillRect(2, 2, W - 4, 1); g.fillRect(2, H - 3, W - 4, 1); }
+    if (o.rivets) drawRivets(g, 0, 0, W, H);
+  });
+}
+export function drawStonePanel(ctx, x, y, w, h, opts) { ctx.drawImage(stonePanel(w, h, opts), x, y); }
+export function parchment(w, h, opts) {
+  const tone = (opts && opts.tone) === 'sheet' ? 's' : 'p';
+  return mk('par' + tone + w + 'x' + h, w, h, (g, W, H) => {
+    const lo = tone === 's' ? 5.0 : 10.6, hi = tone === 's' ? 7.4 : 12.9;
+    speckle(g, W, H, 'sand', lo, hi, 0x9e11);
+    const r = mulberry32(0x1234);
+    for (let i = 0; i < (W * H) / 1200; i++) {
+      const bx = r() * W | 0, by = r() * H | 0, br = 4 + (r() * 16 | 0);
+      g.globalAlpha = 0.08; g.fillStyle = rampCss('dirt', 5);
+      g.fillRect(bx - br, by - (br >> 1), br * 2, br);
+    }
+    g.globalAlpha = 1;
+    g.fillStyle = rampCss('dirt', 3);
+    g.fillRect(0, 0, W, 1); g.fillRect(0, H - 1, W, 1); g.fillRect(0, 0, 1, H); g.fillRect(W - 1, 0, 1, H);
+  });
+}
+export function bookPage(w, h, side) {
+  return mk('bk' + side + w + 'x' + h, w, h, (g, W, H) => {
+    speckle(g, W, H, 'sand', 11.0, 13.2, 0x77aa);
+    g.fillStyle = rampCss('dirt', 4);
+    g.globalAlpha = 0.3;
+    g.fillRect(0, 0, W, 1); g.fillRect(0, H - 1, W, 1);
+    g.globalAlpha = 1;
+  });
+}
+export function drawInset(ctx, x, y, w, h) {
+  ctx.fillStyle = '#0f0d0a'; ctx.fillRect(x + 1, y + 1, w - 2, h - 2);
+  drawBevel(ctx, x, y, w, h, { sunken: true, size: 2 });
+}
+export function drawFrame(ctx, x, y, w, h) {
+  ctx.fillStyle = rampCss('wood', 6); ctx.fillRect(x, y, w, 3); ctx.fillRect(x, y + h - 3, w, 3);
+  ctx.fillRect(x, y, 3, h); ctx.fillRect(x + w - 3, y, 3, h);
+  drawBevel(ctx, x, y, w, h, { size: 1 });
+}
+export function button(w, h, state) {
+  return mk('btn' + w + 'x' + h + state, w, h, (g, W, H) => {
+    speckle(g, W, H, 'stone', state === 'down' ? 3.4 : 5.4, state === 'down' ? 5.4 : 7.8, 0x2b1f);
+    drawBevel(g, 0, 0, W, H, { sunken: state === 'down', size: 2 });
+    g.fillStyle = rampCss('gold', 5); g.globalAlpha = 0.5;
+    g.fillRect(2, 2, W - 4, 1); g.globalAlpha = 1;
+  });
+}
+export function drawButton(ctx, x, y, w, h, label, state) { ctx.drawImage(button(w, h, state || 'up'), x, y); }
+export function iconButton(ctx, name, x, y, size, state) {
+  drawButton(ctx, x, y, size, size, null, state);
+  drawIcon(ctx, name, x + 3, y + 3, size - 6);
+}
+export function drawScrollbar(ctx, x, y, h, t, frac) {
+  ctx.fillStyle = rampCss('wood', 3); ctx.fillRect(x, y, 10, h);
+  drawBevel(ctx, x, y, 10, h, { sunken: true, size: 1 });
+  const gh = Math.max(14, Math.round(h * Math.max(0.06, Math.min(1, frac))));
+  const gy = (y + (h - gh) * Math.max(0, Math.min(1, t))) | 0;
+  ctx.fillStyle = rampCss('wood', 9); ctx.fillRect(x + 1, gy, 8, gh);
+  drawBevel(ctx, x + 1, gy, 8, gh, { size: 1 });
+  ctx.fillStyle = rampCss('wood', 5);
+  ctx.fillRect(x + 2, gy + (gh >> 1) - 2, 6, 1); ctx.fillRect(x + 2, gy + (gh >> 1) + 1, 6, 1);
+}
+export function drawCheck(ctx, x, y, on, hot) {
+  ctx.fillStyle = '#0d0b08'; ctx.fillRect(x, y, 12, 12);
+  drawBevel(ctx, x, y, 12, 12, { sunken: true, size: 1 });
+  if (on) {
+    ctx.fillStyle = hot ? '#e1cd23' : '#ffff9b';
+    ctx.fillRect(x + 2, y + 6, 2, 2); ctx.fillRect(x + 4, y + 8, 2, 2);
+    ctx.fillRect(x + 6, y + 5, 2, 2); ctx.fillRect(x + 8, y + 3, 2, 2);
+  }
+}
+export function drawSlider(ctx, x, y, w, t, hot) {
+  const cy = y + 5;
+  ctx.fillStyle = '#0d0b08'; ctx.fillRect(x, cy - 1, w, 4);
+  drawBevel(ctx, x, cy - 1, w, 4, { sunken: true, size: 1 });
+  ctx.fillStyle = rampCss('stone', 8);
+  for (let i = 0; i <= 8; i++) ctx.fillRect((x + (w - 2) * (i / 8)) | 0, cy + 4, 1, 3);
+  const kx = (x + Math.round((w - 9) * Math.max(0, Math.min(1, t)))) | 0;
+  ctx.fillStyle = rampCss('gold', hot ? 12 : 9); ctx.fillRect(kx, y - 3, 9, 15);
+  drawBevel(ctx, kx, y - 3, 9, 15, { size: 1 });
+}
+export function drawStatBar(ctx, x, y, w, h, frac, kind) {
+  ctx.fillStyle = '#0d0b08'; ctx.fillRect(x, y, w, h);
+  drawBevel(ctx, x, y, w, h, { sunken: true, size: 1 });
+  const f = Math.max(0, Math.min(1, frac));
+  ctx.fillStyle = kind === 'sp' ? '#3050c8' : f > 0.5 ? '#00b400' : f > 0.25 ? '#c8c800' : '#c81400';
+  ctx.fillRect(x + 1, y + 1, Math.round((w - 2) * f), h - 2);
+}
+export function drawPortraitFrame(ctx, x, y, w, h, state) {
+  const c = state === 'active' ? rampCss('gold', 11) : state === 'dead' ? rampCss('blood', 8) : rampCss('wood', 7);
+  ctx.fillStyle = c;
+  ctx.fillRect(x - 2, y - 2, w + 4, 2); ctx.fillRect(x - 2, y + h, w + 4, 2);
+  ctx.fillRect(x - 2, y - 2, 2, h + 4); ctx.fillRect(x + w, y - 2, 2, h + 4);
+  drawBevel(ctx, x - 2, y - 2, w + 4, h + 4, { size: 1 });
+}
+export function drawGoldFiligree(ctx, x, y, w) {
+  ctx.fillStyle = rampCss('gold', 9);
+  for (let i = 0; i < w; i += 4) ctx.fillRect(x + i, y + (i % 8 === 0 ? 0 : 1), 2, 1);
+}
+export function drawCorner(ctx, x, y, size, which) {
+  ctx.fillStyle = rampCss('gold', 8);
+  const sx = which === 'tr' || which === 'br' ? -1 : 1;
+  const sy = which === 'bl' || which === 'br' ? -1 : 1;
+  const ox = which === 'tr' || which === 'br' ? x + size - 1 : x;
+  const oy = which === 'bl' || which === 'br' ? y + size - 1 : y;
+  for (let i = 0; i < size; i++) { ctx.fillRect(ox + sx * i, oy, 1, 1); ctx.fillRect(ox, oy + sy * i, 1, 1); }
+  ctx.fillRect(ox + sx * 2, oy + sy * 2, 2, 2);
+}
+export function drawDivider(ctx, x, y, w) {
+  ctx.fillStyle = rampCss('stone', 2); ctx.fillRect(x, y, w, 1);
+  ctx.fillStyle = rampCss('stone', 9); ctx.fillRect(x, y + 1, w, 1);
+}
+export function drawGem(ctx, x, y, size, color) {
+  const r = size / 2;
+  ctx.fillStyle = color || '#c04040';
+  for (let i = 0; i < size; i++) {
+    const k = Math.round(r - Math.abs(i - r + 0.5));
+    ctx.fillRect((x + r - k) | 0, y + i, k * 2, 1);
+  }
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(x + ((r - 1) | 0), y + 2, 1, 1);
+}
+export function drawScrollEnds(ctx, x, y, w, h) {
+  ctx.fillStyle = rampCss('wood', 7);
+  ctx.fillRect(x - 4, y - 6, w + 8, 6); ctx.fillRect(x - 4, y + h, w + 8, 6);
+}
+export const ICONS = ['gold', 'food', 'castspell', 'rest', 'quickref', 'options', 'turnbased',
+  'slot_weapon', 'slot_shield', 'slot_helm', 'slot_armor', 'slot_boots', 'slot_gauntlets',
+  'slot_belt', 'slot_cloak', 'slot_amulet', 'slot_ring', 'slot_bow', 'school_spirit'];
+export function iconCanvas(name, size) {
+  return mk('ic' + name + size, size, size, (g, S) => {
+    const c = (r, s) => rampCss(r, s);
+    g.clearRect(0, 0, S, S);
+    const half = S / 2 | 0;
+    if (name === 'gold') {
+      g.fillStyle = c('gold', 10); g.fillRect(1, S - 5, S - 2, 4);
+      g.fillStyle = c('gold', 13); g.fillRect(1, S - 5, S - 2, 1);
+      g.fillStyle = c('gold', 11); g.fillRect(3, S - 9, S - 6, 4);
+      g.fillStyle = c('gold', 14); g.fillRect(3, S - 9, S - 6, 1);
+    } else if (name === 'food') {
+      g.fillStyle = c('dirt', 8); g.fillRect(2, half - 2, S - 4, S / 2 | 0);
+      g.fillStyle = c('dirt', 11); g.fillRect(2, half - 2, S - 4, 2);
+      g.fillStyle = c('foliage', 9); g.fillRect(half - 1, 1, 2, half - 2);
+    } else if (name === 'slot_weapon') {
+      g.fillStyle = c('stone', 11); g.fillRect(half - 1, 1, 2, S - 6);
+      g.fillStyle = c('wood', 6); g.fillRect(half - 3, S - 6, 6, 2); g.fillRect(half - 1, S - 4, 2, 3);
+    } else if (name === 'slot_shield') {
+      g.fillStyle = c('stone', 9);
+      for (let i = 0; i < S - 2; i++) {
+        const t = i / (S - 3), inset = t < 0.6 ? 1 : Math.round((t - 0.6) / 0.4 * (S / 2 - 2));
+        g.fillRect(1 + inset, 1 + i, S - 2 - inset * 2, 1);
+      }
+    } else if (name === 'slot_helm') {
+      g.fillStyle = c('stone', 9);
+      for (let i = 2; i < S - 3; i++) {
+        const k = Math.round((S / 2 - 2) * Math.sqrt(Math.max(0.2, 1 - Math.pow(1 - (i - 2) / (S - 5), 2))));
+        g.fillRect(half - k, i, k * 2, 1);
+      }
+      g.fillStyle = '#000'; g.fillRect(half - 3, S - 6, 6, 2);
+    } else if (name === 'slot_armor') {
+      g.fillStyle = c('stone', 9); g.fillRect(3, 3, S - 6, S - 5);
+      g.fillStyle = c('stone', 5); g.fillRect(half - 2, 3, 4, 2);
+    } else if (name === 'slot_boots') {
+      g.fillStyle = c('dirt', 7); g.fillRect(2, 2, half - 3, S - 6); g.fillRect(half + 1, 2, half - 3, S - 6);
+      g.fillStyle = c('dirt', 4); g.fillRect(2, S - 5, S - 4, 3);
+    } else if (name === 'slot_gauntlets') {
+      g.fillStyle = c('stone', 8); g.fillRect(2, 4, half - 3, S - 7); g.fillRect(half + 1, 4, half - 3, S - 7);
+    } else if (name === 'slot_belt') {
+      g.fillStyle = c('dirt', 7); g.fillRect(1, half - 2, S - 2, 4);
+      g.fillStyle = c('gold', 9); g.fillRect(half - 2, half - 3, 5, 6);
+    } else if (name === 'slot_cloak') {
+      g.fillStyle = c('blood', 5);
+      for (let i = 2; i < S - 2; i++) { const k = Math.round((S / 2 - 2) * (0.4 + i / S * 0.6)); g.fillRect(half - k, i, k * 2, 1); }
+    } else if (name === 'slot_amulet') {
+      g.fillStyle = c('gold', 10);
+      for (let i = -5; i <= 5; i++) g.fillRect(half + i, 2 + Math.abs(i) * 0.4 | 0, 1, 1);
+      g.fillStyle = c('arcane', 5); g.fillRect(half - 2, S - 7, 5, 5);
+    } else if (name === 'slot_ring') {
+      g.strokeStyle = c('gold', 10); g.lineWidth = 2;
+      g.beginPath(); g.arc(half, half + 1, S / 3, 0, Math.PI * 2); g.stroke();
+      g.fillStyle = c('ice', 12); g.fillRect(half - 1, half - S / 3 - 1, 3, 3);
+    } else if (name === 'slot_bow') {
+      g.fillStyle = c('wood', 8);
+      for (let i = 2; i < S - 2; i++) {
+        const t = (i - S / 2) / (S / 2 - 2);
+        g.fillRect(2 + Math.round((1 - t * t) * (S - 6)), i, 2, 1);
+      }
+      g.fillStyle = c('sand', 12); for (let i = 2; i < S - 2; i++) g.fillRect(2, i, 1, 1);
+    } else {
+      g.fillStyle = c('grey', 8); g.fillRect(2, 2, S - 4, S - 4);
+      g.fillStyle = c('grey', 3); g.fillRect(4, 4, S - 8, S - 8);
+      g.fillStyle = c('gold', 9); g.fillRect(half - 1, 5, 2, S - 10);
+    }
+  });
+}
+export function drawIcon(ctx, name, x, y, size) { ctx.drawImage(iconCanvas(name, size | 0), x | 0, y | 0); }
+</script>
+
+<script type="text/plain" id="stub-portraits">
+import { rampCss } from '/src/core/palette.js';
+import { mulberry32 } from '/src/core/rng.js';
+
+export const PORTRAIT_W = 90;
+export const PORTRAIT_H = 80;
+export const EXPRESSIONS = ['normal', 'hurt', 'dead', 'scared', 'level_up', 'drunk'];
+const cache = new Map();
+
+export function getPortrait(seed, who, expr) {
+  const key = seed + '|' + (who && who.sex) + '|' + (who && who.klass) + '|' + expr;
+  let c = cache.get(key);
+  if (c) return c;
+  c = document.createElement('canvas');
+  c.width = PORTRAIT_W; c.height = PORTRAIT_H;
+  const g = c.getContext('2d');
+  const r = mulberry32((seed | 0) * 2654435761 + 17);
+  const skin = 2 + (r() * 5 | 0);
+  const hair = ['dirt', 'wood', 'fire', 'grey'][r() * 4 | 0];
+  g.fillStyle = rampCss('stone', 3);
+  g.fillRect(0, 0, PORTRAIT_W, PORTRAIT_H);
+  for (let i = 0; i < 200; i++) {
+    g.fillStyle = rampCss('stone', 2 + r() * 3);
+    g.fillRect(r() * PORTRAIT_W | 0, r() * PORTRAIT_H | 0, 2, 2);
+  }
+  const cx = PORTRAIT_W / 2, cy = 44;
+  // shoulders
+  g.fillStyle = rampCss('dirt', 4);
+  g.fillRect(cx - 30, 64, 60, 20);
+  // head
+  g.fillStyle = rampCss('flesh', skin);
+  for (let y = -24; y <= 22; y++) {
+    const k = Math.round(20 * Math.sqrt(Math.max(0, 1 - (y / 24) * (y / 24))));
+    g.fillRect(cx - k, cy + y, k * 2, 1);
+  }
+  // hair
+  g.fillStyle = rampCss(hair, 5 + (r() * 5 | 0));
+  for (let y = -26; y <= -6; y++) {
+    const k = Math.round(21 * Math.sqrt(Math.max(0, 1 - (y / 26) * (y / 26))));
+    g.fillRect(cx - k, cy + y, k * 2, 1);
+  }
+  if (who && who.sex === 'f') g.fillRect(cx - 22, cy - 12, 5, 30), g.fillRect(cx + 17, cy - 12, 5, 30);
+  // eyes / mouth, tinted by expression
+  const dead = expr === 'dead';
+  g.fillStyle = dead ? '#402020' : '#201810';
+  g.fillRect(cx - 10, cy - 4, 5, dead ? 1 : 3);
+  g.fillRect(cx + 6, cy - 4, 5, dead ? 1 : 3);
+  g.fillStyle = rampCss('flesh', Math.max(0, skin - 2));
+  g.fillRect(cx - 2, cy - 2, 4, 10);
+  g.fillStyle = '#3a1a12';
+  if (expr === 'hurt' || expr === 'scared') g.fillRect(cx - 6, cy + 14, 12, 4);
+  else if (expr === 'level_up') { g.fillRect(cx - 7, cy + 12, 14, 3); g.fillRect(cx - 8, cy + 11, 2, 2); g.fillRect(cx + 7, cy + 11, 2, 2); }
+  else g.fillRect(cx - 6, cy + 13, 12, 2);
+  if (expr === 'hurt') { g.fillStyle = 'rgba(160,20,10,0.35)'; g.fillRect(0, 0, PORTRAIT_W, PORTRAIT_H); }
+  if (dead) { g.fillStyle = 'rgba(20,20,40,0.5)'; g.fillRect(0, 0, PORTRAIT_W, PORTRAIT_H); }
+  cache.set(key, c);
+  return c;
+}
+</script>
+
+<script type="text/plain" id="stub-font">
+// Completes the real font module: it already carries the 5x7 glyph table and
+// the atlas builder, but drawText/wrapText and the larger faces are still being
+// written, so they are supplied here for the preview only.
+import * as R from '/src/art/font.js?stub=1';
+
+export const TEXT_NORMAL = R.TEXT_NORMAL || '#e8dcb0';
+export const TEXT_DIM = R.TEXT_DIM || '#a89870';
+export const TEXT_GOLD = R.TEXT_GOLD || '#ffd84a';
+export const TEXT_LINK = R.TEXT_LINK || '#4de84d';
+export const TEXT_HILITE = R.TEXT_HILITE || '#e1cd23';
+export const TEXT_DARK = R.TEXT_DARK || '#241c10';
+export const TEXT_RED = R.TEXT_RED || '#e04030';
+export const TEXT_BLUE = R.TEXT_BLUE || '#78b8ff';
+export const TEXT_SHADOW = '#000000';
+export const FACES = R.FACES;
+
+const SCALE = { small: 1, normal: 1, title: 2 };
+const TRACK = { small: 0, normal: 1, title: 0 };
+
+export function measure(text, face, tracking) {
+  const s = SCALE[face] === undefined ? 1 : SCALE[face];
+  const t = (tracking || 0) + (TRACK[face] || 0);
+  const m = R.measure(String(text), 'small', t);
+  return { w: m.w * s, h: m.h * s };
+}
+export function baselineOf(face) { return 7 * (SCALE[face] || 1); }
+export function lineHeightOf(face) { return 9 * (SCALE[face] || 1); }
+
+export function drawText(ctx, text, x, y, o) {
+  const opt = o || {};
+  const face = opt.face || 'normal';
+  const s = SCALE[face] === undefined ? 1 : SCALE[face];
+  const tracking = (opt.tracking || 0) + (TRACK[face] || 0);
+  const str = String(text == null ? '' : text);
+  const f = R.FACES.small;
+  const w = measure(str, face, opt.tracking || 0).w;
+  let dx = Math.round(x);
+  if (opt.align === 'center') dx = Math.round(x - w / 2);
+  else if (opt.align === 'right') dx = Math.round(x - w);
+  const dy = Math.round(y);
+  const atlas = R.glyphCanvas('small', opt.color || TEXT_NORMAL);
+  const shadow = opt.shadow === false ? null : R.glyphCanvas('small', '#000000');
+  const maxW = opt.maxWidth || 1e9;
+  let pen = 0;
+  for (let i = 0; i < str.length; i++) {
+    const chr = str[i];
+    const gl = f.glyphs[chr] || f.glyphs['?'];
+    const adv = (gl.adv + tracking) * s;
+    if (pen + adv > maxW) break;
+    const idx = f.index.has(chr) ? f.index.get(chr) : f.index.get('?');
+    const sx = (idx % f.cols) * f.cellW, sy = ((idx / f.cols) | 0) * f.cellH;
+    if (shadow) ctx.drawImage(shadow, sx, sy, f.cellW, f.cellH, dx + pen + s, dy + s, f.cellW * s, f.cellH * s);
+    ctx.drawImage(atlas, sx, sy, f.cellW, f.cellH, dx + pen, dy, f.cellW * s, f.cellH * s);
+    pen += adv;
+  }
+  return pen;
+}
+
+export function wrapText(text, maxW, face) {
+  const out = [];
+  for (const para of String(text == null ? '' : text).split('\n')) {
+    const words = para.split(/\s+/).filter(Boolean);
+    let line = '';
+    for (const word of words) {
+      const test = line ? line + ' ' + word : word;
+      if (measure(test, face).w > maxW && line) { out.push(line); line = word; }
+      else line = test;
+    }
+    out.push(line);
+  }
+  return out;
+}
+export function drawTextWrapped(ctx, text, x, y, maxW, o) {
+  const opt = o || {};
+  const lh = opt.lineHeight || lineHeightOf(opt.face || 'normal') + 2;
+  const lines = wrapText(text, maxW, opt.face || 'normal');
+  lines.forEach((l, i) => drawText(ctx, l, x, y + i * lh, opt));
+  return y + lines.length * lh;
+}
+export function glyphCanvas(face, color, shadow) { return R.glyphCanvas('small', color, shadow); }
+</script>
+
+<script>
+// Probe the real modules; only stub what is missing or incomplete.
+(function () {
+  function read(url) {
+    try {
+      const x = new XMLHttpRequest();
+      x.open('GET', url, false);
+      x.send(null);
+      return x.status >= 200 && x.status < 300 ? x.responseText : null;
+    } catch (e) { return null; }
+  }
+  const need = [];
+  const uiart = read('/src/art/uiart.js');
+  if (!uiart || uiart.indexOf('drawStonePanel') < 0) need.push(['/src/art/uiart.js', 'stub-uiart']);
+  const port = read('/src/art/portraits.js');
+  if (!port || port.indexOf('getPortrait') < 0) need.push(['/src/art/portraits.js', 'stub-portraits']);
+  const font = read('/src/art/font.js');
+  if (!font || font.indexOf('export function drawText') < 0) need.push(['/src/art/font.js', 'stub-font']);
+
+  const map = { imports: {} };
+  for (const pair of need) {
+    const src = document.getElementById(pair[1]).textContent;
+    map.imports[pair[0]] = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+  }
+  window.__stubbed = need.map(function (p) { return p[0]; });
+  const s = document.createElement('script');
+  s.type = 'importmap';
+  s.textContent = JSON.stringify(map);
+  document.head.appendChild(s);
+})();
+</script>
+
+<script type="module">
+import { layout, computeLayout } from '/src/core/layout.js';
+import { UIContext, MessageLog } from '/src/ui/uikit.js';
+import { HUD } from '/src/ui/hud.js';
+import { CharSheetScreen } from '/src/ui/screens/charsheet.js';
+import { InventoryScreen } from '/src/ui/screens/inventory.js';
+import { SpellbookScreen } from '/src/ui/screens/spellbook.js';
+import { QuestLogScreen } from '/src/ui/screens/questlog.js';
+import { MapScreen } from '/src/ui/screens/mapscreen.js';
+import { QuickRefScreen } from '/src/ui/screens/quickref.js';
+import { OptionsScreen } from '/src/ui/screens/options.js';
+import { maxHP, maxSP } from '/src/game/stats.js';
+import { SPELLS_BY_SCHOOL } from '/src/game/spells.js';
+
+const errs = [];
+window.addEventListener('error', (e) => { errs.push(String(e.message)); });
+
+computeLayout(640, 480, false);
+
+// --- fake data --------------------------------------------------------------
+
+/** Conditions must satisfy both stats.js (map) and hud.js (array). */
+function conds(...ids) {
+  const a = ids.slice();
+  for (const id of ids) a[id] = true;
+  return a;
+}
+function sk(level, mastery) { return { level, mastery }; }
+
+function mkChar(o) {
+  const ch = Object.assign({
+    name: 'Anon', class: 'knight', sex: 'm', portraitSeed: 1, level: 1, xp: 0,
+    age: 21, skillPoints: 0, hp: 10, sp: 0,
+    stats: { might: 15, intellect: 10, personality: 10, endurance: 14, accuracy: 12, speed: 12, luck: 9 },
+    skills: {}, spells: [], conditions: conds(), inventory: [], equipment: {},
+    awards: [], titles: [], resistances: {}, buffs: {}, recovery: 0,
+  }, o);
+  ch.maxHP = maxHP(ch); ch.maxSP = maxSP(ch);
+  if (ch.hp === undefined) ch.hp = ch.maxHP;
+  return ch;
+}
+
+let uid = 0;
+function item(o) { return Object.assign({ uid: 'i' + (uid++) }, o); }
+
+const roderic = mkChar({
+  name: 'Roderic', class: 'champion', sex: 'm', portraitSeed: 3, level: 24,
+  xp: 291000, age: 37, skillPoints: 9, hp: 168, sp: 0,
+  stats: { might: 42, intellect: 8, personality: 9, endurance: 31, accuracy: 24, speed: 22, luck: 14 },
+  statMods: { might: 6, endurance: 2 },
+  skills: {
+    sword: sk(12, 3), axe: sk(8, 2), shield: sk(9, 3), plate: sk(11, 3), chain: sk(6, 2),
+    leather: sk(4, 1), bow: sk(5, 1), body_building: sk(10, 3), repair: sk(4, 2),
+    merchant: sk(3, 1), perception: sk(5, 2), diplomacy: sk(2, 1), disarm: sk(3, 1), learning: sk(4, 1),
+  },
+  resistances: { fire: 20, air: 10, water: 15, earth: 12, mind: 5, body: 8, magic: 14 },
+  titles: ['Champion of Enroth', 'Slayer of the Dragon Hunters'],
+  awards: ['Cleared Corlagon\'s Estate', 'Won the Arena at Champion rank', 'Rescued the mayor of Free Haven'],
+  equipment: {
+    mainhand: item({ name: 'Elven Longsword', type: 'sword', material: 'silver', damage: '1d8+6', enchant: 'of Air Magic', value: 3200 }),
+    offhand: item({ name: 'Tower Shield', type: 'shield', material: 'steel', armor: 12, value: 900 }),
+    armor: item({ name: 'Plate Mail', type: 'armor', material: 'steel', armor: 24, value: 2400 }),
+    helm: item({ name: 'Great Helm', type: 'helm', material: 'iron', armor: 8, value: 600 }),
+    boots: item({ name: 'Plate Boots', type: 'boots', material: 'steel', armor: 6, value: 400 }),
+    gauntlets: item({ name: 'Gauntlets', type: 'gauntlets', material: 'steel', armor: 5, value: 350 }),
+    belt: item({ name: 'Girdle of Might', type: 'belt', material: 'leather', enchant: '+6 Might', value: 2000 }),
+    cloak: item({ name: 'Cloak of Protection', type: 'cloak', material: 'leather', armor: 3, value: 800 }),
+    ring1: item({ name: 'Ring of Fire', type: 'ring', material: 'gold', tint: '#e05a1e', enchant: 'Fire Resistance +20', value: 1500 }),
+  },
+  inventory: [
+    item({ name: 'Battle Axe', type: 'axe', material: 'iron', damage: '2d6+2', value: 700 }),
+    item({ name: 'Long Bow', type: 'bow', material: 'wood', damage: '1d6+3', value: 500 }),
+    item({ name: 'Red Potion', type: 'potion', material: 'crystal', tint: '#c81818', desc: 'Restores 30 hit points.', value: 60 }),
+    item({ name: 'Blue Potion', type: 'potion', material: 'crystal', tint: '#2848c8', desc: 'Restores 30 spell points.', value: 60 }),
+    item({ name: 'Scroll of Fireball', type: 'scroll', material: 'bone', value: 180 }),
+    item({ name: 'Emerald', type: 'gem', material: 'crystal', tint: '#20b040', value: 500 }),
+    item({ name: 'Broken Dagger', type: 'dagger', material: 'bronze', broken: true, damage: '1d4', value: 5 }),
+    item({ name: 'Strange Ring', type: 'ring', material: 'silver', tint: '#a060e0', identified: false, value: 0 }),
+    item({ name: 'Spell Book', type: 'book', material: 'leather', desc: 'Teaches Fire Bolt.', value: 200 }),
+    item({ name: 'Widow\'s Weed', type: 'reagent', material: 'wood', value: 30 }),
+    item({ name: 'Gold Pile', type: 'gold', material: 'gold', value: 250 }),
+  ],
+  quickSpell: null,
+});
+
+const seraphine = mkChar({
+  name: 'Seraphine', class: 'high_priest', sex: 'f', portraitSeed: 8, level: 22,
+  xp: 246000, age: 29, skillPoints: 4, hp: 96, sp: 118,
+  stats: { might: 12, intellect: 11, personality: 44, endurance: 20, accuracy: 14, speed: 16, luck: 18 },
+  skills: {
+    mace: sk(7, 2), staff: sk(5, 2), leather: sk(6, 2), shield: sk(6, 2), chain: sk(4, 2),
+    spirit: sk(12, 3), mind: sk(9, 2), body: sk(11, 3), light: sk(7, 2), dark: sk(2, 1),
+    meditation: sk(10, 3), body_building: sk(4, 2), learning: sk(6, 2), merchant: sk(5, 2), identify: sk(4, 2),
+  },
+  spells: [
+    'bless', 'spirit_lash', 'heroism', 'preservation', 'turn_undead', 'raise_dead',
+    'first_aid', 'heal', 'cure_poison', 'regeneration', 'hammerhands', 'power_cure',
+    'light_bolt', 'destroy_undead', 'day_of_the_gods',
+  ],
+  buffs: { bless: { power: 8, until: 9e9 } },
+  conditions: conds(),
+  resistances: { fire: 10, air: 8, water: 8, earth: 8, mind: 30, body: 24, magic: 18 },
+  quickSpell: 'heal',
+  awards: ['High Priestess of the Temple of the Sun'],
+  equipment: {
+    mainhand: item({ name: 'Mace of Light', type: 'mace', material: 'gold', damage: '1d6+4', enchant: 'of Light Magic', value: 2600 }),
+    armor: item({ name: 'Chain Mail', type: 'armor', material: 'iron', armor: 14, value: 900 }),
+    amulet: item({ name: 'Amulet of Wisdom', type: 'amulet', material: 'gold', tint: '#78b8ff', enchant: '+10 Personality', value: 3000 }),
+  },
+  inventory: [
+    item({ name: 'Holy Water', type: 'potion', material: 'crystal', tint: '#f0f0c0', value: 120 }),
+    item({ name: 'Wand of Fire', type: 'wand', material: 'wood', tint: '#e05a1e', charges: 12, value: 800 }),
+  ],
+});
+
+const tolbert = mkChar({
+  name: 'Tolbert', class: 'archmage', sex: 'm', portraitSeed: 15, level: 21,
+  xp: 221000, age: 62, skillPoints: 2, hp: 54, sp: 152,
+  stats: { might: 7, intellect: 46, personality: 12, endurance: 15, accuracy: 16, speed: 18, luck: 15 },
+  skills: {
+    staff: sk(6, 2), dagger: sk(4, 2), leather: sk(5, 2), blaster: sk(3, 1),
+    fire: sk(13, 3), air: sk(11, 3), water: sk(9, 2), earth: sk(8, 2), light: sk(4, 1), dark: sk(5, 2),
+    meditation: sk(12, 3), identify: sk(8, 3), learning: sk(7, 2), perception: sk(3, 1), repair: sk(4, 2),
+  },
+  spells: SPELLS_BY_SCHOOL.fire.map((s) => s.id).concat(
+    SPELLS_BY_SCHOOL.air.slice(0, 7).map((s) => s.id),
+    SPELLS_BY_SCHOOL.water.slice(0, 5).map((s) => s.id)),
+  conditions: conds('weak'),
+  resistances: { fire: 40, air: 20, water: 15, earth: 10, mind: 6, body: 6, magic: 22 },
+  quickSpell: 'fire_bolt',
+  equipment: {
+    mainhand: item({ name: 'Staff of Power', type: 'staff', material: 'wood', damage: '1d8', enchant: 'of the Elements', value: 4000 }),
+    armor: item({ name: 'Robe', type: 'armor', material: 'leather', armor: 4, value: 120 }),
+    helm: item({ name: 'Mage Hat', type: 'helm', material: 'leather', armor: 2, value: 90 }),
+  },
+  inventory: [
+    item({ name: 'Sapphire', type: 'gem', material: 'crystal', tint: '#3070e0', value: 900 }),
+    item({ name: 'Ruby', type: 'gem', material: 'crystal', tint: '#d02020', value: 900 }),
+  ],
+});
+
+const wynn = mkChar({
+  name: 'Wynn', class: 'warrior_mage', sex: 'f', portraitSeed: 21, level: 20,
+  xp: 205000, age: 24, skillPoints: 0, hp: 38, sp: 66,
+  stats: { might: 22, intellect: 26, personality: 10, endurance: 18, accuracy: 32, speed: 24, luck: 13 },
+  skills: {
+    bow: sk(14, 3), sword: sk(7, 2), dagger: sk(6, 2), leather: sk(8, 3), chain: sk(5, 2),
+    fire: sk(6, 2), air: sk(7, 2), water: sk(5, 2), earth: sk(4, 2),
+    perception: sk(9, 3), disarm: sk(7, 2), body_building: sk(6, 2), meditation: sk(5, 2), learning: sk(5, 2),
+  },
+  spells: ['torch_light', 'fire_bolt', 'wizard_eye', 'feather_fall'],
+  conditions: conds('poisoned_weak'),
+  resistances: { fire: 12, air: 22, water: 10, earth: 9, mind: 8, body: 8, magic: 10 },
+  equipment: {
+    bow: item({ name: 'Elven Bow', type: 'bow', material: 'wood', damage: '1d8+4', enchant: 'of Air', value: 2200 }),
+    mainhand: item({ name: 'Short Sword', type: 'sword', material: 'steel', damage: '1d6+1', value: 300 }),
+    armor: item({ name: 'Leather Armour', type: 'armor', material: 'leather', armor: 8, value: 200 }),
+    boots: item({ name: 'Boots of Speed', type: 'boots', material: 'leather', enchant: '+5 Speed', value: 1400 }),
+    ring2: item({ name: 'Ring of Luck', type: 'ring', material: 'silver', tint: '#40f460', enchant: '+8 Luck', value: 1100 }),
+  },
+  inventory: [
+    item({ name: 'Green Potion', type: 'potion', material: 'crystal', tint: '#30b030', value: 60 }),
+    item({ name: 'Arrows', type: 'reagent', material: 'wood', value: 20 }),
+  ],
+});
+
+for (const c of [roderic, seraphine, tolbert, wynn]) { c.maxHP = maxHP(c); c.maxSP = maxSP(c); }
+wynn.hp = 12;
+
+const party = {
+  members: [roderic, seraphine, tolbert, wynn],
+  gold: 18450, food: 26,
+  buffs: { haste: { until: 9e9, icon: 'school_spirit' }, bless: { until: 9e9, icon: 'school_spirit' } },
+  awards: ['Cleared the Abandoned Temple', 'Reputation: Saintly'],
+};
+
+function mapImage() {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 256;
+  const g = c.getContext('2d');
+  for (let y = 0; y < 256; y++) for (let x = 0; x < 256; x++) {
+    const n = Math.sin(x * 0.06) * Math.cos(y * 0.05) + Math.sin((x + y) * 0.03);
+    g.fillStyle = n < -0.7 ? '#1c3a5e' : n < -0.2 ? '#3a5a2c' : n < 0.6 ? '#4a6a30' : '#6a6a4a';
+    g.fillRect(x, y, 1, 1);
+  }
+  g.fillStyle = '#8a7a52';
+  for (let i = 0; i < 256; i++) g.fillRect(i, 128 + (Math.sin(i * 0.05) * 12 | 0), 1, 3);
+  return c;
+}
+
+const session = {
+  party,
+  activeChar: 0,
+  turnBased: false,
+  hoverEntity: null,
+  vfx: null,
+  audio: null,
+  log: new MessageLog(),
+  settings: null,
+  clock: {
+    minutes: 9 * 60 + 23, day: 5, month: 2, year: 1165,
+    format: () => '9:23am', formatDate: () => 'Tuesday  March 5, 1165',
+  },
+  player: { pos: { x: 1200, y: 160, z: -3400 }, yaw: 0.7 },
+  map: {
+    name: 'New Sorpigal', indoor: false, worldSize: 65536,
+    mapMarkers: [
+      { x: 1024, z: -3072, name: 'New Sorpigal', kind: 'town' },
+      { x: 5120, z: -1024, name: 'Abandoned Temple', kind: 'dungeon' },
+      { x: -2048, z: -5120, name: 'Goblinwatch', kind: 'dungeon' },
+      { x: 2560, z: -6144, name: 'Shrine of Might', kind: 'npc' },
+      { x: -3600, z: -2400, name: 'Chest', kind: 'treasure' },
+    ],
+  },
+  quests: {
+    active: [
+      { title: 'Kill the Goblins in the Sewers', giver: 'Mayor Wilbur Humphrey', region: 'New Sorpigal', objective: 'Clear the sewer entrance under the town square of goblins and report back.', progress: 7, goal: 12 },
+      { title: 'Recover the Chalice of Protection', giver: 'Temple of the Sun', region: 'Free Haven', objective: 'The Temple of Baa stole the chalice. It is said to be somewhere beneath the Silver Cove.' },
+      { title: 'Promotion: Champion', giver: 'Sir Charles Quixote', region: 'Castle Ironfist', objective: 'Slay the beasts in Corlagon\'s Estate and return for your title.', progress: 1, goal: 1 },
+      { title: 'Find the missing shipment', giver: 'Harbourmaster', region: 'Bootleg Bay', objective: 'A crate of blasters never arrived. Ask at the docks.' },
+    ],
+    notes: [
+      'The dwarves of Snergle\'s Caverns pay well for iron.',
+      'A hermit near Mist speaks of a well that grants Endurance.',
+      'The seer in Free Haven will identify anything for 500 gold.',
+      'Obelisks: eleven of them, each carrying one word of a message.',
+      'The Temple of Baa in New Sorpigal has a hidden lower floor.',
+    ],
+    history: [
+      { when: 'March 2, 1165', text: 'The party was formed in New Sorpigal.' },
+      { when: 'March 3, 1165', text: 'Cleared the goblin camp on the beach.' },
+      { when: 'March 4, 1165', text: 'Roderic was promoted to Champion.' },
+      { when: 'March 5, 1165', text: 'Bought passage to Free Haven for 200 gold.' },
+    ],
+  },
+};
+
+// --- rendering --------------------------------------------------------------
+
+const grid = document.getElementById('grid');
+function cell(label) {
+  const d = document.createElement('div');
+  d.className = 'cell';
+  const cv = document.createElement('canvas');
+  cv.width = 640; cv.height = 480;
+  const l = document.createElement('div');
+  l.className = 'lbl';
+  l.textContent = label;
+  d.appendChild(cv); d.appendChild(l);
+  grid.appendChild(d);
+  return cv.getContext('2d');
+}
+
+function shot(label, makeScreen, hover, before) {
+  const ctx = cell(label);
+  ctx.imageSmoothingEnabled = false;
+  const ui = new UIContext();
+  const hud = new HUD(session, ui);
+  const screen = makeScreen(ui, hud);
+  ui.beginFrame(ctx, { x: hover ? hover[0] : -1, y: hover ? hover[1] : -1 }, []);
+  if (before) before(screen, ui);
+  if (screen.onOpen) screen.onOpen();
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 640, 480);
+  try {
+    hud.draw(ctx, 0.016);
+  } catch (e) { errs.push('hud: ' + e.message); }
+  try {
+    screen.draw(ctx);
+  } catch (e) { errs.push(label + ': ' + e.message + '\n' + e.stack); }
+  ui.endFrame();
+}
+
+const mk = (Cls, opts) => (ui, hud) => new Cls(session, ui, hud, opts || {});
+
+shot('charsheet — Stats (hover Might)', mk(CharSheetScreen, { tab: 0 }), [60, 60]);
+shot('charsheet — Skills (hover a skill)', mk(CharSheetScreen, { tab: 1 }), [80, 120]);
+shot('charsheet — Awards', mk(CharSheetScreen, { tab: 3 }), [-1, -1]);
+shot('inventory — carrying an axe over the grid', mk(InventoryScreen), [180, 150], (s, ui) => {
+  const bag = roderic.inventory;
+  const axe = bag[0];
+  ui.cursorItem = axe;
+  axe.x = null; axe.y = null;
+});
+shot('inventory — plain', mk(InventoryScreen), [300, 120]);
+shot('spellbook — Fire (Tolbert)', (ui, hud) => {
+  session.activeChar = 2;
+  return new SpellbookScreen(session, ui, hud, { school: 'fire' });
+}, [90, 120]);
+shot('spellbook — Spirit (Seraphine)', (ui, hud) => {
+  session.activeChar = 1;
+  return new SpellbookScreen(session, ui, hud, { school: 'spirit' });
+}, [420, 60]);
+session.activeChar = 0;
+shot('questlog — Current Quests', mk(QuestLogScreen, { page: 0 }), [410, 20]);
+shot('questlog — Auto Notes', mk(QuestLogScreen, { page: 1 }), [-1, -1]);
+shot('mapscreen — outdoor picture', mk(MapScreen), [200, 100]);
+shot('mapscreen — sketch fallback (no map image)', (ui, hud) => {
+  const s = new MapScreen(session, ui, hud, {});
+  return s;
+}, [430, 40]);
+shot('quickref', mk(QuickRefScreen), [200, 120]);
+shot('options', mk(OptionsScreen), [140, 90]);
+
+// The outdoor map canvas needs the picture; the sketch one must not have it.
+// Both were drawn above with the same session, so redraw the first with it.
+(function redrawMaps() {
+  session.map.mapImage = mapImage();
+  const ctxs = document.querySelectorAll('.cell canvas');
+  const target = ctxs[9].getContext('2d');
+  target.imageSmoothingEnabled = false;
+  const ui = new UIContext();
+  const hud = new HUD(session, ui);
+  const s = new MapScreen(session, ui, hud, {});
+  ui.beginFrame(target, { x: 200, y: 100 }, []);
+  s.onOpen();
+  target.fillStyle = '#000'; target.fillRect(0, 0, 640, 480);
+  try { hud.draw(target, 0.016); s.draw(target); } catch (e) { errs.push('map2: ' + e.message); }
+  ui.endFrame();
+  delete session.map.mapImage;
+})();
+
+document.getElementById('head').textContent =
+  'MM6 panels set A — panel 461x345 at (8,8) over live chrome. stubbed: '
+  + (window.__stubbed && window.__stubbed.length ? window.__stubbed.join(', ') : 'nothing');
+if (errs.length) document.getElementById('err').textContent = errs.join('\n');
+window.__errors = errs;
+window.__ready = true;
+</script>
+</body>
+</html>

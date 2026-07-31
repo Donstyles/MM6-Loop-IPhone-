@@ -17,28 +17,72 @@
 <h1 id="head">building…</h1>
 <div class="grid" id="grid"></div>
 <script type="module">
-import { TEXTURE_IDS, TEXTURE_META, getPix, getAnimated, buildAll } from '/src/art/textures.js';
+import {
+  TEXTURE_IDS, TEXTURE_META, getPix, getAnimated, buildAll,
+  TRANSITION_MASKS, transitionPix, transitionTile,
+} from '/src/art/textures.js';
 
 const params = new URLSearchParams(location.search);
 const page = parseInt(params.get('page') || '0', 10);
 const perPage = parseInt(params.get('per') || '20', 10);
 const frame = parseInt(params.get('frame') || '0', 10);
+const showTrans = params.get('trans') === '1';
 
 const t0 = performance.now();
 let n = 0;
 for (const _ of buildAll()) n++;
 const dt = performance.now() - t0;
 
+const grid = document.getElementById('grid');
+
+function cellFor(label, meta, drawSrc) {
+  const cell = document.createElement('div');
+  cell.className = 'cell';
+  const cv = document.createElement('canvas');
+  cv.width = 256; cv.height = 256;
+  const g = cv.getContext('2d');
+  g.imageSmoothingEnabled = false;
+  for (let y = 0; y < 256; y += 8) for (let x = 0; x < 256; x += 8) {
+    g.fillStyle = ((x / 8 + y / 8) & 1) ? '#3a3a40' : '#26262a';
+    g.fillRect(x, y, 8, 8);
+  }
+  const z = 256 / (meta.size * 2);
+  for (let ty = 0; ty < 2; ty++) for (let tx = 0; tx < 2; tx++) {
+    g.drawImage(drawSrc, tx * meta.size * z, ty * meta.size * z, meta.size * z, meta.size * z);
+  }
+  cell.appendChild(cv);
+  const l = document.createElement('div'); l.className = 'lbl'; l.textContent = label;
+  cell.appendChild(l);
+  return cell;
+}
+
+if (showTrans) {
+  // transition tiles: grass over dirt for the edge/corner set, cobble road
+  // over dirt for the road set
+  document.getElementById('head').textContent =
+    `transition tiles — ${TRANSITION_MASKS.length} masks — library built in ${dt.toFixed(0)}ms`;
+  for (const m of TRANSITION_MASKS) {
+    const road = m.startsWith('road');
+    const base = road ? 'dirt' : 'dirt';
+    const over = road ? 'road_cobble' : 'grass';
+    transitionTile(base, over, m);
+    const pix = transitionPix(base, over, m);
+    const cell = cellFor(`${over}/${base} ${m}`, { size: pix.w }, pix.toCanvas());
+    grid.appendChild(cell);
+  }
+  window.__ready = true;
+  throw new Error('done');
+}
+
 const ids = TEXTURE_IDS.slice(page * perPage, (page + 1) * perPage);
 document.getElementById('head').textContent =
   `page ${page} — ${ids.length} of ${TEXTURE_IDS.length} textures — built ${n} in ${dt.toFixed(0)}ms`;
 
-const grid = document.getElementById('grid');
 for (const id of ids) {
   const meta = TEXTURE_META[id];
   const anim = getAnimated(id);
   let pix = getPix(id);
-  if (anim && frame > 0) {
+  if (anim && anim.frames && frame > 0) {
     // pull the requested frame straight off its canvas texture
     const c = anim.frames[frame % anim.frames.length].image;
     const cell = document.createElement('div');
@@ -79,7 +123,8 @@ for (const id of ids) {
   const l = document.createElement('div'); l.className = 'lbl'; l.textContent = id;
   cell.appendChild(l);
   const m = document.createElement('div'); m.className = 'meta';
-  m.textContent = `${meta.kind} ${meta.size}px tw${meta.tileWorld}${anim ? ' anim' + anim.frames.length : ''}`;
+  const animTag = anim ? (anim.frames ? ` anim${anim.frames.length}` : ' uvDistort') : '';
+  m.textContent = `${meta.kind} ${meta.size}px tw${meta.tileWorld}${animTag}`;
   cell.appendChild(m);
   grid.appendChild(cell);
 }

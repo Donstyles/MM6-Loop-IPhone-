@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>MM6 world preview</title>
+<style>
+  html, body { margin:0; padding:0; width:100%; height:100%; background:#000; overflow:hidden; }
+  canvas { display:block; width:100%; height:100%; image-rendering:pixelated; }
+  #hud {
+    position:absolute; left:0; top:0; z-index:5;
+    font:11px/1.45 monospace; color:#e8dfa8; background:rgba(0,0,0,.62);
+    padding:6px 10px; white-space:pre; pointer-events:none;
+  }
+  #err {
+    position:absolute; left:0; bottom:0; z-index:6; max-width:100%;
+    font:11px/1.4 monospace; color:#ff8080; background:rgba(0,0,0,.8); padding:4px 8px;
+    white-space:pre-wrap;
+  }
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<div id="hud">loading…</div>
+<div id="err"></div>
+<script type="module">
+import * as THREE from 'three';
+import { generateRegion, REGIONS } from '/src/world/region.js';
+import { generateDungeon, DUNGEON_THEMES, INDOOR_HFOV_DEG, OUTDOOR_HFOV_DEG,
+         DUNGEON_FOG_NEAR, DUNGEON_FOG_FAR } from '/src/world/dungeon.js';
+import { buildSky, FAR_CLIP, NEAR_CLIP } from '/src/world/sky.js';
+import { texturesReady, texturesAvailable, heightAt, missingTextureIds } from '/src/world/terrain.js';
+
+const P = new URLSearchParams(location.search);
+const regionId = P.get('region') || 'new_sorpigal';
+const seed = P.get('seed') || '1';
+const mode = P.get('mode') || 'region';
+const theme = P.get('theme') || 'castle';
+const tod = parseFloat(P.get('tod') || '9.5');
+const shot = P.get('shot') || '';        // named establishing shot
+
+const hud = document.getElementById('hud');
+const errBox = document.getElementById('err');
+window.onerror = (m) => { errBox.textContent += m + '\n'; };
+
+const canvas = document.getElementById('gl');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:false, alpha:false, powerPreference:'high-performance' });
+renderer.setPixelRatio(1);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.NoToneMapping;
+renderer.setClearColor(0x000000, 1);
+
+const scene = new THREE.Scene();
+
+// MM6 keeps horizontal FOV fixed and derives vertical from the viewport.
+function vfov(hfovDeg, aspect) {
+  const h = THREE.MathUtils.degToRad(hfovDeg);
+  return THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(h / 2) / aspect));
+}
+const camera = new THREE.PerspectiveCamera(60, 1, NEAR_CLIP, FAR_CLIP);
+camera.rotation.order = 'YXZ';
+
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.fov = vfov(mode === 'dungeon' ? INDOOR_HFOV_DEG : OUTDOOR_HFOV_DEG, w / h);
+  camera.updateProjectionMatrix();
+  if (world && world.sky && world.sky.setViewport) world.sky.setViewport(w, h);
+  if (sky && sky.setViewport) sky.setViewport(w, h);
+}
+window.addEventListener('resize', resize);
+
+let world = null, dungeon = null, sky = null;
+
+// --- free-fly controls -----------------------------------------------------
+const keys = new Set();
+addEventListener('keydown', (e) => keys.add(e.code));
+addEventListener('keyup', (e) => keys.delete(e.code));
+let drag = false, lx = 0, ly = 0;
+canvas.addEventListener('pointerdown', (e) => { drag = true; lx = e.clientX; ly = e.clientY; });
+addEventListener('pointerup', () => { drag = false; });
+addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  camera.rotation.y -= (e.clientX - lx) * 0.004;
+  camera.rotation.x = THREE.MathUtils.clamp(camera.rotation.x - (e.clientY - ly) * 0.004, -0.6, 0.6);
+  lx = e.clientX; ly = e.clientY;
+});
+
+const fwd = new THREE.Vector3(), right = new THREE.Vector3();
+function fly(dt) {
+  const sp = (keys.has('ShiftLeft') ? 6000 : 1600) * dt;
+  camera.getWorldDirection(fwd);
+  right.crossVectors(fwd, camera.up).normalize();
+  if (keys.has('KeyW')) camera.position.addScaledVector(fwd, sp);
+  if (keys.has('KeyS')) camera.position.addScaledVector(fwd, -sp);
+  if (keys.has('KeyA')) camera.position.addScaledVector(right, -sp);
+  if (keys.has('KeyD')) camera.position.addScaledVector(right, sp);
+  if (keys.has('KeyQ')) camera.position.y -= sp;
+  if (keys.has('KeyE')) camera.position.y += sp;
+}
+
+// --- boot ------------------------------------------------------------------
+const t0 = performance.now();
+let genMs = 0;
+
+async function boot() {
+  await texturesReady;
+  if (mode === 'dungeon') {
+    dungeon = generateDungeon({ theme, rooms: 16, levels: 3, difficulty: 4, name: theme }, seed);
+    genMs = performance.now() - t0;
+    scene.add(dungeon.group);
+    scene.fog = new THREE.Fog(0x000000, DUNGEON_FOG_NEAR, DUNGEON_FOG_FAR);
+    scene.background = new THREE.Color(0x000000);
+    // Stand in the start room looking down the longest sight line.
+    const s = dungeon.start;
+    const target = dungeon.rooms.find((r) => !r.start) || dungeon.rooms[0];
+    camera.position.set(s.x, s.y + 160, s.z);
+    camera.rotation.y = Math.atan2(s.x - target.x, s.z - target.z) + Math.PI;
+    camera.rotation.x = -0.06;
+  } else {
+    const stages = []; let tPrev = performance.now();
+    world = await generateRegion(regionId, seed, (p, label) => {
+      const now = performance.now();
+      stages.push(`${label} ${(now - tPrev).toFixed(0)}ms`);
+      tPrev = now;
+      hud.textContent = `${Math.round(p * 100)}% ${label}`;
+    }, { scene, camera, timeOfDay: tod });
+    window.__stages = stages;
+    console.log('STAGES', stages.join(' | '));
+    console.log('MISSING TEX', missingTextureIds.join(','));
+    genMs = performance.now() - t0;
+    scene.add(world.group);
+    sky = world.sky;
+
+    // Establishing shot. MM6's own screenshots are taken from eye height on a
+    // rise, so we hunt for a local high point at a sensible distance from the
+    // subject rather than putting the camera in the air.
+    const town = world.towns[0];
+    if (shot === 'aerial') {
+      const t = town || { x: 0, z: 0 };
+      camera.position.set(t.x, world.heightAt(t.x, t.z) + 6000, t.z + 7000);
+      camera.rotation.set(-0.72, 0, 0);
+    } else if (mode === 'town' && town) {
+      // Stand on the approach road just outside the gate, looking in.
+      const a = 2.35;
+      const d = town.radius + 2200;
+      const x = town.x + Math.cos(a) * d, z = town.z + Math.sin(a) * d;
+      camera.position.set(x, world.heightAt(x, z) + 420, z);
+      camera.rotation.y = Math.atan2(town.x - x, town.z - z) + Math.PI;
+      camera.rotation.x = -0.08;
+    } else {
+      // Region: find a local high point with open ground in front of it and
+      // stand there at eye height, the way MM6's own box art shots are framed.
+      let best = null;
+      const R = 16000;
+      for (let k = 0; k < 900; k++) {
+        const a = (k * 2.399963), d = R * Math.sqrt((k % 97) / 97);
+        const x = Math.cos(a) * d, z = Math.sin(a) * d;
+        const y = world.heightAt(x, z);
+        if (y < world.hm.water + 400) continue;
+        // Look down the direction of steepest open descent.
+        let bestDir = null;
+        for (let s = 0; s < 8; s++) {
+          const ang = s * Math.PI / 4;
+          let drop = 0;
+          for (let t = 1; t <= 6; t++) drop += y - world.heightAt(x + Math.cos(ang) * t * 1100, z + Math.sin(ang) * t * 1100);
+          if (!bestDir || drop > bestDir.drop) bestDir = { ang, drop };
+        }
+        const score = bestDir.drop;
+        if (!best || score > best.score) best = { x, y, z, score, ang: bestDir.ang };
+      }
+      const v = best || { x: 0, y: world.heightAt(0, 0), z: 0, ang: 0 };
+      camera.position.set(v.x, v.y + 200, v.z);
+      camera.rotation.y = Math.atan2(-Math.cos(v.ang), -Math.sin(v.ang));
+      camera.rotation.x = -0.05;
+    }
+  }
+  resize();
+  // Two warm-up frames so culling state and the first water frame are settled.
+  frame(0.016); frame(0.016);
+  window.__ready = true;
+}
+
+let last = performance.now(), fps = 0, acc = 0, frames = 0;
+
+function frame(dt) {
+  if (world) world.update(dt, camera, tod, P.get('weather') || undefined);
+  if (dungeon) dungeon.update(dt, camera);
+  renderer.render(scene, camera);
+}
+
+function loop() {
+  requestAnimationFrame(loop);
+  const now = performance.now();
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  fly(dt);
+  frame(dt);
+
+  acc += dt; frames++;
+  if (acc > 0.4) { fps = frames / acc; acc = 0; frames = 0; }
+  const i = renderer.info.render;
+  hud.textContent =
+    `${mode === 'dungeon' ? 'dungeon:' + theme : regionId}  seed ${seed}  tod ${tod}\n` +
+    `draw calls ${i.calls}   tris ${(i.triangles / 1000).toFixed(1)}k   fps ${fps.toFixed(0)}\n` +
+    `gen ${genMs.toFixed(0)}ms   textures.js ${texturesAvailable() ? 'live' : 'FALLBACK'}\n` +
+    `pos ${camera.position.x.toFixed(0)} ${camera.position.y.toFixed(0)} ${camera.position.z.toFixed(0)}` +
+    (world ? `\nchunks ${world.stats.chunks}  flora batches ${world.stats.floraBatches}` : '');
+  window.__stats = { calls: i.calls, tris: i.triangles, fps, genMs };
+}
+
+boot().then(loop).catch((e) => {
+  errBox.textContent += 'BOOT: ' + (e && e.stack || e) + '\n';
+  window.__ready = true;
+});
+</script>
+</body>
+</html>

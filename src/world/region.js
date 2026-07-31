@@ -3,11 +3,11 @@ import { Rand, clamp, smoothstep, lerpN, fbm2, hash2 } from '../core/rng.js';
 import {
   generateHeightmap, paintTiles, buildTerrain, heightAt, slopeAt, normalAt,
   flattenArea, carveRoad, stampTiles, makeBillboardField, floraTexture,
-  getTexture, texturesReady, TILE, MAP_TILES,
+  getTexture, texturesReady, TILE, MAP_TILES, PLAYABLE_EXTENT,
 } from './terrain.js';
-import { buildSky } from './sky.js';
+import { buildSky, FAR_CLIP, SHADE_DIST, timeTint, sunTerms } from './sky.js';
 import { generateTown } from './town.js';
-import { MeshBuilder, buildRuins, buildHouse, addProp, materialFor } from './building.js';
+import { MeshBuilder, buildRuins, buildHouse, addProp, materialFor, setBuildingLight } from './building.js';
 
 // ---------------------------------------------------------------------------
 // Regions.
@@ -25,27 +25,26 @@ export const REGIONS = {
     name: 'New Sorpigal',
     blurb: 'Green rolling meadows above a southern bay.',
     difficulty: 1,
-    profile: { base: 780, freq: 2.4, detailAmp: 200, ridge: 260, ridgeFreq: 2.0, warp: 0.34 },
+    profile: { base: 3346, freq: 7.0, detailAmp: 227, ridge: 548, ridgeFreq: 5.2, warp: 0.34 },
     coast: { dir: 'south', width: 0.26 },
-    water: -300,
-    cliffTex: 'cliff_rock', cliffSlope: 0.60, cliffDarken: 0.80,
+    water: -960,
+    cliffTex: 'cliff_rock', cliffSlope: 0.81, cliffDarken: 0.80,
     bands: [
       { tex: 'beach_wet', h: [0, 0.035] },
       { tex: 'sand', h: [0, 0.085] },
-      { tex: 'gravel', s: [0.42, 9] },
-      { tex: 'dirt', s: [0.28, 9] },
+      { tex: 'gravel', s: [0.71, 9] },
+      { tex: 'dirt', s: [0.48, 9] },
       { tex: 'forest_floor', m: [0.70, 1] },
       { tex: 'grass_lush', m: [0.52, 1] },
       { tex: 'grass' },
     ],
-    fog: { color: 0x9fb8cf, near: 1600, far: 6200 },
+    fogClass: 'none', hazeTint: [0.62, 0.67, 0.73], sky: 'plansky3',
     skyTint: [1, 1, 1], cloudiness: 0.42,
-    sunColor: [1.06, 1.00, 0.86], ambientColor: [0.42, 0.48, 0.60], ambient: 0.46,
     flora: [
-      { kind: 'tree', density: 0.24, scale: [780, 1300], m: [0.40, 1], s: [0, 0.42], h: [0.10, 0.80] },
-      { kind: 'pine', density: 0.06, scale: [850, 1400], m: [0.55, 1], s: [0, 0.5], h: [0.35, 0.9] },
-      { kind: 'bush', density: 0.10, scale: [220, 380], s: [0, 0.45] },
-      { kind: 'rock', density: 0.03, scale: [200, 420], s: [0.2, 0.9] },
+      { kind: 'tree', density: 0.12, scale: [780, 1300], m: [0.40, 1], s: [0, 0.42], h: [0.10, 0.80] },
+      { kind: 'pine', density: 0.03, scale: [850, 1400], m: [0.55, 1], s: [0, 0.5], h: [0.35, 0.9] },
+      { kind: 'bush', density: 0.05, scale: [220, 380], s: [0, 0.45] },
+      { kind: 'rock', density: 0.015, scale: [200, 420], s: [0.2, 0.9] },
     ],
     monsters: ['goblin', 'goblin_shaman', 'wolf', 'bat', 'giant_rat', 'peasant_bandit'],
     towns: [{ name: 'New Sorpigal', size: 'town', coastal: true }],
@@ -61,25 +60,24 @@ export const REGIONS = {
     name: 'Castle Ironfist',
     blurb: 'The King\'s castle above wheat fields and old oak forest.',
     difficulty: 2,
-    profile: { base: 700, freq: 2.0, detailAmp: 160, ridge: 340, ridgeFreq: 1.7, warp: 0.30, terrace: 240 },
-    coast: null, water: -1400,
-    cliffTex: 'cliff_rock', cliffSlope: 0.58, cliffDarken: 0.78,
+    profile: { base: 3003, freq: 5.8, detailAmp: 181, ridge: 717, ridgeFreq: 4.4, warp: 0.30, terrace: 600 },
+    coast: null, water: -14336,
+    cliffTex: 'cliff_rock', cliffSlope: 0.78, cliffDarken: 0.78,
     bands: [
-      { tex: 'gravel', s: [0.40, 9] },
-      { tex: 'dirt', s: [0.26, 9] },
+      { tex: 'gravel', s: [0.68, 9] },
+      { tex: 'dirt', s: [0.44, 9] },
       { tex: 'farmland', h: [0.18, 0.44], m: [0, 0.34] },
       { tex: 'forest_floor', m: [0.72, 1] },
       { tex: 'grass_lush', m: [0.46, 1] },
       { tex: 'grass' },
     ],
-    fog: { color: 0xa2b4c4, near: 1500, far: 6000 },
+    fogClass: 'light', hazeTint: [0.60, 0.64, 0.70], sky: 'plansky3',
     skyTint: [0.98, 1.0, 1.02], cloudiness: 0.5,
-    sunColor: [1.04, 1.00, 0.88], ambientColor: [0.42, 0.48, 0.58], ambient: 0.46,
     flora: [
-      { kind: 'tree', density: 0.30, scale: [820, 1450], m: [0.36, 1], s: [0, 0.4] },
-      { kind: 'pine', density: 0.08, scale: [900, 1500], m: [0.60, 1] },
-      { kind: 'bush', density: 0.09, scale: [220, 380] },
-      { kind: 'haystack_prop', density: 0.008, scale: [1, 1], h: [0.2, 0.45] },
+      { kind: 'tree', density: 0.15, scale: [820, 1450], m: [0.36, 1], s: [0, 0.4] },
+      { kind: 'pine', density: 0.04, scale: [900, 1500], m: [0.60, 1] },
+      { kind: 'bush', density: 0.045, scale: [220, 380] },
+      { kind: 'haystack_prop', density: 0.004, scale: [1, 1], h: [0.2, 0.45] },
     ],
     monsters: ['bandit', 'wolf', 'goblin', 'harpy', 'skeleton', 'zombie'],
     towns: [{ name: 'Ironfist', size: 'city', castle: true }],
@@ -95,25 +93,24 @@ export const REGIONS = {
     name: 'Free Haven',
     blurb: 'The great city of Enroth and the plains around it.',
     difficulty: 3,
-    profile: { base: 520, freq: 1.9, detailAmp: 140, ridge: 180, ridgeFreq: 1.5, warp: 0.26, flatten: 0.18 },
+    profile: { base: 2231, freq: 5.5, detailAmp: 159, ridge: 379, ridgeFreq: 3.9, warp: 0.26, flatten: 0.18 },
     coast: { dir: 'west', width: 0.20 },
-    water: -420,
-    cliffTex: 'cliff_rock', cliffSlope: 0.62, cliffDarken: 0.80,
+    water: -1344,
+    cliffTex: 'cliff_rock', cliffSlope: 0.84, cliffDarken: 0.80,
     bands: [
       { tex: 'beach_wet', h: [0, 0.04] },
       { tex: 'sand', h: [0, 0.09] },
-      { tex: 'dirt', s: [0.30, 9] },
+      { tex: 'dirt', s: [0.51, 9] },
       { tex: 'farmland', m: [0, 0.30] },
       { tex: 'grass_lush', m: [0.58, 1] },
       { tex: 'grass' },
     ],
-    fog: { color: 0xa8bccb, near: 1700, far: 6600 },
+    fogClass: 'none', hazeTint: [0.64, 0.69, 0.74], sky: 'plansky3',
     skyTint: [1, 1, 1], cloudiness: 0.4,
-    sunColor: [1.06, 1.02, 0.90], ambientColor: [0.44, 0.50, 0.60], ambient: 0.48,
     flora: [
-      { kind: 'tree', density: 0.16, scale: [800, 1300], m: [0.44, 1] },
-      { kind: 'bush', density: 0.10, scale: [220, 380] },
-      { kind: 'flowers', density: 0.07, scale: [180, 300] },
+      { kind: 'tree', density: 0.08, scale: [800, 1300], m: [0.44, 1] },
+      { kind: 'bush', density: 0.05, scale: [220, 380] },
+      { kind: 'flowers', density: 0.035, scale: [180, 300] },
     ],
     monsters: ['bandit', 'thief', 'goblin', 'wolf', 'harpy', 'apprentice_mage'],
     towns: [{ name: 'Free Haven', size: 'city', coastal: true }, { name: 'Havenshire', size: 'village' }],
@@ -128,26 +125,25 @@ export const REGIONS = {
     name: 'The Isle of Mist',
     blurb: 'A drowned island under permanent haze. Harpies nest on the crags.',
     difficulty: 5,
-    profile: { base: 900, freq: 3.0, detailAmp: 260, ridge: 700, ridgeFreq: 2.6, warp: 0.42 },
+    profile: { base: 3861, freq: 8.7, detailAmp: 295, ridge: 1476, ridgeFreq: 6.8, warp: 0.42 },
     coast: { dir: 'ring', width: 0.30 },
-    water: -180,
-    cliffTex: 'cliff_rock', cliffSlope: 0.52, cliffDarken: 0.72,
+    water: -576,
+    cliffTex: 'cliff_rock', cliffSlope: 0.70, cliffDarken: 0.72,
     bands: [
       { tex: 'beach_wet', h: [0, 0.05] },
-      { tex: 'gravel', s: [0.38, 9] },
-      { tex: 'moss_rock', s: [0.26, 9] },
+      { tex: 'gravel', s: [0.65, 9] },
+      { tex: 'moss_rock', s: [0.44, 9] },
       { tex: 'swamp_muck', h: [0, 0.14] },
       { tex: 'grass_lush', m: [0.5, 1] },
       { tex: 'grass_dry' },
     ],
-    fog: { color: 0x93a2aa, near: 700, far: 3600 },
+    fogClass: 'dense', hazeTint: [0.55, 0.58, 0.60], sky: 'plansky1',
     skyTint: [0.86, 0.90, 0.94], cloudiness: 0.86,
-    sunColor: [0.88, 0.90, 0.92], ambientColor: [0.48, 0.52, 0.56], ambient: 0.60,
     flora: [
-      { kind: 'dead_tree', density: 0.14, scale: [700, 1200] },
-      { kind: 'pine', density: 0.10, scale: [800, 1300], m: [0.5, 1] },
-      { kind: 'fern', density: 0.14, scale: [200, 340] },
-      { kind: 'rock', density: 0.06, scale: [220, 500], s: [0.2, 0.9] },
+      { kind: 'dead_tree', density: 0.07, scale: [700, 1200] },
+      { kind: 'pine', density: 0.05, scale: [800, 1300], m: [0.5, 1] },
+      { kind: 'fern', density: 0.07, scale: [200, 340] },
+      { kind: 'rock', density: 0.03, scale: [220, 500], s: [0.2, 0.9] },
     ],
     monsters: ['harpy', 'gargoyle', 'wyvern', 'ghost', 'cutpurse'],
     towns: [{ name: 'Mist', size: 'village', coastal: true }],
@@ -162,24 +158,23 @@ export const REGIONS = {
     name: 'Bootleg Bay',
     blurb: 'White sand, palms, and lizardmen in the shallows.',
     difficulty: 2,
-    profile: { base: 520, freq: 2.2, detailAmp: 180, ridge: 380, ridgeFreq: 2.4, warp: 0.36 },
+    profile: { base: 2231, freq: 6.4, detailAmp: 204, ridge: 801, ridgeFreq: 6.2, warp: 0.36 },
     coast: { dir: 'ring', width: 0.24 },
-    water: -120,
-    cliffTex: 'cliff_sand', cliffSlope: 0.56, cliffDarken: 0.84,
+    water: -384,
+    cliffTex: 'cliff_sand', cliffSlope: 0.76, cliffDarken: 0.84,
     bands: [
       { tex: 'beach_wet', h: [0, 0.06] },
       { tex: 'sand', h: [0, 0.22] },
-      { tex: 'sand_dune', s: [0.3, 9], h: [0, 0.5] },
+      { tex: 'sand_dune', s: [0.51, 9], h: [0, 0.5] },
       { tex: 'grass_lush', m: [0.55, 1] },
       { tex: 'grass_dry' },
     ],
-    fog: { color: 0xc8d4d0, near: 2000, far: 7000 },
+    fogClass: 'none', hazeTint: [0.72, 0.75, 0.74], sky: 'plansky2',
     skyTint: [1.06, 1.04, 0.98], cloudiness: 0.3,
-    sunColor: [1.12, 1.06, 0.90], ambientColor: [0.52, 0.56, 0.60], ambient: 0.50,
     flora: [
-      { kind: 'palm', density: 0.20, scale: [900, 1500], h: [0.03, 0.5] },
-      { kind: 'bush', density: 0.10, scale: [220, 400], m: [0.4, 1] },
-      { kind: 'rock', density: 0.03, scale: [200, 420], s: [0.25, 0.9] },
+      { kind: 'palm', density: 0.1, scale: [900, 1500], h: [0.03, 0.5] },
+      { kind: 'bush', density: 0.05, scale: [220, 400], m: [0.4, 1] },
+      { kind: 'rock', density: 0.015, scale: [200, 420], s: [0.25, 0.9] },
     ],
     monsters: ['lizardman', 'lizard_archer', 'crocodile', 'giant_crab', 'pirate'],
     towns: [{ name: 'Bootleg Bay', size: 'village', coastal: true }],
@@ -194,25 +189,24 @@ export const REGIONS = {
     name: 'Silver Cove',
     blurb: 'A cold rocky coast under black pines.',
     difficulty: 4,
-    profile: { base: 900, freq: 2.6, detailAmp: 240, ridge: 620, ridgeFreq: 2.0, warp: 0.36 },
+    profile: { base: 3861, freq: 7.5, detailAmp: 272, ridge: 1307, ridgeFreq: 5.2, warp: 0.36 },
     coast: { dir: 'north', width: 0.24 },
-    water: -260,
-    cliffTex: 'cliff_rock', cliffSlope: 0.50, cliffDarken: 0.74,
+    water: -832,
+    cliffTex: 'cliff_rock', cliffSlope: 0.68, cliffDarken: 0.74,
     bands: [
       { tex: 'beach_wet', h: [0, 0.04] },
       { tex: 'gravel', h: [0, 0.10] },
-      { tex: 'moss_rock', s: [0.34, 9] },
+      { tex: 'moss_rock', s: [0.58, 9] },
       { tex: 'forest_floor', m: [0.5, 1] },
       { tex: 'grass' },
     ],
-    fog: { color: 0x8ea3b4, near: 1200, far: 5200 },
+    fogClass: 'light', hazeTint: [0.54, 0.60, 0.67], sky: 'plansky1',
     skyTint: [0.92, 0.96, 1.02], cloudiness: 0.68,
-    sunColor: [0.96, 0.98, 1.00], ambientColor: [0.42, 0.48, 0.58], ambient: 0.52,
     flora: [
-      { kind: 'pine', density: 0.34, scale: [950, 1700], s: [0, 0.5] },
-      { kind: 'fir', density: 0.14, scale: [900, 1500] },
-      { kind: 'rock', density: 0.06, scale: [220, 500], s: [0.2, 0.9] },
-      { kind: 'stump', density: 0.02, scale: [180, 260] },
+      { kind: 'pine', density: 0.17, scale: [950, 1700], s: [0, 0.5] },
+      { kind: 'fir', density: 0.07, scale: [900, 1500] },
+      { kind: 'rock', density: 0.03, scale: [220, 500], s: [0.2, 0.9] },
+      { kind: 'stump', density: 0.01, scale: [180, 260] },
     ],
     monsters: ['bandit', 'wolf', 'werewolf', 'ogre', 'harpy', 'gargoyle'],
     towns: [{ name: 'Silver Cove', size: 'town', coastal: true }],
@@ -227,24 +221,23 @@ export const REGIONS = {
     name: 'Blackshire',
     blurb: 'Dead forest over black water. Nothing here is still alive.',
     difficulty: 6,
-    profile: { base: 620, freq: 2.2, detailAmp: 220, ridge: 200, ridgeFreq: 1.8, warp: 0.40, flatten: 0.1 },
-    coast: null, water: -260,
-    cliffTex: 'cliff_rock', cliffSlope: 0.55, cliffDarken: 0.66,
+    profile: { base: 2660, freq: 6.4, detailAmp: 249, ridge: 422, ridgeFreq: 4.7, warp: 0.40, flatten: 0.1 },
+    coast: null, water: -2662,
+    cliffTex: 'cliff_rock', cliffSlope: 0.74, cliffDarken: 0.66,
     bands: [
       { tex: 'swamp_muck', h: [0, 0.16] },
       { tex: 'mud', h: [0, 0.28], m: [0.5, 1] },
-      { tex: 'moss_rock', s: [0.34, 9] },
+      { tex: 'moss_rock', s: [0.58, 9] },
       { tex: 'forest_floor', m: [0.42, 1] },
       { tex: 'grass_dry' },
     ],
-    fog: { color: 0x5c6458, near: 800, far: 4000 },
+    fogClass: 'medium', hazeTint: [0.36, 0.40, 0.36], sky: 'plansky1',
     skyTint: [0.62, 0.66, 0.62], cloudiness: 0.9,
-    sunColor: [0.72, 0.74, 0.66], ambientColor: [0.34, 0.38, 0.36], ambient: 0.58,
     flora: [
-      { kind: 'dead_tree', density: 0.40, scale: [850, 1600] },
-      { kind: 'mushroom', density: 0.08, scale: [200, 340] },
-      { kind: 'reed', density: 0.10, scale: [220, 380], h: [0, 0.2] },
-      { kind: 'rock', density: 0.03, scale: [200, 400] },
+      { kind: 'dead_tree', density: 0.2, scale: [850, 1600] },
+      { kind: 'mushroom', density: 0.04, scale: [200, 340] },
+      { kind: 'reed', density: 0.05, scale: [220, 380], h: [0, 0.2] },
+      { kind: 'rock', density: 0.015, scale: [200, 400] },
     ],
     monsters: ['zombie', 'skeleton', 'ghoul', 'vampire_bat', 'wight', 'necromancer'],
     towns: [{ name: 'Blackshire', size: 'village' }],
@@ -259,23 +252,22 @@ export const REGIONS = {
     name: 'White Cap',
     blurb: 'Snowfields under a dwarven mountain.',
     difficulty: 5,
-    profile: { base: 1000, freq: 2.2, detailAmp: 240, ridge: 1500, ridgeFreq: 1.9, warp: 0.34, bias: 400 },
-    coast: null, water: -1800,
-    cliffTex: 'cliff_snow', cliffSlope: 0.52, cliffDarken: 0.78,
+    profile: { base: 4290, freq: 6.4, detailAmp: 272, ridge: 3162, ridgeFreq: 4.9, warp: 0.34, bias: 1600 },
+    coast: null, water: -18432,
+    cliffTex: 'cliff_snow', cliffSlope: 0.70, cliffDarken: 0.78,
     bands: [
-      { tex: 'snow_rock', s: [0.40, 9] },
+      { tex: 'snow_rock', s: [0.68, 9] },
       { tex: 'snow', h: [0.42, 1] },
-      { tex: 'gravel', s: [0.30, 9] },
+      { tex: 'gravel', s: [0.51, 9] },
       { tex: 'tundra', m: [0, 0.45] },
       { tex: 'snow' },
     ],
-    fog: { color: 0xc4d2de, near: 1200, far: 5400 },
+    fogClass: 'light', hazeTint: [0.74, 0.79, 0.85], sky: 'plansky2',
     skyTint: [0.96, 0.99, 1.06], cloudiness: 0.62,
-    sunColor: [1.00, 1.02, 1.06], ambientColor: [0.52, 0.58, 0.68], ambient: 0.56,
     flora: [
-      { kind: 'fir', density: 0.16, scale: [850, 1500], h: [0, 0.6] },
-      { kind: 'rock', density: 0.08, scale: [220, 520], s: [0.2, 0.9] },
-      { kind: 'pine', density: 0.06, scale: [800, 1300], h: [0, 0.5] },
+      { kind: 'fir', density: 0.08, scale: [850, 1500], h: [0, 0.6] },
+      { kind: 'rock', density: 0.04, scale: [220, 520], s: [0.2, 0.9] },
+      { kind: 'pine', density: 0.03, scale: [800, 1300], h: [0, 0.5] },
     ],
     monsters: ['ogre', 'yeti', 'ice_elemental', 'dwarf_raider', 'wolf'],
     towns: [{ name: 'White Cap', size: 'village' }],
@@ -290,22 +282,21 @@ export const REGIONS = {
     name: 'Kriegspire',
     blurb: 'Ash, black rock and dragons above the treeline.',
     difficulty: 8,
-    profile: { base: 1200, freq: 2.2, detailAmp: 300, ridge: 2200, ridgeFreq: 2.1, warp: 0.40, bias: 300 },
-    coast: null, water: -2600,
-    cliffTex: 'cliff_volcanic', cliffSlope: 0.48, cliffDarken: 0.66,
+    profile: { base: 5148, freq: 6.4, detailAmp: 340, ridge: 4638, ridgeFreq: 5.5, warp: 0.40, bias: 1200 },
+    coast: null, water: -26624,
+    cliffTex: 'cliff_volcanic', cliffSlope: 0.65, cliffDarken: 0.66,
     bands: [
-      { tex: 'volcanic_rock', s: [0.40, 9] },
+      { tex: 'volcanic_rock', s: [0.68, 9] },
       { tex: 'ash', h: [0.5, 1] },
       { tex: 'volcanic_rock', h: [0.66, 1] },
-      { tex: 'gravel', s: [0.26, 9] },
+      { tex: 'gravel', s: [0.44, 9] },
       { tex: 'ash' },
     ],
-    fog: { color: 0x6b5a56, near: 900, far: 4600 },
+    fogClass: 'medium', hazeTint: [0.46, 0.38, 0.35], sky: 'plansky1',
     skyTint: [0.92, 0.72, 0.64], cloudiness: 0.8,
-    sunColor: [1.10, 0.82, 0.62], ambientColor: [0.44, 0.36, 0.34], ambient: 0.52,
     flora: [
-      { kind: 'dead_tree', density: 0.08, scale: [700, 1200], h: [0, 0.5] },
-      { kind: 'rock', density: 0.14, scale: [240, 620], s: [0.15, 0.9] },
+      { kind: 'dead_tree', density: 0.04, scale: [700, 1200], h: [0, 0.5] },
+      { kind: 'rock', density: 0.07, scale: [240, 620], s: [0.15, 0.9] },
     ],
     monsters: ['dragon', 'fire_elemental', 'magma_elemental', 'gargoyle', 'devil'],
     towns: [{ name: 'Kriegspire', size: 'village' }],
@@ -320,10 +311,10 @@ export const REGIONS = {
     name: 'Eel Infested Waters',
     blurb: 'Marsh, reed and standing water as far as you can see.',
     difficulty: 4,
-    profile: { base: 340, freq: 1.8, detailAmp: 140, ridge: 0, warp: 0.44, flatten: 0.3 },
+    profile: { base: 1459, freq: 5.2, detailAmp: 159, ridge: 0, warp: 0.44, flatten: 0.3 },
     coast: { dir: 'east', width: 0.34 },
-    water: -60,
-    cliffTex: 'cliff_rock', cliffSlope: 0.62, cliffDarken: 0.78,
+    water: -192,
+    cliffTex: 'cliff_rock', cliffSlope: 0.84, cliffDarken: 0.78,
     bands: [
       { tex: 'swamp_muck', h: [0, 0.20] },
       { tex: 'mud', h: [0, 0.36] },
@@ -331,13 +322,12 @@ export const REGIONS = {
       { tex: 'swamp_muck', m: [0, 0.30] },
       { tex: 'grass_dry' },
     ],
-    fog: { color: 0x86927e, near: 900, far: 4400 },
+    fogClass: 'medium', hazeTint: [0.50, 0.54, 0.46], sky: 'plansky1',
     skyTint: [0.84, 0.88, 0.80], cloudiness: 0.72,
-    sunColor: [0.94, 0.96, 0.82], ambientColor: [0.42, 0.46, 0.40], ambient: 0.54,
     flora: [
-      { kind: 'reed', density: 0.30, scale: [220, 420], h: [0, 0.3] },
-      { kind: 'dead_tree', density: 0.14, scale: [700, 1300] },
-      { kind: 'fern', density: 0.12, scale: [200, 340] },
+      { kind: 'reed', density: 0.15, scale: [220, 420], h: [0, 0.3] },
+      { kind: 'dead_tree', density: 0.07, scale: [700, 1300] },
+      { kind: 'fern', density: 0.06, scale: [200, 340] },
     ],
     monsters: ['eel', 'lizardman', 'swamp_troll', 'giant_leech', 'bog_beast'],
     towns: [{ name: 'Eelford', size: 'village', coastal: true }],
@@ -353,22 +343,21 @@ export const REGIONS = {
     name: 'Dragonsand',
     blurb: 'A dead desert of shifting dunes and buried temples.',
     difficulty: 9,
-    profile: { base: 620, freq: 3.4, detailAmp: 300, ridge: 320, ridgeFreq: 4.0, warp: 0.5 },
-    coast: null, water: -2000,
-    cliffTex: 'cliff_sand', cliffSlope: 0.54, cliffDarken: 0.86,
+    profile: { base: 2660, freq: 9.9, detailAmp: 340, ridge: 675, ridgeFreq: 10.4, warp: 0.5 },
+    coast: null, water: -20480,
+    cliffTex: 'cliff_sand', cliffSlope: 0.73, cliffDarken: 0.86,
     bands: [
-      { tex: 'gravel', s: [0.40, 9] },
+      { tex: 'gravel', s: [0.68, 9] },
       { tex: 'sand_dune', h: [0.45, 1] },
       { tex: 'sand', m: [0.3, 1] },
       { tex: 'sand_dune' },
     ],
-    fog: { color: 0xd8c396, near: 1800, far: 6600 },
+    fogClass: 'none', hazeTint: [0.80, 0.72, 0.56], sky: 'plansky2',
     skyTint: [1.10, 1.02, 0.82], cloudiness: 0.18,
-    sunColor: [1.16, 1.08, 0.86], ambientColor: [0.60, 0.56, 0.46], ambient: 0.50,
     flora: [
-      { kind: 'cactus', density: 0.05, scale: [300, 600] },
-      { kind: 'rock', density: 0.05, scale: [220, 520] },
-      { kind: 'dead_tree', density: 0.015, scale: [600, 1000] },
+      { kind: 'cactus', density: 0.025, scale: [300, 600] },
+      { kind: 'rock', density: 0.025, scale: [220, 520] },
+      { kind: 'dead_tree', density: 0.007, scale: [600, 1000] },
     ],
     monsters: ['sand_worm', 'mummy', 'genie', 'scorpion', 'dragon'],
     towns: [{ name: 'The Oasis', size: 'village' }],
@@ -383,22 +372,21 @@ export const REGIONS = {
     name: 'Frozen Highlands',
     blurb: 'Wind-scoured tundra where nothing grows above the knee.',
     difficulty: 7,
-    profile: { base: 900, freq: 2.0, detailAmp: 220, ridge: 900, ridgeFreq: 1.7, warp: 0.30, terrace: 300 },
-    coast: null, water: -2200,
-    cliffTex: 'cliff_snow', cliffSlope: 0.50, cliffDarken: 0.76,
+    profile: { base: 3861, freq: 5.8, detailAmp: 249, ridge: 1897, ridgeFreq: 4.4, warp: 0.30, terrace: 750 },
+    coast: null, water: -22528,
+    cliffTex: 'cliff_snow', cliffSlope: 0.68, cliffDarken: 0.76,
     bands: [
-      { tex: 'snow_rock', s: [0.38, 9] },
+      { tex: 'snow_rock', s: [0.65, 9] },
       { tex: 'snow', h: [0.55, 1] },
-      { tex: 'gravel', s: [0.28, 9] },
+      { tex: 'gravel', s: [0.48, 9] },
       { tex: 'tundra' },
     ],
-    fog: { color: 0xb0c0cc, near: 1100, far: 5000 },
+    fogClass: 'light', hazeTint: [0.68, 0.74, 0.80], sky: 'plansky2',
     skyTint: [0.94, 0.98, 1.06], cloudiness: 0.66,
-    sunColor: [0.98, 1.00, 1.06], ambientColor: [0.50, 0.56, 0.66], ambient: 0.56,
     flora: [
-      { kind: 'fir', density: 0.07, scale: [700, 1200], h: [0, 0.5] },
-      { kind: 'rock', density: 0.12, scale: [220, 560], s: [0.15, 0.9] },
-      { kind: 'shrub', density: 0.10, scale: [180, 300] },
+      { kind: 'fir', density: 0.035, scale: [700, 1200], h: [0, 0.5] },
+      { kind: 'rock', density: 0.06, scale: [220, 560], s: [0.15, 0.9] },
+      { kind: 'shrub', density: 0.05, scale: [180, 300] },
     ],
     monsters: ['yeti', 'ice_elemental', 'frost_giant', 'wolf', 'wyvern'],
     towns: [{ name: 'Highfrost', size: 'village' }],
@@ -413,23 +401,22 @@ export const REGIONS = {
     name: 'Paradise Valley',
     blurb: 'Impossibly green, impossibly quiet, and far too dangerous.',
     difficulty: 10,
-    profile: { base: 820, freq: 2.0, detailAmp: 180, ridge: 900, ridgeFreq: 1.6, warp: 0.30 },
-    coast: null, water: -900,
-    cliffTex: 'cliff_rock', cliffSlope: 0.56, cliffDarken: 0.82,
+    profile: { base: 3518, freq: 5.8, detailAmp: 204, ridge: 1897, ridgeFreq: 4.2, warp: 0.30 },
+    coast: null, water: -9216,
+    cliffTex: 'cliff_rock', cliffSlope: 0.76, cliffDarken: 0.82,
     bands: [
-      { tex: 'moss_rock', s: [0.40, 9] },
-      { tex: 'dirt', s: [0.26, 9] },
+      { tex: 'moss_rock', s: [0.68, 9] },
+      { tex: 'dirt', s: [0.44, 9] },
       { tex: 'forest_floor', m: [0.72, 1] },
       { tex: 'grass_lush' },
     ],
-    fog: { color: 0xa8c8b0, near: 2000, far: 7200 },
+    fogClass: 'none', hazeTint: [0.62, 0.72, 0.64], sky: 'plansky3',
     skyTint: [1.02, 1.06, 1.00], cloudiness: 0.30,
-    sunColor: [1.10, 1.08, 0.94], ambientColor: [0.46, 0.56, 0.50], ambient: 0.48,
     flora: [
-      { kind: 'tree', density: 0.34, scale: [900, 1700], s: [0, 0.44] },
-      { kind: 'flowers', density: 0.14, scale: [200, 340] },
-      { kind: 'bush', density: 0.12, scale: [240, 420] },
-      { kind: 'fern', density: 0.10, scale: [200, 340] },
+      { kind: 'tree', density: 0.17, scale: [900, 1700], s: [0, 0.44] },
+      { kind: 'flowers', density: 0.07, scale: [200, 340] },
+      { kind: 'bush', density: 0.06, scale: [240, 420] },
+      { kind: 'fern', density: 0.05, scale: [200, 340] },
     ],
     monsters: ['titan', 'dragon', 'archmage', 'behemoth', 'devil'],
     towns: [{ name: 'The Retreat', size: 'village' }],
@@ -459,6 +446,12 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
   const id = REGIONS[regionId] ? regionId : 'new_sorpigal';
   const prog = onProgress || (() => { });
   const r = new Rand(typeof seed === 'string' ? `${id}:${seed}` : ((seed >>> 0) ^ (id.length * 7919)));
+
+  // Lighting is baked, so the hour everything is generated at is fixed here.
+  // 09:30 puts the sun low in the east, which is the reading that shows the
+  // landform best; `terrain.setTimeOfDay` re-bakes it later without remeshing.
+  const tod = opts.timeOfDay === undefined ? 9.5 : opts.timeOfDay;
+  setBuildingLight(tod);
 
   prog(0.02, 'waking textures');
   await texturesReady;
@@ -550,18 +543,19 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
     if (best && best !== d) linkRoad(best, d, 620);
   }
 
-  // Flatten town shelves first, then relax the road corridors into them.
+  // Town shelves are the only thing that levels the ground; MM6 roads are
+  // transition tiles painted over whatever the terrain is doing, which is
+  // exactly why they run straight over hilltops instead of cutting through.
   for (const t of townSites) {
     const R = t.size === 'city' ? 5600 : t.size === 'town' ? 3800 : 2400;
     flattenArea(hm, t.x, t.z, R * 0.95, heightAt(hm, t.x, t.z), 1.5);
   }
-  for (const rd of roads) carveRoad(hm, rd.points, { width: rd.width, tex: rd.tex, tiles: false });
   await yieldNow();
 
   // --- texture classification --------------------------------------------
   prog(0.34, 'painting ground');
   paintTiles(hm, def);
-  for (const rd of roads) carveRoad(hm, rd.points, { width: rd.width, tex: rd.tex, heights: false });
+  for (const rd of roads) carveRoad(hm, rd.points, { width: rd.width, tex: rd.tex });
   await yieldNow();
 
   // --- towns --------------------------------------------------------------
@@ -573,7 +567,7 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
       name: t.name, size: t.size, x: t.x, z: t.z, hm,
       coastal: !!t.coastal, region: id, night: opts.night,
       roadTex: t.size === 'village' ? 'road_dirt' : 'road_cobble',
-      fogColor: def.fog.color, fogNear: def.fog.near, fogFar: def.fog.far,
+      hazeTint: def.hazeTint, fogFar: FAR_CLIP,
       treeKind: (def.flora[0] || {}).kind || 'tree',
       wallTex: id === 'kriegspire' ? 'wall_castle_dark' : 'wall_castle',
     }, r.int(1e9));
@@ -639,11 +633,9 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
   // --- terrain mesh -------------------------------------------------------
   prog(0.76, 'meshing terrain');
   const terrain = buildTerrain(hm, {
-    sunColor: new THREE.Color(...(def.sunColor || [1, 1, 1])),
-    ambientColor: new THREE.Color(...(def.ambientColor || [0.45, 0.5, 0.6])),
-    ambient: def.ambient,
+    timeOfDay: tod,
     cliffDarken: def.cliffDarken,
-    fogFar: def.fog.far,
+    fogFar: FAR_CLIP,
     waterTex: def.waterTex || 'water',
   });
   group.add(terrain.group);
@@ -651,7 +643,7 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
 
   // --- flora --------------------------------------------------------------
   prog(0.86, 'planting');
-  const flora = scatterFlora(hm, def, r, townSites, { fogColor: def.fog.color, fogNear: def.fog.near, fogFar: def.fog.far });
+  const flora = scatterFlora(hm, def, r, townSites, { fogNear: SHADE_DIST, fogFar: FAR_CLIP });
   group.add(flora.group);
   await yieldNow();
 
@@ -678,12 +670,7 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
   // --- sky ----------------------------------------------------------------
   let sky = null;
   if (opts.scene) {
-    if (!opts.scene.fog) opts.scene.fog = new THREE.Fog(def.fog.color, def.fog.near, def.fog.far);
-    sky = buildSky(opts.scene, {
-      camera: opts.camera,
-      fogNear: def.fog.near, fogFar: def.fog.far,
-      region: def,
-    });
+    sky = buildSky(opts.scene, { camera: opts.camera, region: def });
     sky.setRegion(def);
   }
 
@@ -696,19 +683,30 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
     towns, dungeons, props, spawns, colliders, water, roads,
     flora,
     bounds: { min: new THREE.Vector3(-half, hm.min, -half), max: new THREE.Vector3(half, hm.max, half), radius: half },
-    ambient: { color: def.ambientColor, amount: def.ambient, sun: def.sunColor },
-    fog: def.fog,
+    ambient: sunTerms(tod),
+    fogClass: def.fogClass, hazeTint: def.hazeTint,
     weather: def.weather,
     difficulty: def.difficulty,
     heightAt: (x, z) => heightAt(hm, x, z),
     slopeAt: (x, z) => slopeAt(hm, x, z),
     normalAt: (x, z) => normalAt(hm, x, z),
     update(dt, camera, timeOfDay, weather) {
-      terrain.update(camera);
+      // Sky first: it owns the haze colour and the fog band, and everything
+      // else has to be told the same numbers or the horizon seam shows.
+      if (sky) {
+        sky.update(dt, timeOfDay, weather || def.weather, camera);
+        const f = opts.scene && opts.scene.fog;
+        if (f) {
+          const light = sky.state.tint;
+          for (const b of flora.batches) b.mesh.userData.setFog(f.color, f.near, f.far, light);
+          for (const t of towns) if (t.trees) t.trees.userData.setFog(f.color, f.near, f.far, light);
+        }
+      }
+      terrain.update(camera, dt);
       flora.update(camera);
       for (const t of towns) t.update(camera);
-      if (sky) sky.update(dt, timeOfDay, weather || def.weather, camera);
     },
+    setTimeOfDay(hours) { terrain.setTimeOfDay(hours); },
     dispose() {
       terrain.dispose();
       flora.dispose();

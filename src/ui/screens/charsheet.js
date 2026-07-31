@@ -54,6 +54,17 @@ export class CharSheetScreen extends Screen {
 
   onOpen() { this.sound('page'); }
 
+  openInventory() {
+    this.sound('page');
+    this.push(new InventoryScreen(this.session, this.ui, this.hud,
+      Object.assign({}, this.opts, { sheet: this })));
+  }
+
+  // The paperdoll is live on every tab, but managing what is on it belongs to
+  // the inventory page, so a click there opens it.
+  slotClick() { this.openInventory(); }
+  showPopup() { this.openInventory(); }
+
   handleKey(code) {
     if (code === 'KeyC' || code === 'Escape') { this.close(); return true; }
     if (code === 'Tab') { this.tab = this.tab === 0 ? 1 : this.tab === 1 ? 3 : 0; return true; }
@@ -93,10 +104,8 @@ export class CharSheetScreen extends Screen {
     const clicked = drawTabs(ctx, this.ui, this.id, TAB_X, TAB_Y, TAB_W, TAB_H, TABS,
       this.tab === 3 ? 3 : this.tab);
     if (clicked >= 0) {
-      if (clicked === 2) {
-        this.sound('page');
-        this.push(new InventoryScreen(this.session, this.ui, this.hud, this.opts));
-      } else if (clicked !== this.tab) { this.tab = clicked; this.sound('page'); }
+      if (clicked === 2) this.openInventory();
+      else if (clicked !== this.tab) { this.tab = clicked; this.sound('page'); }
     }
     this.drawExit(ctx);
     this.pollPartyBar();

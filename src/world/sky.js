@@ -103,11 +103,11 @@ export function skyTexture(kind = 'plansky3') {
       const streak = tileFbm2(u * 2.2, v * 7.0, 7, 4, 0.5, seed + 11);
       const fine = tileFbm2(u * 9, v * 9, 9, 3, 0.5, seed + 29);
       let n = big * 0.52 + streak * 0.30 + fine * 0.18;
-      const cloud = smoothstep(0.44, 0.72, n);
-      // Base sky is a mid blue; clouds ride up toward off-white. Total value
-      // range stays narrow so the grey multiply has room to darken 32 steps.
-      const base = rampSample('sky', 0.46 + fine * 0.10);
-      const lit = mixC(base, [232, 233, 230], cloud);
+      const cloud = smoothstep(0.42, 0.74, n);
+      // Base sky is a pale hazy blue - MM6's plate is much lighter than memory
+      // suggests, because the grey multiply only ever darkens it from here.
+      const base = rampSample('sky', 0.70 + fine * 0.12);
+      const lit = mixC(base, [240, 240, 236], cloud);
       // Underside shading of each bank.
       const under = smoothstep(0.40, 0.62, tileFbm2(u * 3 + 0.05, v * 3 + 0.09, 3, 4, 0.55, seed));
       p.setArr(x, y, scaleC(lit, 0.90 + 0.14 * under));
@@ -321,31 +321,41 @@ export function buildSky(scene, opts = {}) {
       Math.min(skyCap, g * state.skyTintRGB[2]),
     );
 
-    // Haze colour. On a foggy day it is the engine's neutral grey ramp; on a
-    // clear day the world simply darkens toward the tinted plate colour, so we
-    // use the plate mean and let sky and fog agree exactly.
-    const foggy = state.weather === 'fog' || state.weather === 'cloudy' || state.fogClass !== 'none';
-    const density = state.night ? 1 : (state.tod < 6 ? 6 - state.tod : state.tod >= 20 ? state.tod - 20 : 0);
-    if (foggy) {
-      const v = ((1 - clamp(density, 0, 1)) * 200 + clamp(density, 0, 1) * 31) / 255 * g;
-      state.haze.setRGB(v * 1.0, v * 1.0, v * 1.02);
+    // Two separate systems, exactly as the engine has them.
+    //
+    // (a) Always on: distance darkening. Geometry is multiplied by the
+    //     time-of-day grey `g`, ramping in with distance. Blending toward
+    //     black by (1-g) is the same operation and is what THREE.Fog can do,
+    //     so on a clear day at noon there is no haze at all - correct.
+    // (b) Foggy days only: a real neutral-grey fog, #C8C8C8 in daylight down
+    //     to #1F1F1F at night, saturating at fogStrongDistance.
+    const cls = FOG_CLASSES[state.fogClass] || FOG_CLASSES.none;
+    const forced = state.weather === 'fog' ? FOG_CLASSES.dense
+      : state.weather === 'cloudy' ? FOG_CLASSES.light : null;
+    const use = forced || cls;
+    const density = state.night ? 1
+      : (state.tod < 6 ? 6 - state.tod : state.tod >= 20 ? state.tod - 20 : 0);
+    const cap = 216 / 255;
+
+    if (use.on) {
+      const dv = clamp(density, 0, 1);
+      const v = ((1 - dv) * 200 + dv * 31) / 255;
+      fog.color.setRGB(v, v, v * 1.01);
+      fog.near = use.weak;
+      fog.far = use.weak + Math.max(1, use.strong - use.weak) / cap;
+      // The sub-horizon fill is the fog colour: on a foggy day the world and
+      // the sky both end in the same grey wall.
+      state.haze.copy(fog.color);
     } else {
+      const maxA = Math.min(cap, 1 - g);
+      fog.color.setRGB(0, 0, 0);
+      fog.near = SHADE_DIST;
+      fog.far = maxA < 0.01 ? 1e7 : SHADE_DIST + (FAR_CLIP - SHADE_DIST) / maxA;
+      // Clear day: the horizon fill is the cloud plate's own mean, tinted the
+      // same way the sky quad above it is, so the two meet invisibly.
       state.haze.setRGB(state.plate.r * g, state.plate.g * g, state.plate.b * g);
     }
     mat.uniforms.uHaze.value.copy(state.haze);
-
-    // Fog: linear toward the haze colour, capped at 216/255 on geometry by
-    // pushing `far` out past the clip plane.
-    const cls = FOG_CLASSES[state.fogClass] || FOG_CLASSES.none;
-    let weak, strong;
-    if (cls.on) { weak = cls.weak; strong = cls.strong; }
-    else if (state.weather === 'fog') { weak = 0; strong = 3000; }
-    else if (state.weather === 'cloudy') { weak = SHADE_DIST; strong = FAR_CLIP; }
-    else { weak = SHADE_DIST; strong = FAR_CLIP; }
-    const cap = 216 / 255;
-    fog.color.copy(state.haze);
-    fog.near = weak;
-    fog.far = weak + Math.max(1, (strong - weak)) / cap;
 
     // Cloud plate self-drift; MM6's sky moves even when you stand still.
     mat.uniforms.uDrift.value.set(elapsed * state.drift, elapsed * state.drift * 0.42);
@@ -386,6 +396,8 @@ export function buildSky(scene, opts = {}) {
 
   function setViewport(w, h) {
     mat.uniforms.uViewportH.value = h;
+    // The 39px band is measured against MM6's 345px viewport, so scale it.
+    mat.uniforms.uBandPx.value = FOG_HORIZON_PX * (h / 345);
     snow.mat.uniforms.uViewport.value.set(w, h);
   }
 

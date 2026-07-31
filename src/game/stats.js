@@ -607,7 +607,9 @@ export function armorClass(character) {
  * the weapon skill's contribution plus equipment. Melee also counts Might.
  */
 export function attackBonus(character, weaponSkillId, ranged = false) {
-  let atk = bonusOf(character, 'accuracy');
+  // Experience counts for as much as talent: without the level term a
+  // veteran's chance to hit would fall behind the armour class curve.
+  let atk = bonusOf(character, 'accuracy') + (character.level | 0);
   if (!ranged) atk += Math.floor(bonusOf(character, 'might') / 2);
   if (weaponSkillId) {
     const lv = skillLevelOf(character, weaponSkillId);

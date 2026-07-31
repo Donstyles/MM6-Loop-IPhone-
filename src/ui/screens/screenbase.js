@@ -45,17 +45,17 @@ export function exitRect() {
 }
 
 // --- ink --------------------------------------------------------------------
-// MM6's UI palette, taken from the decompiled colour table.
+// MM6's UI palette, straight from font.js (which owns the colour table).
 
-export const WHITE = '#ffffff';                       // default UI text
-export const HILITE = F.TEXT_HILITE || '#e1cd23';     // hovered / clickable: gold
-export const CANARY = '#ffff9b';                      // headers, tooltips
-export const GREEN = '#00e100';                       // buffed above base
-export const SCARLET = '#ff2300';                     // drained below base
-export const RED = '#ff0000';                         // broken / severe
-export const BOLT = '#00afff';                        // learnable skill
-export const BOOK_INK = '#4b4b4b';                    // body text on a book page
-export const DIM = '#9a9a9a';
+export const WHITE = F.TEXT_NORMAL || '#FFFFFF';      // default UI text
+export const HILITE = F.TEXT_HILITE || '#E1CD23';     // hovered / clickable: gold
+export const CANARY = F.TEXT_HEADER || '#FFFF9B';     // headers, tooltips
+export const GREEN = F.TEXT_GOOD || '#00E100';        // buffed above base
+export const SCARLET = F.TEXT_BAD || '#FF2300';       // drained below base
+export const RED = F.TEXT_RED || '#FF0000';           // broken / severe
+export const BOLT = F.TEXT_LEARN || '#00AFFF';        // learnable skill
+export const BOOK_INK = F.TEXT_DARK || '#4B4B4B';     // body text on a book page
+export const DIM = F.TEXT_DIM || '#A0A0A0';
 
 /** Award / title text cycles through MM6's six pastels. */
 export const PASTELS = ['#f86ca0', '#70dcf8', '#c0c0f0', '#40f460', '#e8f460', '#f0fcc0'];
@@ -143,35 +143,36 @@ export const A = {
     guard('stone', () => UI.drawStonePanel(ctx, x | 0, y | 0, w | 0, h | 0, opts || {}),
       () => ctx.drawImage(scratch(`st${w}x${h}`, w, h, fbStone), x | 0, y | 0));
   },
-  /** `tone`: 'sheet' is MM6's dark leather sheet, 'page' the pale book page. */
+  /** `tone`: 'sheet' is MM6's tooled leather sheet, 'page' the pale book page. */
   parchment(ctx, x, y, w, h, opts) {
     const tone = (opts && opts.tone) || 'page';
+    const seed = (opts && opts.seed) || 11;
     guard('parchment', () => {
-      const c = UI.parchment(w | 0, h | 0, opts || {});
+      const c = UI.parchment(w | 0, h | 0, seed);
       if (!c || !c.width) throw new Error('no parchment');
       ctx.drawImage(c, x | 0, y | 0);
-      if (tone === 'sheet') {
-        // Darken whatever we were given: MM6's sheet is tooled leather, and the
-        // values on it print white.
-        ctx.globalAlpha = 0.42; ctx.fillStyle = '#1a1208';
-        ctx.fillRect(x | 0, y | 0, w | 0, h | 0); ctx.globalAlpha = 1;
-      }
     }, () => {
-      const key = `pa${tone}${w}x${h}`;
-      const paint = tone === 'sheet' ? parchmentPainter(5.2, 7.4, 0x5eed01) : parchmentPainter(10.6, 12.8, 0x5eed01);
-      ctx.drawImage(scratch(key, w, h, paint), x | 0, y | 0);
+      const key = `pa${w}x${h}`;
+      ctx.drawImage(scratch(key, w, h, parchmentPainter(10.6, 12.8, 0x5eed01)), x | 0, y | 0);
     });
+    if (tone === 'sheet') {
+      // MM6's character sheet is a dark tooled hide and prints white on it, so
+      // whatever stock the art module hands back gets taken down a few stops.
+      ctx.globalAlpha = 0.55; ctx.fillStyle = '#1c1408';
+      ctx.fillRect(x | 0, y | 0, w | 0, h | 0);
+      ctx.globalAlpha = 1;
+    }
   },
   /** An open book page. `side` is 'left'|'right' so the spine shades inward. */
-  book(ctx, x, y, w, h, side) {
+  book(ctx, x, y, w, h, side, kind) {
     guard('book', () => {
-      const c = UI.bookPage(w | 0, h | 0, side || 'left');
+      const c = UI.bookPage(w | 0, h | 0, side === 'right' ? 29 : 23, kind || 'spell');
       if (!c || !c.width) throw new Error('no page');
       ctx.drawImage(c, x | 0, y | 0);
     }, () => {
       ctx.drawImage(scratch(`bk${w}x${h}`, w, h, parchmentPainter(11.2, 13.2, 0x7a11)), x | 0, y | 0);
     });
-    // Shade towards the spine either way: it is what makes it read as a book.
+    // Shade towards the spine: it is what makes the spread read as a book.
     const inner = side === 'right' ? x : x + w - 10;
     for (let i = 0; i < 10; i++) {
       ctx.globalAlpha = 0.16 * (1 - i / 10);
@@ -180,17 +181,19 @@ export const A = {
     }
     ctx.globalAlpha = 1;
   },
+  /** opts: { sunken, size } - translated to uiart's { raised, depth }. */
   bevel(ctx, x, y, w, h, opts) {
-    guard('bevel', () => UI.drawBevel(ctx, x | 0, y | 0, w | 0, h | 0, opts || {}), () => {
-      const sunken = opts && opts.sunken;
-      ctx.fillStyle = rampCss('stone', sunken ? 1 : 10);
+    const o = opts || {};
+    guard('bevel', () => UI.drawBevel(ctx, x | 0, y | 0, w | 0, h | 0,
+      { depth: o.size || 1, raised: !o.sunken }), () => {
+      ctx.fillStyle = rampCss('stone', o.sunken ? 1 : 10);
       ctx.fillRect(x, y, w, 1); ctx.fillRect(x, y, 1, h);
-      ctx.fillStyle = rampCss('stone', sunken ? 10 : 1);
+      ctx.fillStyle = rampCss('stone', o.sunken ? 10 : 1);
       ctx.fillRect(x, y + h - 1, w, 1); ctx.fillRect(x + w - 1, y, 1, h);
     });
   },
-  inset(ctx, x, y, w, h) {
-    guard('inset', () => UI.drawInset(ctx, x | 0, y | 0, w | 0, h | 0), () => {
+  inset(ctx, x, y, w, h, opts) {
+    guard('inset', () => UI.drawInset(ctx, x | 0, y | 0, w | 0, h | 0, opts || {}), () => {
       ctx.fillStyle = '#12100c';
       ctx.fillRect(x + 1, y + 1, w - 2, h - 2);
       A.bevel(ctx, x, y, w, h, { sunken: true, size: 2 });
@@ -218,7 +221,7 @@ export const A = {
     ctx.globalAlpha = 1;
   },
   button(ctx, x, y, w, h, label, state) {
-    guard('button', () => UI.drawButton(ctx, x | 0, y | 0, w | 0, h | 0, null, state || 'up'), () => {
+    guard('button', () => UI.drawButton(ctx, x | 0, y | 0, w | 0, h | 0, '', state || 'up'), () => {
       ctx.fillStyle = rampCss('stone', state === 'down' ? 4 : 6);
       ctx.fillRect(x, y, w, h);
       A.bevel(ctx, x, y, w, h, { sunken: state === 'down' });
@@ -253,7 +256,7 @@ export const A = {
       () => A.bevel(ctx, x - 1, y - 1, w + 2, h + 2, { sunken: true }));
   },
   check(ctx, x, y, on, hot) {
-    guard('check', () => UI.drawCheck(ctx, x | 0, y | 0, !!on, !!hot), () => {
+    guard('check', () => UI.drawCheck(ctx, x | 0, y | 0, !!on), () => {
       ctx.fillStyle = '#0e0c08'; ctx.fillRect(x, y, 12, 12);
       A.bevel(ctx, x, y, 12, 12, { sunken: true });
       if (on) {
@@ -263,7 +266,7 @@ export const A = {
     });
   },
   slider(ctx, x, y, w, t, hot) {
-    guard('slider', () => UI.drawSlider(ctx, x | 0, y | 0, w | 0, t, !!hot), () => {
+    guard('slider', () => UI.drawSlider(ctx, x | 0, y | 0, w | 0, t), () => {
       const cy = y + 5;
       ctx.fillStyle = '#0e0c08'; ctx.fillRect(x, cy - 1, w, 4);
       A.bevel(ctx, x, cy - 1, w, 4, { sunken: true });
@@ -276,12 +279,12 @@ export const A = {
       A.bevel(ctx, kx, y - 2, 9, 14, {});
     });
   },
-  /** Wooden scrollbar. The caller owns the hit testing. */
+  /** Wooden scrollbar, 12 px wide with an arrow button at each end. */
   scrollbar(ctx, x, y, h, t, frac) {
     guard('scrollbar', () => UI.drawScrollbar(ctx, x | 0, y | 0, h | 0, t, frac), () => {
       ctx.fillStyle = rampCss('wood', 3);
-      ctx.fillRect(x, y, 10, h);
-      A.bevel(ctx, x, y, 10, h, { sunken: true });
+      ctx.fillRect(x, y, 12, h);
+      A.bevel(ctx, x, y, 12, h, { sunken: true });
       const gh = Math.max(14, Math.round(h * Math.max(0.06, Math.min(1, frac))));
       const gy = (y + (h - gh) * Math.max(0, Math.min(1, t))) | 0;
       ctx.fillStyle = rampCss('wood', 9);
@@ -292,10 +295,11 @@ export const A = {
       ctx.fillRect(x + 2, gy + (gh >> 1) + 1, 6, 1);
     });
   },
-  gem(ctx, x, y, size, color) {
-    guard('gem', () => UI.drawGem(ctx, x | 0, y | 0, size | 0, color), () => {
+  /** `ramp` is a palette ramp name, as uiart expects ('blood', 'ice', ...). */
+  gem(ctx, x, y, size, ramp) {
+    guard('gem', () => UI.drawGem(ctx, x | 0, y | 0, size | 0, ramp || 'blood'), () => {
       const r = size / 2;
-      ctx.fillStyle = color || '#c04040';
+      ctx.fillStyle = rampCss(ramp || 'blood', 10);
       for (let i = 0; i < size; i++) {
         const k = Math.round(r - Math.abs(i - r + 0.5));
         ctx.fillRect((x + r - k) | 0, y + i, k * 2, 1);
@@ -305,7 +309,8 @@ export const A = {
     });
   },
   corner(ctx, x, y, size, which) {
-    guard('corner', () => UI.drawCorner(ctx, x | 0, y | 0, size | 0, which), () => {
+    const rot = { tl: 0, tr: 1, br: 2, bl: 3 }[which] || 0;
+    guard('corner', () => UI.drawCorner(ctx, x | 0, y | 0, size | 0, rot), () => {
       ctx.fillStyle = rampCss('gold', 8);
       const sx = which === 'tr' || which === 'br' ? -1 : 1;
       const sy = which === 'bl' || which === 'br' ? -1 : 1;
@@ -318,8 +323,8 @@ export const A = {
       ctx.fillRect(ox + sx * 2, oy + sy * 2, 2, 2);
     });
   },
-  filigree(ctx, x, y, w) {
-    guard('filigree', () => UI.drawGoldFiligree(ctx, x | 0, y | 0, w | 0), () => {
+  filigree(ctx, x, y, w, h) {
+    guard('filigree', () => UI.drawGoldFiligree(ctx, x | 0, y | 0, w | 0, (h | 0) || 6), () => {
       ctx.fillStyle = rampCss('gold', 9);
       for (let i = 0; i < w; i += 4) ctx.fillRect(x + i, y + (i % 8 === 0 ? 0 : 1), 2, 1);
     });
@@ -516,16 +521,20 @@ export class Screen {
     });
   }
 
-  /** Vertical scrollbar with wheel + drag. Returns the clamped scroll value. */
+  /** Vertical scrollbar with wheel, arrow buttons and drag. Returns the value. */
   scrollbar(ctx, id, x, y, h, scroll, total, visible) {
     const maxScroll = Math.max(0, total - visible);
     let s = Math.max(0, Math.min(maxScroll, scroll));
-    const hit = this.ui.region(`${this.id}:${id}`, x, y, 10, h);
-    if (hit.hover && this.ui.mouse.wheel) s = Math.max(0, Math.min(maxScroll, s + Math.sign(this.ui.mouse.wheel)));
-    if (hit.down && maxScroll > 0) {
-      const t = (this.ui.mouse.y - y - 7) / Math.max(1, h - 14);
+    const ARROW = 11;
+    const hit = this.ui.region(`${this.id}:${id}`, x, y, 12, h);
+    if (hit.hover && this.ui.mouse.wheel) s += Math.sign(this.ui.mouse.wheel);
+    if (hit.click && this.ui.mouse.y < y + ARROW) s -= 1;
+    else if (hit.click && this.ui.mouse.y > y + h - ARROW) s += 1;
+    else if (hit.down && maxScroll > 0) {
+      const t = (this.ui.mouse.y - y - ARROW) / Math.max(1, h - ARROW * 2);
       s = Math.round(Math.max(0, Math.min(1, t)) * maxScroll);
     }
+    s = Math.max(0, Math.min(maxScroll, s));
     A.scrollbar(ctx, x, y, h, maxScroll > 0 ? s / maxScroll : 0, visible / Math.max(1, total));
     return s;
   }

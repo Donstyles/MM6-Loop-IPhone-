@@ -1,6 +1,6 @@
 import { Pix, toTexture, mixC } from './texcanvas.js';
 import { ramp } from '../core/palette.js';
-import { Rand, clamp, hash2 } from '../core/rng.js';
+import { Rand, clamp, hash2, tileFbm2 } from '../core/rng.js';
 
 // ---------------------------------------------------------------------------
 // Spell and impact effect sheets.
@@ -41,16 +41,20 @@ const mix = (a, b, t) => mixC(a, b, t);
 
 const LUT_FIRE = makeLUT([ramp('fire', 1), ramp('fire', 4), ramp('fire', 7), ramp('fire', 10),
   ramp('fire', 13), ramp('fire', 15), ramp('gold', 14), ramp('gold', 15), W]);
-const LUT_SMOKE = makeLUT([ramp('grey', 1), ramp('grey', 3), ramp('dirt', 3), ramp('grey', 5),
-  ramp('grey', 7), ramp('grey', 9)]);
+// Smoke and dust stay in the brown half of the palette; the stone ramp is cold
+// blue-grey and reads as ash on a bright day, which is not what we want.
+const LUT_SMOKE = makeLUT([ramp('grey', 1), ramp('dirt', 2), ramp('wood', 4), ramp('dirt', 5),
+  ramp('dirt', 7), ramp('grey', 8)]);
 const LUT_ICE = makeLUT([ramp('ice', 2), ramp('ice', 5), ramp('ice', 8), ramp('ice', 11),
   ramp('ice', 14), ramp('ice', 15), W]);
 const LUT_POISON = makeLUT([ramp('foliage', 2), ramp('foliage', 6), ramp('foliage', 10),
   ramp('grass', 10), ramp('grass', 13), ramp('grass', 15), ramp('swamp', 15)]);
 const LUT_ACID = makeLUT([ramp('foliage', 4), ramp('foliage', 9), ramp('grass', 11),
   ramp('grass', 14), ramp('grass', 15), mix(ramp('grass', 15), W, 0.6)]);
-const LUT_STONE = makeLUT([ramp('dirt', 1), ramp('dirt', 4), ramp('dirt', 7), ramp('stone', 7),
-  ramp('stone', 10), ramp('stone', 13), ramp('stone', 15)]);
+const LUT_STONE = makeLUT([ramp('stone', 1), ramp('stone', 4), ramp('stone', 7), ramp('stone', 10),
+  ramp('stone', 13), ramp('stone', 15)]);
+const LUT_DUST = makeLUT([ramp('dirt', 1), ramp('dirt', 3), ramp('dirt', 6), ramp('dirt', 9),
+  ramp('sand', 9), ramp('sand', 12)]);
 const LUT_STEEL = makeLUT([ramp('stone', 2), ramp('stone', 6), ramp('stone', 10), ramp('grey', 11),
   ramp('grey', 13), ramp('grey', 15), W]);
 const LUT_GOLD = makeLUT([ramp('gold', 2), ramp('gold', 6), ramp('gold', 10), ramp('gold', 13),
@@ -61,10 +65,10 @@ const LUT_ARCANE = makeLUT([ramp('arcane', 0), ramp('arcane', 2), ramp('arcane',
   ramp('arcane', 6), ramp('arcane', 7), mix(ramp('arcane', 7), W, 0.55), W]);
 const LUT_DARK = makeLUT([ramp('grey', 0), ramp('arcane', 0), ramp('arcane', 1), ramp('arcane', 3),
   ramp('arcane', 5), ramp('arcane', 7)]);
+// "Magenta" has to stay inside the arcane purples: the palette has no pink, so
+// mixing toward blood only snaps back to dull orange.
 const LUT_MAGENTA = makeLUT([ramp('arcane', 1), ramp('arcane', 3), ramp('arcane', 5),
-  mix(ramp('arcane', 7), ramp('blood', 13), 0.45),
-  mix(ramp('arcane', 7), ramp('blood', 15), 0.6),
-  mix(ramp('blood', 15), W, 0.45), W]);
+  ramp('arcane', 6), ramp('arcane', 7), mix(ramp('arcane', 7), W, 0.5), W]);
 const LUT_BLOOD = makeLUT([ramp('blood', 1), ramp('blood', 4), ramp('blood', 7), ramp('blood', 10),
   ramp('blood', 13), ramp('blood', 15)]);
 const LUT_SPARK = makeLUT([ramp('fire', 9), ramp('fire', 13), ramp('gold', 13), ramp('gold', 15),
@@ -119,16 +123,6 @@ function erode(p, keepAmount) {
   for (let y = 0; y < p.h; y++) {
     for (let x = 0; x < p.w; x++) {
       if (keeps(x, y, keepAmount)) continue;
-      p.data[(y * p.w + x) * 4 + 3] = 0;
-    }
-  }
-}
-
-/** Thin every other pixel out, leaving a stipple that reads as translucent. */
-function stipple(p, phase = 0) {
-  for (let y = 0; y < p.h; y++) {
-    for (let x = 0; x < p.w; x++) {
-      if (((x + y + phase) & 1) === 0) continue;
       p.data[(y * p.w + x) * 4 + 3] = 0;
     }
   }
@@ -315,17 +309,24 @@ function fireBall(p, f, n, o) {
   const cx = p.w / 2, cy = p.h / 2;
   const R = Math.min(p.w, p.h) * (o.r || 0.42);
   const ph = (f / n) * Math.PI * 2;
+  const rnd = new Rand(101 + f * 7717);
   // Ragged dark-red envelope, then a hotter body, then a small white-yellow
-  // core offset around the middle so the ball reads as tumbling.
-  blob(p, cx, cy, R, (t) => lut(LUT_FIRE, t * 0.55), { wob: 0.26, lobes: 5, phase: ph, bands: 5, seed: 1 });
-  for (let i = 0; i < 5; i++) {
-    const a = ph + (i / 5) * Math.PI * 2;
-    blob(p, cx + Math.cos(a) * R * 0.78, cy + Math.sin(a) * R * 0.78, R * 0.3,
-      (t) => lut(LUT_FIRE, 0.1 + t * 0.42), { wob: 0.35, lobes: 3, phase: ph + i, bands: 4, seed: i });
+  // core offset around the middle so the ball reads as tumbling. The lobe
+  // count changes every frame - a flame that keeps its silhouette looks like a
+  // spinning logo, not fire.
+  const lobes = 4 + (f % 3);
+  blob(p, cx, cy, R, (t) => lut(LUT_FIRE, t * 0.42), { wob: 0.3, lobes, phase: ph, bands: 5, seed: f });
+  for (let i = 0; i < 4; i++) {
+    const a = rnd.float(0, Math.PI * 2);
+    const d = R * rnd.float(0.6, 0.92);
+    blob(p, cx + Math.cos(a) * d, cy + Math.sin(a) * d, R * rnd.float(0.2, 0.36),
+      (t) => lut(LUT_FIRE, 0.06 + t * 0.34), { wob: 0.4, lobes: 3, phase: ph + i * 2, bands: 4, seed: i + f });
   }
   const ox = Math.cos(ph * 2) * R * 0.17, oy = Math.sin(ph * 2) * R * 0.14;
-  blob(p, cx + ox, cy + oy, R * 0.62, (t) => lut(LUT_FIRE, 0.4 + t * 0.5), { wob: 0.18, lobes: 4, phase: -ph, bands: 5 });
-  blob(p, cx + ox * 1.5, cy + oy * 1.5, R * 0.3, (t) => lut(LUT_FIRE, 0.82 + t * 0.3), { wob: 0.14, lobes: 3, phase: ph, bands: 3 });
+  blob(p, cx + ox, cy + oy, R * 0.66, (t) => lut(LUT_FIRE, 0.34 + t * 0.52),
+    { wob: 0.22, lobes: lobes + 1, phase: -ph, bands: 5, seed: f * 3 });
+  blob(p, cx + ox * 1.6, cy + oy * 1.6, R * 0.3, (t) => lut(LUT_FIRE, 0.82 + t * 0.3),
+    { wob: 0.2, lobes: 3, phase: ph * 1.5, bands: 3 });
 }
 
 function fireBurst(p, f, n) {
@@ -347,15 +348,16 @@ function fireBurst(p, f, n) {
     const cr = r * (0.72 - t * 1.05);
     if (cr > 0.6) blob(p, cx, cy, cr, (v) => lut(LUT_FIRE, 0.72 + v * 0.35), { wob: 0.16, lobes: 4, phase: -ph, bands: 4 });
   }
-  if (t > 0.42) {
-    // Smoke takes over: opaque dark puffs that eat into the flame, then stipple.
-    const s = (t - 0.42) / 0.58;
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2 + 0.6;
-      const rr = r * (0.35 + 0.55 * s);
-      blob(p, cx + Math.cos(a) * rr, cy + Math.sin(a) * rr - s * R * 0.18, r * (0.3 + 0.14 * s),
-        (v) => lut(LUT_SMOKE, 0.12 + v * 0.5 * (1 - s * 0.5)),
-        { wob: 0.34, lobes: 4, phase: a + s * 3, bands: 4, seed: i * 3, mode: SET, keep: 1 - s * 0.45 });
+  if (t > 0.5) {
+    // Smoke takes over: small dark puffs punched through the flame, stippled so
+    // the fire behind them still shows.
+    const s = (t - 0.5) / 0.5;
+    for (let i = 0; i < 7; i++) {
+      const a = (i / 7) * Math.PI * 2 + 0.6;
+      const rr = r * (0.3 + 0.5 * s);
+      blob(p, cx + Math.cos(a) * rr, cy + Math.sin(a) * rr - s * R * 0.22, r * (0.2 + 0.14 * s),
+        (v) => lut(LUT_SMOKE, 0.06 + v * 0.4 * (1 - s * 0.4)),
+        { wob: 0.36, lobes: 4, phase: a + s * 3, bands: 4, seed: i * 3, mode: SET, checker: true });
     }
   }
   if (t > 0.75) erode(p, 1 - (t - 0.75) / 0.25 * 0.85);
@@ -399,16 +401,16 @@ function lightning(p, f, n) {
     const x = p.w * 0.5 + rnd.float(-1, 1) * p.w * 0.3 * Math.sin(Math.PI * v) + (v - 0.5) * p.w * 0.1;
     pts.push([x, y]);
   }
-  bolt(p, pts, 2.7, 1.0, LUT_ICE);
+  bolt(p, pts, 3.2, 1.3, LUT_ICE);
   // Forks peeling off the main channel.
-  for (let b = 0; b < 3; b++) {
+  for (let b = 0; b < 4; b++) {
     const i = rnd.int(1, steps - 2);
     const br = [pts[i].slice()];
     const dir = rnd.bool() ? 1 : -1;
     for (let k = 1; k <= 3; k++) {
-      br.push([br[k - 1][0] + dir * rnd.float(2, p.w * 0.16), br[k - 1][1] + rnd.float(2, p.h * 0.13)]);
+      br.push([br[k - 1][0] + dir * rnd.float(2, p.w * 0.18), br[k - 1][1] + rnd.float(2, p.h * 0.13)]);
     }
-    bolt(p, br, 1.7, 0.7, LUT_ICE);
+    bolt(p, br, 2.0, 0.8, LUT_ICE);
   }
 }
 
@@ -538,48 +540,54 @@ function rockShard(p, f, n) {
   const cx = p.w / 2, cy = p.h / 2;
   const ang = (f / n) * Math.PI * 2;
   const R = p.w * 0.34;
+  const ca = Math.cos(ang), sa = Math.sin(ang);
   const pts = [];
   const rnd = new Rand(4242);
+  const radii = [];
+  for (let i = 0; i < 7; i++) radii.push(R * rnd.float(0.55, 1.05));
   for (let i = 0; i < 7; i++) {
     const a = ang + (i / 7) * Math.PI * 2;
-    const r = R * rnd.float(0.6, 1.05);
-    pts.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r * 0.92]);
+    pts.push([cx + Math.cos(a) * radii[i], cy + Math.sin(a) * radii[i] * 0.92]);
   }
   poly(p, pts, (x, y) => {
-    // Lit from the upper left, the same convention as every other surface.
-    const v = clamp(0.62 - (x - cx) / R * 0.3 - (y - cy) / R * 0.3, 0, 1);
+    // Shade in the rock's own frame so the facets turn with it - shading fixed
+    // to the screen makes a tumbling stone look like a static one.
+    const dx = x + 0.5 - cx, dy = y + 0.5 - cy;
+    const lx = (dx * ca + dy * sa) / R, ly = (-dx * sa + dy * ca) / R;
+    const v = clamp(0.5 - lx * 0.34 - ly * 0.3, 0, 1);
     return lut(LUT_STONE, (Math.floor(v * 5) + 0.5) / 5);
   }, SET);
   for (let i = 0; i < pts.length; i++) {
     const a = pts[i], b = pts[(i + 1) % pts.length];
-    const lit = (a[1] + b[1]) * 0.5 < cy;
-    stroke(p, a[0], a[1], b[0], b[1], 0.6, () => lut(LUT_STONE, lit ? 0.92 : 0.12), SET);
+    const mx = (a[0] + b[0]) * 0.5 - cx, my = (a[1] + b[1]) * 0.5 - cy;
+    const lit = (mx * ca + my * sa) + (-mx * sa + my * ca) < 0;
+    stroke(p, a[0], a[1], b[0], b[1], 0.6, () => lut(LUT_STONE, lit ? 0.95 : 0.06), SET);
   }
 }
 
 function earthBurst(p, f, n) {
   const t = f / (n - 1);
-  const cx = p.w / 2, cy = p.h * 0.78;
+  const cx = p.w / 2, cy = p.h * 0.82;
   const R = p.w * 0.45;
-  // Dust plume, opaque at first then stippled away.
-  for (let i = 0; i < 6; i++) {
-    const a = -Math.PI * (0.15 + 0.7 * (i / 5));
-    const d = R * (0.2 + 0.85 * t);
-    blob(p, cx + Math.cos(a) * d, cy + Math.sin(a) * d * 0.85, R * (0.3 + 0.22 * t),
-      (v) => lut(LUT_STONE, 0.15 + v * 0.42), { wob: 0.32, lobes: 4, phase: a * 2 + t * 4, bands: 4, seed: i, checker: t > 0.45 });
+  // Dust plume: brown, rising, and stippled once it thins out.
+  for (let i = 0; i < 7; i++) {
+    const a = -Math.PI * (0.1 + 0.8 * (i / 6));
+    const d = R * (0.2 + 0.8 * t);
+    blob(p, cx + Math.cos(a) * d, cy + Math.sin(a) * d * 0.95 - t * R * 0.2, R * (0.26 + 0.2 * t),
+      (v) => lut(LUT_DUST, 0.12 + v * 0.55), { wob: 0.34, lobes: 4, phase: a * 2 + t * 4, bands: 4, seed: i, checker: t > 0.5 });
   }
   const rnd = new Rand(88);
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < 10; i++) {
     const a = -Math.PI * rnd.float(0.08, 0.92);
-    const d = R * rnd.float(0.4, 1.1) * t;
+    const d = R * rnd.float(0.5, 1.2) * t;
     const x = cx + Math.cos(a) * d, y = cy + Math.sin(a) * d + R * t * t * 0.7;
-    const r = rnd.float(1.4, 3.2);
+    const r = rnd.float(2.0, 4.0);
     const rot = i + t * 6;
     poly(p, [
       [x + Math.cos(rot) * r, y + Math.sin(rot) * r],
       [x + Math.cos(rot + 2.2) * r * 0.8, y + Math.sin(rot + 2.2) * r * 0.8],
       [x + Math.cos(rot + 4.1) * r * 1.1, y + Math.sin(rot + 4.1) * r * 1.1],
-    ], () => lut(LUT_STONE, 0.35 + (i % 3) * 0.2), SET);
+    ], (px2, py2) => lut(LUT_STONE, 0.2 + ((px2 + py2) & 1 ? 0.35 : 0.15) + (i % 3) * 0.12), SET);
   }
   if (t > 0.65) erode(p, 1 - (t - 0.65) / 0.35 * 0.8);
 }
@@ -590,28 +598,29 @@ function blades(p, f, n) {
   const R = p.w * 0.45;
   for (let i = 0; i < 3; i++) {
     const a = rot + (i / 3) * Math.PI * 2;
-    // Sweep the blade along a slight arc so it reads as curved steel.
-    const N = 10;
+    // Sweep the blade along a slight arc so it reads as curved steel. The body
+    // stays dark; only the leading edge catches the light, which is what makes
+    // a flat grey shape read as metal.
+    const N = 28;
     for (let k = 0; k < N; k++) {
       const s = k / (N - 1);
       const aa = a + s * 0.75;
       const rr = R * (0.16 + 0.84 * s);
-      const th = R * 0.14 * (1 - s * 0.85) + 0.7;
+      const th = R * 0.15 * (1 - s * 0.85) + 0.7;
       const x = cx + Math.cos(aa) * rr, y = cy + Math.sin(aa) * rr;
-      disc(p, x, y, th, (v) => lut(LUT_STEEL, 0.25 + v * 0.4));
+      disc(p, x, y, th, (v) => lut(LUT_STEEL, 0.08 + v * 0.3), SET);
     }
-    // Bright leading edge.
     for (let k = 0; k < N; k++) {
       const s = k / (N - 1);
       const aa = a + s * 0.75;
       const rr = R * (0.16 + 0.84 * s);
-      const th = R * 0.14 * (1 - s * 0.85);
+      const th = R * 0.15 * (1 - s * 0.85);
       const nx = Math.cos(aa + 1.57), ny = Math.sin(aa + 1.57);
-      disc(p, cx + Math.cos(aa) * rr + nx * th * 0.75, cy + Math.sin(aa) * rr + ny * th * 0.75,
-        0.9, () => lut(LUT_STEEL, 0.98));
+      disc(p, cx + Math.cos(aa) * rr + nx * th * 0.8, cy + Math.sin(aa) * rr + ny * th * 0.8,
+        1.0, () => lut(LUT_STEEL, 0.97), SET);
     }
   }
-  blob(p, cx, cy, R * 0.2, (v) => lut(LUT_STEEL, 0.3 + v * 0.5), { bands: 3 });
+  blob(p, cx, cy, R * 0.2, (v) => lut(LUT_STEEL, 0.15 + v * 0.45), { bands: 3, mode: SET });
 }
 
 function shrapnel(p, f, n) {
@@ -619,21 +628,24 @@ function shrapnel(p, f, n) {
   const cx = p.w / 2, cy = p.h * 0.9;
   const R = p.h * 0.92;
   const rnd = new Rand(606);
-  for (let i = 0; i < 18; i++) {
-    const a = -Math.PI / 2 + rnd.float(-0.5, 0.5);
-    const d = R * t * rnd.float(0.35, 1.05);
+  for (let i = 0; i < 30; i++) {
+    const a = -Math.PI / 2 + rnd.float(-0.52, 0.52);
+    const d = R * t * rnd.float(0.3, 1.05);
     const x = cx + Math.cos(a) * d, y = cy + Math.sin(a) * d;
-    const r = rnd.float(1.0, 2.4);
+    const r = rnd.float(1.8, 3.6);
     const rot = i * 1.3 + t * 8;
+    stroke(p, x, y, x - Math.cos(a) * r * 3, y - Math.sin(a) * r * 3, 0.7,
+      (v, _x, _y, s) => lut(LUT_STEEL, 0.85 - s * 0.55), SET);
     poly(p, [
       [x + Math.cos(rot) * r, y + Math.sin(rot) * r],
       [x + Math.cos(rot + 2.4) * r, y + Math.sin(rot + 2.4) * r],
       [x + Math.cos(rot + 4.3) * r * 0.9, y + Math.sin(rot + 4.3) * r * 0.9],
-    ], () => lut(LUT_STEEL, 0.4 + (i % 4) * 0.18), SET);
-    stroke(p, x, y, x - Math.cos(a) * r * 2.5, y - Math.sin(a) * r * 2.5, 0.55,
-      (v, _x, _y, s) => lut(LUT_STEEL, 0.9 - s * 0.6));
+    ], (px2, py2) => lut(LUT_STEEL, 0.2 + (((px2 + py2) & 1) ? 0.5 : 0.2) + (i % 3) * 0.08), SET);
   }
-  if (t < 0.3) blob(p, cx, cy, R * 0.18 * (1 - t * 3), (v) => lut(LUT_SPARK, 0.6 + v * 0.4), { wob: 0.3, lobes: 5, bands: 3 });
+  if (t < 0.45) {
+    blob(p, cx, cy, R * 0.22 * (1 - t * 2), (v) => lut(LUT_SPARK, 0.55 + v * 0.45),
+      { wob: 0.35, lobes: 5, bands: 3, squash: 0.7 });
+  }
   if (t > 0.7) erode(p, 1 - (t - 0.7) / 0.3 * 0.8);
 }
 
@@ -659,15 +671,15 @@ function sparkleStar(p, x, y, r, cf) {
 function healGlow(p, f, n) {
   const t = f / n;
   const cx = p.w / 2;
-  // Soft pool of light at the feet, stippled so it reads as a glow not a disc.
-  blob(p, cx, p.h * 0.9, p.w * 0.36, (v) => lut(LUT_GOLD, 0.25 + v * 0.4),
-    { squash: 0.32, bands: 3, checker: true });
+  // A thin stippled pool of light at the feet - a solid disc reads as a plate.
+  ringShape(p, cx, p.h * 0.9, p.w * 0.34, 3.5, (v) => lut(LUT_GOLD, 0.3 + v * 0.45),
+    { squash: 0.3, bands: 3, checker: true });
   for (let i = 0; i < 9; i++) {
     const ph = (t + i / 9) % 1;
     const y = p.h * 0.92 - ph * p.h * 0.86;
     const x = cx + Math.sin(i * 2.3 + ph * 2.4) * p.w * 0.33;
-    const r = (1.2 + 2.6 * Math.sin(Math.PI * ph)) * (0.7 + 0.3 * Math.sin(i));
-    sparkleStar(p, Math.round(x), Math.round(y), r, (v) => lut(LUT_HOLY, 0.45 + v * 0.55));
+    const r = (1.6 + 3.4 * Math.sin(Math.PI * ph)) * (0.75 + 0.25 * Math.sin(i));
+    sparkleStar(p, Math.round(x), Math.round(y), r, (v) => lut(LUT_HOLY, 0.4 + v * 0.6));
   }
 }
 
@@ -687,27 +699,32 @@ function blessRing(p, f, n) {
 
 function buffShimmer(p, f, n) {
   const t = f / n;
+  // Straight stippled updraught, brightest up the middle.
+  for (let y = 0; y < p.h; y++) {
+    const v = y / p.h;
+    const hw = p.w * 0.34 * (0.85 + 0.15 * Math.sin(2 * Math.PI * (v - t)));
+    for (let x = Math.round(p.w / 2 - hw); x <= p.w / 2 + hw; x++) {
+      const u = Math.abs((x + 0.5 - p.w / 2) / hw);
+      if (!checker(x, y + (f & 1))) continue;
+      if (u > 0.98) continue;
+      putMode(p, x, y, lut(LUT_PALE, 0.18 + (1 - u) * 0.28 * (1 - v * 0.4)), UNDER);
+    }
+  }
   for (let i = 0; i < 26; i++) {
     const h = hash2(i, 7, 1234);
     const ph = (t + h) % 1;
     const y = p.h * 0.98 - ph * p.h * 0.96;
-    const x = p.w * 0.5 + (h - 0.5) * p.w * 0.78 + Math.sin(ph * 6 + i) * p.w * 0.05;
+    const x = p.w * 0.5 + (h - 0.5) * p.w * 0.7 + Math.sin(ph * 6 + i) * p.w * 0.05;
     const b = Math.sin(Math.PI * ph);
-    if (b < 0.15) continue;
-    const c = lut(LUT_PALE, 0.4 + b * 0.6);
-    putMode(p, Math.round(x), Math.round(y), c, MAX);
-    if (b > 0.6) {
-      putMode(p, Math.round(x) + 1, Math.round(y), c, MAX);
-      putMode(p, Math.round(x), Math.round(y) - 1, c, MAX);
-    }
-  }
-  // Faint stippled updraught behind the motes.
-  for (let y = 0; y < p.h; y++) {
-    const v = y / p.h;
-    const hw = p.w * 0.3 * (0.5 + 0.5 * Math.sin(2 * Math.PI * (2 * v - t)));
-    for (let x = Math.round(p.w / 2 - hw); x <= p.w / 2 + hw; x++) {
-      if (!keeps(x, y, 0.2)) continue;
-      putMode(p, x, y, lut(LUT_PALE, 0.28), UNDER);
+    if (b < 0.12) continue;
+    const c = lut(LUT_PALE, 0.55 + b * 0.45);
+    const xi = Math.round(x), yi = Math.round(y);
+    putMode(p, xi, yi, c, MAX);
+    if (b > 0.45) {
+      putMode(p, xi + 1, yi, c, MAX);
+      putMode(p, xi - 1, yi, c, MAX);
+      putMode(p, xi, yi - 1, c, MAX);
+      putMode(p, xi, yi + 1, c, MAX);
     }
   }
 }
@@ -716,17 +733,19 @@ function holyBurst(p, f, n) {
   const t = f / (n - 1);
   const cx = p.w / 2, cy = p.h / 2;
   const R = p.w * 0.48;
-  const rays = 12;
+  const rays = 16;
   for (let i = 0; i < rays; i++) {
     const a = (i / rays) * Math.PI * 2 + t * 0.25;
-    const len = R * (0.3 + 0.75 * Math.pow(t, 0.6)) * (i % 2 ? 0.68 : 1);
-    spike(p, cx, cy, a, R * 0.1, len, R * 0.07 * (1 - t * 0.4),
-      () => lut(LUT_HOLY, 0.5 + (1 - t) * 0.35), MAX);
+    const len = R * (0.35 + 0.68 * Math.pow(t, 0.5)) * (i % 2 ? 0.62 : 1);
+    spike(p, cx, cy, a, R * 0.05, len, R * 0.11 * (1 - t * 0.55) + 0.6,
+      () => lut(LUT_HOLY, 0.35 + (1 - t) * 0.4), MAX);
   }
-  const rr = R * (0.4 + 0.5 * t);
-  ringShape(p, cx, cy, rr, 2.5 * (1 - t * 0.5), (v) => lut(LUT_HOLY, 0.55 + v * 0.45), { bands: 3, wob: 0.04, phase: t * 3 });
-  const cr = R * (0.34 - t * 0.22);
-  if (cr > 0.6) blob(p, cx, cy, cr, (v) => lut(LUT_HOLY, 0.72 + v * 0.3), { wob: 0.1, lobes: 6, phase: t * 5, bands: 4 });
+  // A thick gold shockwave, deliberately unwobbled: a thin ring with any radial
+  // wobble at all turns into a visible polygon.
+  const rr = R * (0.35 + 0.55 * Math.pow(t, 0.6));
+  ringShape(p, cx, cy, rr, 4 * (1 - t * 0.55), (v) => lut(LUT_HOLY, 0.45 + v * 0.5), { bands: 3 });
+  const cr = R * (0.34 - t * 0.2);
+  if (cr > 0.6) blob(p, cx, cy, cr, (v) => lut(LUT_HOLY, 0.6 + v * 0.4), { wob: 0.14, lobes: 8, phase: t * 5, bands: 4 });
   if (t > 0.55) erode(p, 1 - (t - 0.55) / 0.45 * 0.85);
 }
 
@@ -736,22 +755,18 @@ function darkRay(p, f, n) {
   for (let y = 0; y < p.h; y++) {
     const v = y / p.h;
     const hw = p.w * 0.3 * (1.05 - v * 0.35) * (0.86 + 0.16 * Math.sin(2 * Math.PI * (2 * v - t)));
+    // Bands of energy crawling down the beam, kept inside its silhouette.
+    const band = 0.5 + 0.5 * Math.sin(2 * Math.PI * (3 * v - t));
     for (let x = Math.floor(cx - hw); x <= Math.ceil(cx + hw); x++) {
       const u = Math.abs((x + 0.5 - cx) / hw);
       if (u > 1) continue;
       // Violet skin over a near-black core: the ray reads as a hole in the world.
-      const c = u > 0.78 ? lut(LUT_DARK, 0.95) : (u > 0.55 ? lut(LUT_DARK, 0.58) : lut(LUT_DARK, 0.1 + u * 0.25));
+      let c;
+      if (u > 0.76) c = lut(LUT_DARK, 0.9 + band * 0.1);
+      else if (u > 0.5) c = lut(LUT_DARK, 0.4 + band * 0.35);
+      else c = lut(LUT_DARK, 0.05 + u * 0.2 + band * 0.12);
       putMode(p, x, y, c, SET);
     }
-  }
-  // Violet energy crawling along the beam.
-  for (let i = 0; i < 7; i++) {
-    const ph = (t * 1 + i / 7) % 1;
-    const y = ph * p.h;
-    const hw = p.w * 0.3 * (1.05 - ph * 0.35);
-    const s = Math.sin(Math.PI * ph);
-    stroke(p, cx - hw * 1.05, y, cx + hw * 1.05, y + 1.5, 0.8 * s + 0.4,
-      () => lut(LUT_ARCANE, 0.75 + s * 0.25), MAX);
   }
 }
 
@@ -762,15 +777,18 @@ function soulDrain(p, f, n) {
   for (let i = 0; i < 6; i++) {
     const a0 = (i / 6) * Math.PI * 2 + t * 3.4;
     const r0 = R * (1 - t * 0.82);
-    const N = 9;
+    const N = 20;
     for (let k = 0; k < N; k++) {
       const s = k / (N - 1);
       const a = a0 + s * 1.1;
       const rr = r0 + s * R * 0.42;
       if (rr > R * 1.05) continue;
-      disc(p, cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, (1 - s) * 2.2 + 0.5,
-        (v) => lut(LUT_ARCANE, 0.35 + (1 - s) * 0.6 + v * 0.15));
+      // Keep the wisps inside the violet range; letting them hit white made
+      // them read as bones rather than magic.
+      disc(p, cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, (1 - s) * 1.9 + 0.45,
+        (v) => lut(LUT_ARCANE, 0.2 + (1 - s) * 0.5 + v * 0.12));
     }
+    disc(p, cx + Math.cos(a0) * r0, cy + Math.sin(a0) * r0, 1.0, () => lut(LUT_ARCANE, 0.95));
   }
   const cr = R * (0.1 + 0.4 * t);
   blob(p, cx, cy, cr, (v) => lut(LUT_DARK, 0.9 - v * 0.85), { wob: 0.18, lobes: 5, phase: t * 6, bands: 4, mode: SET });
@@ -786,8 +804,8 @@ function mindBlast(p, f, n) {
     const s = (t + i * 0.34) % 1.02;
     const r = R * s;
     if (r < 1) continue;
-    ringShape(p, cx, cy, r, 2.6 * (1 - s * 0.55), (v) => lut(LUT_MAGENTA, 0.3 + (1 - s) * 0.55 + v * 0.2),
-      { squash: 0.7, bands: 3, wob: 0.05, lobes: 5, phase: i + t * 3, keep: 1 - s * 0.35 });
+    ringShape(p, cx, cy, r, 3.2 * (1 - s * 0.5), (v) => lut(LUT_MAGENTA, 0.3 + (1 - s) * 0.55 + v * 0.2),
+      { squash: 0.7, bands: 3, keep: 1 - s * 0.35 });
   }
   const cr = R * 0.2 * (1 - t * 0.6);
   if (cr > 0.6) blob(p, cx, cy, cr, (v) => lut(LUT_MAGENTA, 0.6 + v * 0.4), { wob: 0.2, lobes: 4, phase: t * 7, bands: 3, squash: 0.8 });
@@ -808,8 +826,7 @@ function implosion(p, f, n) {
         cx + Math.cos(a) * r, cy + Math.sin(a) * r, 1.5,
         (v, _x, _y, ss) => lut(LUT_ARCANE, 0.35 + ss * 0.6));
     }
-    ringShape(p, cx, cy, r, 2.4 + s * 2.5, (v) => lut(LUT_ARCANE, 0.45 + s * 0.4 + v * 0.2),
-      { bands: 4, wob: 0.07, lobes: 6, phase: s * 5 });
+    ringShape(p, cx, cy, r, 2.4 + s * 2.5, (v) => lut(LUT_ARCANE, 0.45 + s * 0.4 + v * 0.2), { bands: 4 });
     blob(p, cx, cy, R * 0.1 * (1 + s), (v) => lut(LUT_ARCANE, 0.7 + v * 0.3), { wob: 0.2, lobes: 5, phase: s * 8, bands: 3 });
   } else {
     // Collapse completes: a white-violet flash and one thin shock ring.
@@ -851,12 +868,12 @@ function starburst(p, f, n) {
   const env = Math.sin(Math.PI * Math.pow(t, 0.75));
   for (let i = 0; i < 8; i++) {
     const a = (i / 8) * Math.PI * 2 + t * 0.4;
-    spike(p, cx, cy, a, R * 0.06, R * (0.25 + 0.75 * Math.pow(t, 0.55)), R * 0.09 * env + 0.6,
-      () => lut(LUT_HOLY, 0.55 + env * 0.45));
-    spike(p, cx, cy, a + Math.PI / 8, R * 0.05, R * (0.15 + 0.45 * Math.pow(t, 0.55)), R * 0.05 * env + 0.5,
-      () => lut(LUT_GOLD, 0.5 + env * 0.4));
+    spike(p, cx, cy, a, R * 0.05, R * (0.25 + 0.75 * Math.pow(t, 0.55)), R * 0.05 * env + 0.6,
+      () => lut(LUT_HOLY, 0.6 + env * 0.4));
+    spike(p, cx, cy, a + Math.PI / 8, R * 0.04, R * (0.15 + 0.5 * Math.pow(t, 0.55)), R * 0.035 * env + 0.5,
+      () => lut(LUT_GOLD, 0.45 + env * 0.35));
   }
-  blob(p, cx, cy, R * 0.2 * env + 1, (v) => (v > 0.4 ? W : lut(LUT_HOLY, 0.8)), { bands: 2, wob: 0.15, lobes: 8, phase: t * 6 });
+  blob(p, cx, cy, R * 0.16 * env + 1, (v) => (v > 0.5 ? W : lut(LUT_GOLD, 0.75)), { bands: 2, wob: 0.15, lobes: 8, phase: t * 6 });
   if (t > 0.6) erode(p, 1 - (t - 0.6) / 0.4 * 0.9);
 }
 
@@ -864,25 +881,28 @@ function armageddon(p, f, n) {
   const t = f / (n - 1);
   const rnd = new Rand(31337);
   // A churning wall of fire that fills the frame - the shell also flashes the
-  // screen, this is what burns in the world.
+  // screen, this is what burns in the world. Built from noise rather than
+  // stacked sines, which cross into a tartan pattern.
   for (let y = 0; y < p.h; y++) {
     const v = y / p.h;
     for (let x = 0; x < p.w; x++) {
-      const u = x / p.w;
-      let g = 0.5 + 0.5 * Math.sin(2 * Math.PI * (u * 3 + v * 2 - t * 2));
-      g += 0.5 + 0.5 * Math.sin(2 * Math.PI * (u * 7 - v * 5 + t * 3) + 1.3);
-      g += 0.5 + 0.5 * Math.sin(2 * Math.PI * (u * 13 + v * 11 - t * 4) + 2.7);
-      g /= 3;
-      const hot = clamp(g * (1.25 - v * 0.55) * (1 - t * 0.35), 0, 1);
-      if (hot < 0.16) continue;
+      const g = tileFbm2(x * 0.10, y * 0.10 - t * 6, 32, 4, 0.6, 11);
+      const hot = clamp((g * 1.7 - 0.28) * (1.15 - v * 0.35) * (1 - t * 0.3), 0, 1);
+      if (hot < 0.14) continue;
       putMode(p, x, y, lut(LUT_FIRE, (Math.floor(hot * 7) + 0.5) / 7), SET);
     }
   }
+  // Flame tongues licking up out of the wall.
+  for (let i = 0; i < 9; i++) {
+    const x = (i + 0.5) / 9 * p.w;
+    flameColumn(p, x, p.h - 1, p.w * 0.075, p.h * (0.5 + 0.45 * hash2(i, 3, 5)),
+      { t: (t + i * 0.13) % 1, seed: i * 2.1, bands: 6 });
+  }
   // Fire raining down through it.
-  for (let i = 0; i < 14; i++) {
+  for (let i = 0; i < 16; i++) {
     const x = rnd.float(0, p.w);
     const y = ((rnd.float(0, 1) + t * 1.3) % 1) * p.h;
-    stroke(p, x, y - p.h * 0.16, x + 1, y, 1.1, (v, _x, _y, s) => lut(LUT_FIRE, 0.5 + s * 0.5));
+    stroke(p, x, y - p.h * 0.16, x + 1, y, 1.2, (v, _x, _y, s) => lut(LUT_FIRE, 0.55 + s * 0.45));
   }
   if (t > 0.6) erode(p, 1 - (t - 0.6) / 0.4 * 0.9);
 }
@@ -908,10 +928,12 @@ function arrow(p, f, n, a, na) {
     const sg = s ? 1 : -1;
     poly(p, [
       [tailX, tailY],
-      [tailX + dx * L * 0.36, tailY + dy * L * 0.36],
-      [tailX + dx * L * 0.3 + nx * L * 0.2 * sg, tailY + dy * L * 0.3 + ny * L * 0.2 * sg],
-    ], () => lut(LUT_BLOOD, 0.7), SET);
+      [tailX + dx * L * 0.3, tailY + dy * L * 0.3],
+      [tailX + dx * L * 0.26 + nx * L * 0.12 * sg, tailY + dy * L * 0.26 + ny * L * 0.12 * sg],
+    ], () => lut(LUT_STEEL, 0.75), SET);
   }
+  stroke(p, tailX + dx * L * 0.06, tailY + dy * L * 0.06, tailX + dx * L * 0.2, tailY + dy * L * 0.2,
+    0.9, () => lut(LUT_BLOOD, 0.7), SET);
 }
 
 function bloodHit(p, f, n) {
@@ -938,7 +960,7 @@ function dustPuff(p, f, n) {
     const a = -Math.PI * (0.12 + 0.76 * (i / 4));
     const d = R * (0.2 + 1.5 * t);
     blob(p, cx + Math.cos(a) * d, cy + Math.sin(a) * d * 0.55 - t * p.h * 0.1, R * (0.55 + 0.4 * t),
-      (v) => lut(LUT_STONE, 0.2 + v * 0.35), { wob: 0.34, lobes: 4, phase: i + t * 4, bands: 3, seed: i, checker: t > 0.3 });
+      (v) => lut(LUT_DUST, 0.15 + v * 0.45), { wob: 0.34, lobes: 4, phase: i + t * 4, bands: 3, seed: i, checker: t > 0.3 });
   }
   if (t > 0.4) erode(p, 1 - (t - 0.4) / 0.6 * 0.85);
 }
@@ -963,7 +985,7 @@ function teleportSwirl(p, f, n) {
   const R = p.w * 0.46;
   for (let i = 0; i < 3; i++) {
     const a0 = (i / 3) * Math.PI * 2 + t * 5;
-    const N = 26;
+    const N = 46;
     for (let k = 0; k < N; k++) {
       const s = k / (N - 1);
       const a = a0 + s * 4.4;

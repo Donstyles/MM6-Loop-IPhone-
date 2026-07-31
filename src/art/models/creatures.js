@@ -661,10 +661,14 @@ function poseBiped(r, action, t) {
     case 'die': case 'dead': {
       const u = action === 'dead' ? 1 : ez(t);
       const e = u * u;
-      r.root.rotation.x += e * 1.32;
-      r.root.rotation.z += e * 0.28;
-      r.root.scale.y *= 1 - e * 0.16;
-      r.body.position.y += -e * H * 0.13;
+      // Crumple rather than fall like a plank: less rotation, more sink and
+      // squash, so the corpse stays inside a sprite cell sized for a standing
+      // figure.
+      r.root.rotation.x += e * 1.10;
+      r.root.rotation.z += e * 0.26;
+      r.root.scale.y *= 1 - e * 0.22;
+      r.root.scale.z *= 1 - e * 0.16;
+      r.body.position.y += -e * H * 0.16;
       r.torso.rotation.x += e * 0.35;
       r.head.rotation.x += e * 0.55;
       r.armL.rotation.x += e * 1.1; r.armL.rotation.z += e * 0.6;
@@ -1342,7 +1346,9 @@ function buildDragonRig(H, P, C, rnd) {
   const legLen = H * P.legLen;
   const bodyR = H * P.bodyR;
   const bodyLen = H * P.bodyLen;
-  const bodyY = legLen + bodyR * 0.7;
+  // Wyrms and sea serpents have no legs at all; they rest their bulk on the
+  // ground and undulate.
+  const bodyY = P.legless ? bodyR * 0.80 : legLen + bodyR * 0.7;
 
   const body = grp(0, bodyY, 0);
   root.add(body);
@@ -1383,7 +1389,7 @@ function buildDragonRig(H, P, C, rnd) {
 
   // legs
   const legs = {};
-  const pairs = P.frontLegs ? [[0.30, 'F'], [-0.30, 'B']] : [[-0.20, 'B']];
+  const pairs = P.legless ? [] : P.frontLegs ? [[0.30, 'F'], [-0.30, 'B']] : [[-0.20, 'B']];
   for (const [fz, fk] of pairs) {
     for (const [key, s] of [['L', -1], ['R', 1]]) {
       const hip = grp(s * bodyR * 0.78, -bodyR * 0.32, bodyLen * fz);
@@ -1452,8 +1458,12 @@ function poseDragon(r, action, t) {
         r.legFR.rotation.x += sn * 0.55; r.legBL.rotation.x += sn * 0.5;
         r.shinFL.rotation.x += Math.max(0, Math.sin(p - 1)) * 0.6;
         r.shinFR.rotation.x += Math.max(0, -Math.sin(p - 1)) * 0.6;
-      } else {
+      } else if (r.legBL) {
         r.legBL.rotation.x += -sn * 0.5; r.legBR.rotation.x += sn * 0.5;
+      } else {
+        // legless: the whole body slithers
+        r.body.position.x += sn * H * 0.02;
+        r.body.rotation.y += sn * 0.10;
       }
       r.body.position.y += Math.abs(cs) * H * 0.02 - H * 0.01;
       r.body.rotation.z += sn * 0.05;
@@ -1764,335 +1774,662 @@ function resolveCols(p = {}) {
   };
   return C;
 }
-
 // ---------------------------------------------------------------------------
-// Actions
+// Animation groups
+//
+// MM6 stores exactly eight sprite groups per monster (MonsterDesc_MM6
+// .spriteNames[8]) and plays them at SFTItem.Time = 4, i.e. 125 ms a frame -
+// 8 fps. That stop-motion cadence is a big part of why the game reads as 1998,
+// so the frame counts and rates here are the engine's, not ours.
 // ---------------------------------------------------------------------------
 
 export const ACTIONS = {
-  stand: { frames: 4, loop: true, fps: 5 },
-  walk: { frames: 8, loop: true, fps: 10 },
-  attack: { frames: 6, loop: false, fps: 12 },
-  cast: { frames: 6, loop: false, fps: 10 },
-  hit: { frames: 2, loop: false, fps: 10 },
-  die: { frames: 8, loop: false, fps: 10 },
+  stand: { frames: 2, loop: true, fps: 8 },
+  walk: { frames: 6, loop: true, fps: 8 },
+  attack_melee: { frames: 4, loop: false, fps: 8 },
+  attack_ranged: { frames: 4, loop: false, fps: 8 },
+  got_hit: { frames: 2, loop: false, fps: 8 },
+  dying: { frames: 6, loop: false, fps: 10 },
   dead: { frames: 1, loop: false, fps: 1 },
+  bored: { frames: 6, loop: true, fps: 8 },
+};
+
+export const ACTION_NAMES = Object.keys(ACTIONS);
+
+// The pose functions were written against short internal names; this keeps the
+// public API on the engine's ActorAnimation vocabulary without renaming the
+// animation code underneath.
+const ACTION_INTERNAL = {
+  stand: 'stand', walk: 'walk', attack_melee: 'attack', attack_ranged: 'cast',
+  got_hit: 'hit', dying: 'die', dead: 'dead', bored: 'bored',
 };
 
 // ---------------------------------------------------------------------------
-// The bestiary
+// The bestiary: 57 families x 3 tiers + 2 uniques = 173 monsters.
+//
+// MM6 has no per-monster tint - MonsterDesc_MM6 has no tintColor field at all.
+// Tiers of a family are literally the same art with a different palette file,
+// so that is how this is modelled: one builder per family, and a tier is a
+// palette override plus a small scale factor.
 // ---------------------------------------------------------------------------
 
-const ASPECT = { biped: 0.80, quad: 1.30, insect: 1.25, serpent: 1.05, blob: 1.00, dragon: 1.45, wisp: 1.00, ghost: 0.85 };
+const FAMILY_LIST = [];
 
-function d(name, arch, family, tier, height, pal, o = {}) {
-  return {
-    name, arch, family, tier, height,
-    palette: pal,
-    aspect: o.aspect || ASPECT[arch] || 1,
-    twoLegs: o.twoLegs !== undefined ? o.twoLegs : (arch === 'biped' || arch === 'ghost'),
-    ranged: !!o.ranged,
-    flying: !!o.flying,
-    params: o,
+/**
+ * @param {string} id      sprite base name, e.g. 'Goblin'
+ * @param {string} arch    archetype key
+ * @param {number} height  world height in units (spec 15: humanoid ~192)
+ * @param {object} pal     base palette
+ * @param {object} params  archetype parameters
+ * @param {Array}  tiers   [displayName, level, hp, paletteShift?, scale?]
+ * @param {object} extra   { ranged, flying, aspect, suffixes }
+ */
+function F(id, arch, height, pal, params, tiers, extra = {}) {
+  const fam = {
+    id, arch, height, palette: pal, params,
+    ranged: !!extra.ranged, flying: !!extra.flying,
+    aspect: extra.aspect || 0,
+    suffixes: extra.suffixes || ['A', 'B', 'C'],
+    tiers: tiers.map((t, i) => ({
+      name: t[0], level: t[1] || 1, hp: t[2] || 1,
+      paletteShift: t[3] || {}, scale: t[4] === undefined ? 1 + i * 0.06 : t[4],
+    })),
   };
+  FAMILY_LIST.push(fam);
+  return fam;
 }
 
-export const CREATURE_DEFS = {
-  // --- humanoids ---
-  goblin: d('Goblin', 'biped', 'goblin', 1, 118,
-    { skin: ['grass', 5], skin2: ['grass', 3], cloth: ['dirt', 5], cloth2: ['wood', 4], metal: ['stone', 7] },
-    { headR: 0.105, legLen: 0.42, torsoH: 0.30, hunch: 0.22, ears: 'long', weapon: 'club', shoulderW: 0.25, armLen: 0.44, stride: 1.1 }),
-  goblin_shaman: d('Goblin Shaman', 'biped', 'goblin', 2, 124,
-    { skin: ['swamp', 7], cloth: ['arcane', 3], cloth2: ['arcane', 5], glow: ['arcane', 7], metal: ['gold', 8] },
-    { headR: 0.105, legLen: 0.42, hunch: 0.20, ears: 'long', weapon: 'staff', robe: 1, helm: 'hood', ranged: true }),
-  goblin_king: d('Goblin King', 'biped', 'goblin', 3, 142,
-    { skin: ['grass', 7], cloth: ['blood', 5], cloth2: ['blood', 7], metal: ['gold', 10] },
-    { headR: 0.105, legLen: 0.42, hunch: 0.14, ears: 'long', weapon: 'axe', helm: 'crown', pads: 1, cape: 1, shoulderW: 0.30, hipW: 0.24 }),
-  peasant: d('Peasant', 'biped', 'human', 1, 172,
-    { skin: ['flesh', 5], cloth: ['dirt', 9], cloth2: ['wood', 5], hair: ['wood', 3] },
-    { weapon: 'club', hair: 1 }),
-  bandit: d('Bandit', 'biped', 'human', 1, 176,
-    { skin: ['flesh', 4], cloth: ['wood', 4], cloth2: ['dirt', 3], metal: ['stone', 8] },
-    { weapon: 'dagger', helm: 'hood', hunch: 0.08 }),
-  thug: d('Thug', 'biped', 'human', 2, 184,
-    { skin: ['flesh', 4], cloth: ['stone', 5], cloth2: ['wood', 3], hair: ['grey', 3] },
-    { weapon: 'club', shoulderW: 0.30, hipW: 0.24, armLen: 0.44, headR: 0.070, hunch: 0.10, beard: 1 }),
-  brigand: d('Brigand', 'biped', 'human', 2, 178,
-    { skin: ['flesh', 5], cloth: ['blood', 4], cloth2: ['wood', 4], metal: ['stone', 9] },
-    { weapon: 'sword', helm: 'cap', pads: 1, shield: 'round' }),
-  apprentice_mage: d('Apprentice Mage', 'biped', 'mage', 1, 170,
-    { skin: ['flesh', 6], cloth: ['sky', 6], cloth2: ['sky', 9], glow: ['sky', 12], hair: ['wood', 5] },
-    { weapon: 'staff', robe: 1, helm: 'hood', ranged: true, armLen: 0.40 }),
-  initiate_mage: d('Initiate Mage', 'biped', 'mage', 2, 172,
-    { skin: ['flesh', 6], cloth: ['water', 8], cloth2: ['ice', 10], glow: ['ice', 12], hair: ['grey', 6] },
-    { weapon: 'staff', robe: 1, helm: 'hood', ranged: true }),
-  master_mage: d('Master Mage', 'biped', 'mage', 3, 174,
-    { skin: ['flesh', 6], cloth: ['arcane', 4], cloth2: ['gold', 9], glow: ['arcane', 7], hair: ['grey', 11] },
-    { weapon: 'staff', robe: 1, helm: 'hat', ranged: true, beard: 'long' }),
-  acolyte: d('Acolyte', 'biped', 'priest', 1, 170,
-    { skin: ['flesh', 5], cloth: ['plaster', 10], cloth2: ['plaster', 6], metal: ['gold', 8] },
-    { robe: 1, helm: 'hood', weapon: 'none' }),
-  priest_of_baa: d('Priest of Baa', 'biped', 'priest', 2, 176,
-    { skin: ['flesh', 4], cloth: ['blood', 3], cloth2: ['blood', 6], metal: ['gold', 9], glow: ['blood', 11] },
-    { robe: 1, helm: 'hood', weapon: 'mace', ranged: true }),
-  cleric_of_baa: d('Cleric of Baa', 'biped', 'priest', 2, 174,
-    { skin: ['flesh', 4], cloth: ['blood', 5], cloth2: ['grey', 3], metal: ['stone', 8], glow: ['blood', 12] },
-    { robe: 1, helm: 'hood', weapon: 'mace', ranged: true }),
-  high_priest: d('High Priest', 'biped', 'priest', 3, 180,
-    { skin: ['flesh', 5], cloth: ['blood', 6], cloth2: ['gold', 10], metal: ['gold', 11], glow: ['fire', 12] },
-    { robe: 1, helm: 'mitre', weapon: 'staff', cape: 1, ranged: true, beard: 'long' }),
-  knight: d('Knight', 'biped', 'knight', 2, 182,
-    { skin: ['flesh', 5], body: ['stone', 10], cloth: ['stone', 8], cloth2: ['blood', 6], metal: ['stone', 12] },
-    { weapon: 'sword', shield: 'kite', helm: 'full', pads: 1, shoulderW: 0.28 }),
-  crusader: d('Crusader', 'biped', 'knight', 3, 186,
-    { skin: ['flesh', 5], body: ['grey', 11], cloth: ['blood', 6], cloth2: ['grey', 13], metal: ['grey', 13] },
-    { weapon: 'sword', shield: 'kite', helm: 'full', pads: 1, cape: 1, shoulderW: 0.29 }),
-  templar: d('Templar', 'biped', 'knight', 3, 188,
-    { skin: ['flesh', 5], body: ['gold', 8], cloth: ['sky', 6], cloth2: ['gold', 12], metal: ['gold', 11] },
-    { weapon: 'mace', shield: 'kite', helm: 'horned', pads: 1, cape: 1, shoulderW: 0.30 }),
-  dwarf: d('Dwarf', 'biped', 'dwarf', 1, 124,
-    { skin: ['flesh', 4], cloth: ['wood', 6], cloth2: ['blood', 5], hair: ['fire', 7], metal: ['stone', 9] },
-    { headR: 0.105, legLen: 0.36, torsoH: 0.34, shoulderW: 0.30, hipW: 0.26, armLen: 0.38, beard: 'long', weapon: 'axe', stride: 0.85 }),
-  dwarf_guard: d('Dwarf Guard', 'biped', 'dwarf', 2, 128,
-    { skin: ['flesh', 4], body: ['stone', 9], cloth: ['stone', 7], cloth2: ['blood', 6], hair: ['wood', 3], metal: ['stone', 11] },
-    { headR: 0.105, legLen: 0.36, torsoH: 0.34, shoulderW: 0.31, hipW: 0.27, armLen: 0.38, beard: 'long', weapon: 'axe', shield: 'round', helm: 'horned', pads: 1, stride: 0.85 }),
+// -- humanoid families ------------------------------------------------------
 
-  // --- beasts ---
-  wolf: d('Wolf', 'quad', 'wolf', 1, 88,
-    { skin: ['grey', 6], body: ['grey', 6], skin2: ['grey', 3], hair: ['grey', 8], eye: ['fire', 11] },
-    { bodyLen: 1.45, legLen: 0.58, headShape: 'wolf', mane: 1, tail: 0.6, glow: 1, stride: 1.25 }),
-  dire_wolf: d('Dire Wolf', 'quad', 'wolf', 2, 108,
-    { skin: ['stone', 4], body: ['stone', 4], skin2: ['stone', 2], hair: ['stone', 6], eye: ['fire', 13] },
-    { bodyLen: 1.5, legLen: 0.58, headShape: 'wolf', mane: 1, tail: 0.62, glow: 1, spikes: 0, stride: 1.25 }),
-  warg: d('Warg', 'quad', 'wolf', 3, 124,
-    { skin: ['dirt', 3], body: ['dirt', 3], skin2: ['dirt', 1], hair: ['dirt', 5], eye: ['blood', 12], horn: ['grey', 4] },
-    { bodyLen: 1.55, legLen: 0.56, headShape: 'wolf', mane: 1, tail: 0.6, glow: 1, spikes: 1, shaggy: 1, stride: 1.2 }),
-  bear: d('Bear', 'quad', 'bear', 2, 132,
-    { skin: ['wood', 5], body: ['wood', 5], skin2: ['wood', 3], hair: ['wood', 6], horn: ['sand', 12] },
-    { bodyLen: 1.25, legLen: 0.48, bodyR: 0.36, headShape: 'wolf', headR: 0.26, ears: 'round', hump: 1, tail: 0.14, neck: 0.14, neckUp: 0.15, shaggy: 1, stride: 0.9 }),
-  cave_bear: d('Cave Bear', 'quad', 'bear', 3, 160,
-    { skin: ['wood', 2], body: ['wood', 2], skin2: ['grey', 2], hair: ['wood', 4], horn: ['sand', 12] },
-    { bodyLen: 1.3, legLen: 0.48, bodyR: 0.38, headShape: 'wolf', headR: 0.27, ears: 'round', hump: 1, tail: 0.14, neck: 0.14, neckUp: 0.15, shaggy: 1, stride: 0.85 }),
-  boar: d('Boar', 'quad', 'boar', 1, 84,
-    { skin: ['dirt', 4], body: ['dirt', 4], skin2: ['dirt', 2], hair: ['grey', 3], horn: ['sand', 13] },
-    { bodyLen: 1.35, legLen: 0.44, bodyR: 0.34, headShape: 'wolf', headR: 0.24, ears: 'point', hump: 1, tail: 0.22, neck: 0.10, neckUp: 0.05, tusk: 0.10, stride: 1.1 }),
-  giant_rat: d('Giant Rat', 'quad', 'rat', 1, 58,
-    { skin: ['dirt', 6], body: ['dirt', 6], skin2: ['flesh', 3], hair: ['dirt', 4], eye: ['blood', 11] },
-    { bodyLen: 1.5, legLen: 0.42, bodyR: 0.28, headShape: 'rat', headR: 0.24, ears: 'round', tail: 1.1, tailUp: -0.15, glow: 1, stride: 1.3 }),
-  giant_spider: d('Giant Spider', 'insect', 'spider', 2, 76,
-    { skin: ['grey', 2], body: ['grey', 2], skin2: ['grey', 4], eye: ['blood', 12], glow: ['blood', 12] },
-    { legs: 8, legLen: 0.72, bodyLen: 0.72, bodyR: 0.24, abdomen: 0.36, headR: 0.16, antennae: 0, carapace: 0, glow: 1, aspect: 1.5 }),
-  phase_spider: d('Phase Spider', 'insect', 'spider', 3, 82,
-    { skin: ['arcane', 3], body: ['arcane', 3], skin2: ['arcane', 5], glow: ['arcane', 7] },
-    { legs: 8, legLen: 0.75, bodyLen: 0.72, bodyR: 0.24, abdomen: 0.36, headR: 0.16, antennae: 0, carapace: 0, glow: 1, aspect: 1.5 }),
-  bat: d('Bat', 'biped', 'bat', 1, 40,
-    { skin: ['stone', 3], body: ['stone', 3], skin2: ['stone', 2], wing: ['stone', 4], wing2: ['stone', 2], eye: ['fire', 12] },
-    { headR: 0.20, legLen: 0.22, torsoH: 0.34, armLen: 0.12, shoulderW: 0.22, hipW: 0.18, wings: 'bat', wingSpan: 0.95, ears: 'long', flyer: 1, boots: 0, belt: 0, glow: 1, aspect: 1.7, flying: true }),
-  giant_bat: d('Giant Bat', 'biped', 'bat', 2, 66,
-    { skin: ['wood', 3], body: ['wood', 3], skin2: ['wood', 2], wing: ['wood', 4], wing2: ['wood', 2], eye: ['fire', 12] },
-    { headR: 0.20, legLen: 0.22, torsoH: 0.34, armLen: 0.12, shoulderW: 0.22, hipW: 0.18, wings: 'bat', wingSpan: 1.0, ears: 'long', flyer: 1, boots: 0, belt: 0, glow: 1, aspect: 1.7, flying: true }),
-  vampire_bat: d('Vampire Bat', 'biped', 'bat', 3, 60,
-    { skin: ['blood', 3], body: ['blood', 3], skin2: ['blood', 2], wing: ['blood', 4], wing2: ['blood', 2], eye: ['blood', 13] },
-    { headR: 0.20, legLen: 0.22, torsoH: 0.34, armLen: 0.12, shoulderW: 0.22, hipW: 0.18, wings: 'bat', wingSpan: 1.0, ears: 'long', flyer: 1, boots: 0, belt: 0, glow: 1, aspect: 1.7, flying: true }),
-  cobra: d('Cobra', 'serpent', 'snake', 2, 108,
-    { skin: ['swamp', 9], body: ['swamp', 7], skin2: ['swamp', 11], glow: ['gold', 12] },
-    { hood: 0.36, coils: 8, glow: 1 }),
-  serpent: d('Serpent', 'serpent', 'snake', 1, 92,
-    { skin: ['foliage', 8], body: ['foliage', 6], skin2: ['foliage', 10], glow: ['fire', 11] },
-    { hood: 0, coils: 9, glow: 1 }),
+F('Archer', 'biped', 192,
+  { skin: ['flesh', 5], cloth: ['wood', 5], cloth2: ['dirt', 4], metal: ['stone', 8], hair: ['wood', 3] },
+  { weapon: 'bow', helm: 'hood', hunch: 0.06, armSwing: 0.6 },
+  [['Archer', 9, 35], ['Master Archer', 19, 93, { cloth: ['foliage', 5], cloth2: ['foliage', 3] }],
+    ['Fire Archer', 29, 171, { cloth: ['fire', 6], cloth2: ['blood', 5], glow: ['fire', 13] }]],
+  { ranged: true });
 
-  // --- insectoids ---
-  beetle: d('Beetle', 'insect', 'beetle', 1, 42,
-    { skin: ['wood', 3], body: ['wood', 3], skin2: ['wood', 5], glow: ['grass', 10] },
-    { legs: 6, legLen: 0.5, bodyR: 0.28, abdomen: 0.40, bodyLen: 0.85, aspect: 1.35 }),
-  fire_beetle: d('Fire Beetle', 'insect', 'beetle', 2, 50,
-    { skin: ['fire', 6], body: ['fire', 6], skin2: ['fire', 9], glow: ['fire', 13] },
-    { legs: 6, legLen: 0.5, bodyR: 0.28, abdomen: 0.42, bodyLen: 0.85, glow: 1, aspect: 1.35 }),
-  giant_beetle: d('Giant Beetle', 'insect', 'beetle', 3, 74,
-    { skin: ['stone', 4], body: ['stone', 4], skin2: ['stone', 7], glow: ['ice', 10], horn: ['sand', 12] },
-    { legs: 6, legLen: 0.5, bodyR: 0.30, abdomen: 0.46, bodyLen: 0.9, aspect: 1.35 }),
-  scorpion: d('Scorpion', 'insect', 'scorpion', 2, 56,
-    { skin: ['sand', 6], body: ['sand', 6], skin2: ['sand', 9], horn: ['sand', 13], glow: ['gold', 12] },
-    { legs: 8, legLen: 0.48, bodyR: 0.24, abdomen: 0.26, bodyLen: 0.85, claws: 1, stinger: 1, aspect: 1.6 }),
-  giant_ant: d('Giant Ant', 'insect', 'ant', 1, 52,
-    { skin: ['dirt', 3], body: ['dirt', 3], skin2: ['dirt', 5], glow: ['dirt', 8] },
-    { legs: 6, legLen: 0.55, bodyR: 0.22, abdomen: 0.32, bodyLen: 0.95, carapace: 0, aspect: 1.45 }),
-  soldier_ant: d('Soldier Ant', 'insect', 'ant', 2, 66,
-    { skin: ['blood', 4], body: ['blood', 4], skin2: ['blood', 7], glow: ['fire', 11] },
-    { legs: 6, legLen: 0.55, bodyR: 0.24, abdomen: 0.34, bodyLen: 0.95, carapace: 0, aspect: 1.45 }),
+F('Barbarian', 'biped', 208,
+  { skin: ['flesh', 4], body: ['flesh', 4], cloth: ['wood', 4], cloth2: ['dirt', 3], hair: ['wood', 2], horn: ['sand', 11] },
+  { weapon: 'axe', shoulderW: 0.31, hipW: 0.25, armLen: 0.44, beard: 1, hair: 1, stride: 0.95 },
+  [['Magyar', 14, 61], ['Magyar Soldier', 25, 137, { cloth: ['stone', 5], metal: ['stone', 10] }],
+    ['Magyar Matron', 37, 247, { cloth: ['blood', 5], hair: ['fire', 8], skin: ['flesh', 6] }]]);
 
-  // --- undead ---
-  skeleton: d('Skeleton', 'biped', 'skeleton', 1, 172,
-    { skin: ['plaster', 12], body: ['plaster', 12], skin2: ['plaster', 9], cloth: ['plaster', 11], cloth2: ['stone', 5], metal: ['stone', 8], eye: ['blood', 10] },
-    { headShape: 'skull', ribs: 1, weapon: 'sword', armR: 0.026, legR: 0.034, hipW: 0.15, shoulderW: 0.20, torsoD: 0.10, boots: 0, belt: 0, glow: 1 }),
-  skeleton_knight: d('Skeleton Knight', 'biped', 'skeleton', 3, 180,
-    { skin: ['plaster', 12], body: ['stone', 7], skin2: ['plaster', 9], cloth: ['stone', 5], cloth2: ['blood', 4], metal: ['stone', 10], eye: ['fire', 12] },
-    { headShape: 'skull', ribs: 1, weapon: 'sword', shield: 'kite', helm: 'horned', pads: 1, armR: 0.032, legR: 0.040, glow: 1 }),
-  zombie: d('Zombie', 'biped', 'zombie', 1, 170,
-    { skin: ['swamp', 8], body: ['swamp', 7], skin2: ['swamp', 5], cloth: ['dirt', 4], cloth2: ['dirt', 2], hair: ['grey', 3], eye: ['grey', 12] },
-    { hunch: 0.34, armLen: 0.46, tatter: 1, stride: 0.65, armSwing: 0.3, headR: 0.072, glow: 0 }),
-  ghoul: d('Ghoul', 'biped', 'zombie', 2, 158,
-    { skin: ['plaster', 6], body: ['plaster', 6], skin2: ['plaster', 4], cloth: ['grey', 3], cloth2: ['grey', 2], horn: ['plaster', 13], eye: ['fire', 11] },
-    { hunch: 0.45, armLen: 0.52, digitigrade: 1, claws: 1, ears: 'point', tatter: 1, stride: 1.15, glow: 1, boots: 0 }),
-  ghost: d('Ghost', 'ghost', 'ghost', 1, 176,
-    { skin: ['ice', 11], body: ['ice', 10], skin2: ['ice', 8], cloth: ['ice', 9], cloth2: ['ice', 7], eye: ['ice', 14] },
-    { lower: 'none', robe: 1, headR: 0.072, armLen: 0.44, glow: 1, boots: 0, belt: 0, float: 0.10 }),
-  spectre: d('Spectre', 'ghost', 'ghost', 3, 182,
-    { skin: ['arcane', 5], body: ['arcane', 4], skin2: ['arcane', 3], cloth: ['arcane', 2], cloth2: ['arcane', 4], glow: ['arcane', 7], eye: ['arcane', 7] },
-    { lower: 'none', robe: 1, helm: 'hood', headShape: 'skull', armLen: 0.46, claws: 1, glow: 1, boots: 0, belt: 0, float: 0.14 }),
-  lich: d('Lich', 'biped', 'lich', 3, 180,
-    { skin: ['plaster', 11], body: ['arcane', 2], skin2: ['plaster', 8], cloth: ['arcane', 2], cloth2: ['gold', 9], metal: ['gold', 10], glow: ['arcane', 7], eye: ['arcane', 7] },
-    { headShape: 'skull', robe: 1, helm: 'crown', weapon: 'staff', cape: 1, ribs: 1, armR: 0.028, glow: 1, ranged: true }),
-  mummy: d('Mummy', 'biped', 'mummy', 2, 174,
-    { skin: ['sand', 10], body: ['sand', 9], skin2: ['sand', 7], cloth: ['sand', 11], cloth2: ['sand', 6], eye: ['fire', 10] },
-    { helm: 'wrap', tatter: 1, stride: 0.7, armSwing: 0.2, hunch: 0.10, glow: 1, boots: 0 }),
-  vampire: d('Vampire', 'biped', 'vampire', 3, 182,
-    { skin: ['plaster', 13], body: ['grey', 2], skin2: ['plaster', 10], cloth: ['grey', 1], cloth2: ['blood', 5], hair: ['grey', 1], eye: ['blood', 13] },
-    { cape: 1, hair: 'long', claws: 1, glow: 1, ranged: true, headR: 0.070 }),
+F('Bat', 'biped', 72,
+  { skin: ['wood', 4], body: ['wood', 4], skin2: ['wood', 2], wing: ['wood', 5], wing2: ['wood', 3], eye: ['fire', 12] },
+  {
+    headR: 0.20, legLen: 0.22, torsoH: 0.34, armLen: 0.12, shoulderW: 0.22, hipW: 0.18,
+    wings: 'bat', wingSpan: 1.0, ears: 'long', flyer: 1, boots: 0, belt: 0, glow: 1,
+  },
+  [['Bat', 3, 9], ['Giant Bat', 6, 21, { skin: ['grey', 5], body: ['grey', 5], wing: ['grey', 5], wing2: ['grey', 3] }, 1.30],
+    ['Vampire Bat', 9, 35, { skin: ['arcane', 2], body: ['arcane', 2], wing: ['arcane', 3], wing2: ['grey', 2], eye: ['blood', 13] }, 1.20]],
+  { flying: true, aspect: 1.7 });
 
-  // --- elemental / constructed ---
-  fire_elemental: d('Fire Elemental', 'blob', 'elemental', 2, 190,
-    { skin: ['fire', 10], body: ['fire', 9], glow: ['fire', 14] },
-    { lobes: 6, wide: 0.55, flame: 1, glow: 0.9, core: 1, arms: 1, drip: 1 }),
-  air_elemental: d('Air Elemental', 'blob', 'elemental', 2, 200,
-    { skin: ['ice', 10], body: ['ice', 9], glow: ['ice', 14] },
-    { lobes: 6, wide: 0.62, flame: 1, glow: 0.55, core: 1, arms: 1, drip: 1 }),
-  water_elemental: d('Water Elemental', 'blob', 'elemental', 2, 190,
-    { skin: ['water', 9], body: ['water', 8], glow: ['water', 13] },
-    { lobes: 5, wide: 0.68, glow: 0.4, core: 1, arms: 1, drip: 1 }),
-  earth_elemental: d('Earth Elemental', 'biped', 'elemental', 2, 210,
-    { skin: ['dirt', 4], body: ['dirt', 5], skin2: ['stone', 4], cloth: ['dirt', 3], cloth2: ['stone', 3], horn: ['stone', 6] },
-    { headShape: 'box', headR: 0.085, shoulderW: 0.36, hipW: 0.30, armLen: 0.48, armR: 0.062, legR: 0.075, legLen: 0.40, torsoH: 0.34, stride: 0.7, armSwing: 0.6, boots: 0, belt: 0 }),
-  gargoyle: d('Gargoyle', 'biped', 'gargoyle', 2, 160,
-    { skin: ['stone', 6], body: ['stone', 6], skin2: ['stone', 4], cloth: ['stone', 5], cloth2: ['stone', 3], wing: ['stone', 5], wing2: ['stone', 3], horn: ['stone', 9], eye: ['fire', 11] },
-    { headShape: 'round', horns: 'devil', ears: 'point', claws: 1, wings: 'bat', wingSpan: 0.75, digitigrade: 1, hunch: 0.22, tail: 0.4, boots: 0, belt: 0, glow: 1, aspect: 1.05 }),
-  stone_gargoyle: d('Stone Gargoyle', 'biped', 'gargoyle', 3, 190,
-    { skin: ['grey', 5], body: ['grey', 5], skin2: ['grey', 3], cloth: ['grey', 4], cloth2: ['grey', 2], wing: ['grey', 4], wing2: ['grey', 2], horn: ['grey', 9], eye: ['fire', 12] },
-    { headShape: 'bull', horns: 'ram', claws: 1, wings: 'bat', wingSpan: 0.85, digitigrade: 1, hunch: 0.20, tail: 0.45, shoulderW: 0.30, boots: 0, belt: 0, glow: 1, aspect: 1.1 }),
-  golem: d('Golem', 'biped', 'golem', 2, 230,
-    { skin: ['stone', 7], body: ['stone', 7], skin2: ['stone', 5], cloth: ['stone', 6], cloth2: ['stone', 4], glow: ['fire', 11] },
-    { headShape: 'box', headR: 0.080, shoulderW: 0.38, hipW: 0.32, armLen: 0.50, armR: 0.066, legR: 0.082, legLen: 0.38, torsoH: 0.36, stride: 0.6, armSwing: 0.5, boots: 0, belt: 0, glow: 1 }),
-  iron_golem: d('Iron Golem', 'biped', 'golem', 3, 250,
-    { skin: ['grey', 8], body: ['grey', 7], skin2: ['grey', 5], cloth: ['grey', 6], cloth2: ['grey', 4], metal: ['grey', 11], glow: ['fire', 13] },
-    { headShape: 'box', headR: 0.080, shoulderW: 0.40, hipW: 0.33, armLen: 0.50, armR: 0.070, legR: 0.086, legLen: 0.38, torsoH: 0.36, pads: 1, stride: 0.55, armSwing: 0.45, boots: 0, belt: 0, glow: 1 }),
-  will_o_wisp: d("Will-o'-Wisp", 'wisp', 'wisp', 2, 80,
-    { skin: ['ice', 12], body: ['ice', 10], glow: ['ice', 15] }, { ranged: true, flying: true }),
+F('Beholder', 'eye', 150,
+  { skin: ['foliage', 9], body: ['foliage', 6], skin2: ['foliage', 4], glow: ['grass', 13] },
+  { stalks: 5 },
+  [['Flying Eye', 30, 180], ['Terrible Eye', 40, 280, { skin: ['arcane', 5], body: ['arcane', 3], skin2: ['arcane', 2], glow: ['arcane', 7] }],
+    ['Maddening Eye', 50, 400, { skin: ['blood', 9], body: ['blood', 5], skin2: ['blood', 3], glow: ['fire', 13] }]],
+  { flying: true, ranged: true });
 
-  // --- big ---
-  ogre: d('Ogre', 'biped', 'ogre', 2, 250,
-    { skin: ['swamp', 9], body: ['swamp', 8], skin2: ['swamp', 6], cloth: ['dirt', 4], cloth2: ['wood', 3], hair: ['wood', 2], horn: ['sand', 11] },
-    { headR: 0.082, shoulderW: 0.34, hipW: 0.30, armLen: 0.50, armR: 0.058, legLen: 0.42, torsoH: 0.34, hunch: 0.20, weapon: 'club', beard: 1, stride: 0.8, armSwing: 0.85, ears: 'point', aspect: 0.92 }),
-  troll: d('Troll', 'biped', 'troll', 3, 268,
-    { skin: ['foliage', 6], body: ['foliage', 5], skin2: ['foliage', 3], cloth: ['dirt', 3], cloth2: ['swamp', 4], horn: ['sand', 10], eye: ['gold', 11] },
-    { headR: 0.078, shoulderW: 0.34, hipW: 0.28, armLen: 0.58, armR: 0.055, legLen: 0.38, torsoH: 0.34, hunch: 0.34, claws: 1, snout: 1, ears: 'point', stride: 0.85, glow: 1, boots: 0, aspect: 0.95 }),
-  cyclops: d('Cyclops', 'biped', 'cyclops', 3, 300,
-    { skin: ['flesh', 3], body: ['flesh', 3], skin2: ['flesh', 2], cloth: ['dirt', 5], cloth2: ['wood', 3], hair: ['grey', 2], eye: ['fire', 13] },
-    { headR: 0.085, shoulderW: 0.35, hipW: 0.30, armLen: 0.52, armR: 0.058, legLen: 0.44, torsoH: 0.32, weapon: 'club', eyes: 1, hair: 1, beard: 1, stride: 0.75, glow: 1, aspect: 0.92 }),
-  minotaur: d('Minotaur', 'biped', 'minotaur', 3, 265,
-    { skin: ['wood', 4], body: ['wood', 4], skin2: ['wood', 2], cloth: ['blood', 4], cloth2: ['dirt', 4], horn: ['sand', 12], metal: ['stone', 9], eye: ['fire', 12] },
-    { headShape: 'bull', horns: 'bull', headR: 0.085, shoulderW: 0.36, hipW: 0.28, armLen: 0.50, armR: 0.058, legLen: 0.44, digitigrade: 1, weapon: 'axe', tail: 0.35, hunch: 0.14, glow: 1, aspect: 0.95 }),
-  giant: d('Giant', 'biped', 'giant', 3, 330,
-    { skin: ['flesh', 4], body: ['flesh', 4], skin2: ['flesh', 3], cloth: ['wood', 5], cloth2: ['dirt', 4], hair: ['wood', 3] },
-    { headR: 0.076, shoulderW: 0.32, hipW: 0.27, armLen: 0.48, legLen: 0.46, weapon: 'club', beard: 'long', hair: 1, stride: 0.7 }),
-  hydra: d('Hydra', 'dragon', 'hydra', 3, 235,
-    { skin: ['swamp', 6], body: ['swamp', 6], skin2: ['swamp', 4], horn: ['sand', 10], glow: ['gold', 12], wing: ['swamp', 5], wing2: ['swamp', 3] },
-    { necks: 3, neck: 0.60, wings: 0, bodyLen: 1.15, tail: 0.8, headR: 0.11, spikes: 1, aspect: 1.6 }),
-  dragon_green: d('Green Dragon', 'dragon', 'dragon', 3, 290,
-    { skin: ['foliage', 7], body: ['foliage', 6], skin2: ['foliage', 4], horn: ['sand', 11], glow: ['gold', 13], wing: ['foliage', 5], wing2: ['foliage', 3] },
-    { aspect: 1.55 }),
-  dragon_red: d('Red Dragon', 'dragon', 'dragon', 3, 320,
-    { skin: ['blood', 7], body: ['blood', 6], skin2: ['blood', 4], horn: ['sand', 12], glow: ['fire', 14], wing: ['blood', 5], wing2: ['blood', 3] },
-    { aspect: 1.55 }),
-  dragon_black: d('Black Dragon', 'dragon', 'dragon', 3, 340,
-    { skin: ['grey', 2], body: ['grey', 2], skin2: ['grey', 1], horn: ['grey', 8], glow: ['arcane', 7], wing: ['grey', 3], wing2: ['grey', 1] },
-    { aspect: 1.55 }),
-  wyvern: d('Wyvern', 'dragon', 'wyvern', 3, 230,
-    { skin: ['swamp', 8], body: ['swamp', 7], skin2: ['swamp', 5], horn: ['sand', 11], glow: ['fire', 12], wing: ['swamp', 6], wing2: ['swamp', 4] },
-    { frontLegs: 0, wingSpan: 1.25, neck: 0.5, tail: 1.1, bodyLen: 1.0, flying: true, aspect: 1.6 }),
-  griffin: d('Griffin', 'dragon', 'griffin', 3, 195,
-    { skin: ['sand', 9], body: ['sand', 9], skin2: ['wood', 6], horn: ['gold', 11], glow: ['gold', 13], wing: ['sand', 11], wing2: ['sand', 7] },
-    { headShape: 'beak', wings: 'feather', wingSpan: 1.15, neck: 0.4, tail: 0.7, bodyLen: 1.15, spikes: 0, headR: 0.12, flying: true, aspect: 1.5 }),
-  roc: d('Roc', 'dragon', 'bird', 3, 260,
-    { skin: ['wood', 6], body: ['wood', 6], skin2: ['wood', 4], horn: ['gold', 12], glow: ['gold', 13], wing: ['wood', 8], wing2: ['wood', 5] },
-    { headShape: 'beak', wings: 'feather', wingSpan: 1.5, frontLegs: 0, neck: 0.42, tail: 0.5, bodyLen: 1.0, spikes: 0, headR: 0.12, flying: true, aspect: 1.7 }),
-  harpy: d('Harpy', 'biped', 'harpy', 2, 152,
-    { skin: ['flesh', 5], body: ['flesh', 5], skin2: ['wood', 5], cloth: ['wood', 6], cloth2: ['wood', 4], hair: ['blood', 5], wing: ['wood', 7], wing2: ['wood', 4], horn: ['sand', 12] },
-    { wings: 'feather', wingSpan: 0.85, digitigrade: 1, claws: 1, hair: 'long', flyer: 1, boots: 0, belt: 0, aspect: 1.25, flying: true }),
-  medusa: d('Medusa', 'biped', 'medusa', 3, 190,
-    { skin: ['grass', 8], body: ['grass', 7], skin2: ['grass', 5], cloth: ['gold', 8], cloth2: ['gold', 11], glow: ['gold', 13], eye: ['fire', 12] },
-    { lower: 'serpent', snakes: 1, weapon: 'bow', ranged: true, headR: 0.072, aspect: 1.1, boots: 0 }),
-  titan: d('Titan', 'biped', 'titan', 3, 380,
-    { skin: ['flesh', 6], body: ['ice', 9], skin2: ['flesh', 4], cloth: ['sky', 8], cloth2: ['gold', 11], metal: ['gold', 12], hair: ['grey', 12], glow: ['ice', 14] },
-    { headR: 0.072, shoulderW: 0.30, weapon: 'spear', helm: 'crown', cape: 1, pads: 1, beard: 'long', hair: 1, glow: 1 }),
+F('Bloodsucker', 'blob', 76,
+  { skin: ['flesh', 5], body: ['flesh', 4], glow: ['blood', 10] },
+  { lobes: 4, wide: 0.95, drip: 1, arms: 0 },
+  [['Blood Sucker', 2, 6], ['Brain Sucker', 4, 13, { body: ['plaster', 7], glow: ['arcane', 6] }],
+    ['Soul Sucker', 8, 30, { body: ['arcane', 3], glow: ['arcane', 7] }]],
+  { aspect: 1.35 });
 
-  // --- aquatic / misc ---
-  swamp_thing: d('Swamp Thing', 'biped', 'swamp', 2, 190,
-    { skin: ['swamp', 6], body: ['swamp', 5], skin2: ['foliage', 4], cloth: ['swamp', 4], cloth2: ['foliage', 3], horn: ['swamp', 10], eye: ['gold', 12] },
-    { headR: 0.080, shoulderW: 0.32, armLen: 0.50, hunch: 0.28, claws: 1, tatter: 1, stride: 0.8, boots: 0, belt: 0, glow: 1 }),
-  lizardman: d('Lizardman', 'biped', 'lizard', 2, 178,
-    { skin: ['foliage', 8], body: ['foliage', 7], skin2: ['foliage', 5], cloth: ['dirt', 5], cloth2: ['sand', 6], horn: ['sand', 11], eye: ['gold', 12] },
-    { headShape: 'lizard', horns: 'crest', tail: 0.55, weapon: 'spear', shield: 'round', digitigrade: 1, glow: 1, boots: 0, aspect: 1.0 }),
-  naga: d('Naga', 'biped', 'naga', 3, 200,
-    { skin: ['water', 9], body: ['water', 8], skin2: ['ice', 7], cloth: ['gold', 9], cloth2: ['gold', 12], glow: ['ice', 13], eye: ['gold', 13] },
-    { lower: 'serpent', headShape: 'lizard', weapon: 'spear', headR: 0.070, glow: 1, aspect: 1.15 }),
-  slime: d('Slime', 'blob', 'slime', 1, 90,
-    { skin: ['grass', 7], body: ['grass', 6], glow: ['grass', 12] },
-    { lobes: 4, wide: 0.85, drip: 1, aspect: 1.15 }),
-  ooze: d('Ooze', 'blob', 'slime', 2, 105,
-    { skin: ['arcane', 3], body: ['arcane', 2], glow: ['arcane', 7] },
-    { lobes: 4, wide: 0.9, drip: 1, glow: 0.25, aspect: 1.2 }),
-  devil: d('Devil', 'biped', 'devil', 3, 225,
-    { skin: ['blood', 6], body: ['blood', 5], skin2: ['blood', 3], cloth: ['grey', 2], cloth2: ['fire', 7], horn: ['grey', 3], wing: ['blood', 3], wing2: ['grey', 2], glow: ['fire', 13], eye: ['fire', 14] },
-    { horns: 'devil', wings: 'bat', wingSpan: 0.8, tail: 0.55, weapon: 'scythe', claws: 1, digitigrade: 1, glow: 1, boots: 0, aspect: 1.1 }),
-  imp: d('Imp', 'biped', 'devil', 1, 86,
-    { skin: ['blood', 8], body: ['blood', 7], skin2: ['blood', 5], cloth: ['grey', 3], cloth2: ['fire', 8], horn: ['grey', 4], wing: ['blood', 5], wing2: ['grey', 3], glow: ['fire', 12], eye: ['fire', 13] },
-    { headR: 0.115, horns: 'devil', ears: 'long', wings: 'bat', wingSpan: 0.7, tail: 0.5, claws: 1, digitigrade: 1, flyer: 1, glow: 1, boots: 0, belt: 0, aspect: 1.3, flying: true }),
-  demon: d('Demon', 'biped', 'devil', 3, 255,
-    { skin: ['fire', 5], body: ['fire', 4], skin2: ['blood', 3], cloth: ['grey', 2], cloth2: ['fire', 9], horn: ['sand', 9], wing: ['grey', 2], wing2: ['grey', 1], glow: ['fire', 14], eye: ['fire', 14] },
-    { headShape: 'bull', horns: 'ram', shoulderW: 0.36, armLen: 0.52, wings: 'bat', wingSpan: 0.95, tail: 0.5, weapon: 'sword', claws: 1, digitigrade: 1, glow: 1, boots: 0, pads: 1, aspect: 1.15 }),
-  dragonfly: d('Dragonfly', 'insect', 'insect', 1, 46,
-    { skin: ['ice', 9], body: ['ice', 8], skin2: ['water', 8], glow: ['ice', 14], wing: ['ice', 13], wing2: ['ice', 10] },
-    { legs: 6, legLen: 0.35, bodyR: 0.16, abdomen: 0.14, bodyLen: 1.3, wings: 'insect', wingSpan: 0.95, carapace: 0, glow: 1, aspect: 1.8, flying: true }),
-};
+F('Cleric', 'biped', 192,
+  { skin: ['flesh', 4], cloth: ['grey', 2], cloth2: ['grey', 4], metal: ['stone', 8], glow: ['grey', 10] },
+  { robe: 1, helm: 'hood', weapon: 'staff' },
+  [['Acolyte of Baa', 8, 30], ['Cleric of Baa', 15, 67, { cloth: ['blood', 4], cloth2: ['blood', 7], glow: ['blood', 12] }],
+    ['Priest of Baa', 25, 137, { cloth: ['blood', 6], cloth2: ['gold', 10], metal: ['gold', 11], glow: ['fire', 13] }]],
+  { ranged: true });
 
-export const CREATURE_KINDS = Object.keys(CREATURE_DEFS);
+F('Cobra', 'serpent', 122,
+  { skin: ['dirt', 7], body: ['dirt', 5], skin2: ['dirt', 9], glow: ['gold', 12] },
+  { hood: 0.36, coils: 8, glow: 1 },
+  [['Cobra', 5, 17], ['King Cobra', 10, 40, { skin: ['foliage', 8], body: ['foliage', 6], skin2: ['foliage', 10] }],
+    ['Queen Cobra', 14, 61, { skin: ['gold', 9], body: ['gold', 7], skin2: ['gold', 12] }]]);
+
+F('Cockatrice', 'biped', 178,
+  {
+    skin: ['swamp', 8], body: ['swamp', 7], skin2: ['sand', 8], cloth: ['swamp', 6], cloth2: ['fire', 8],
+    horn: ['gold', 11], wing: ['sand', 9], wing2: ['wood', 6], eye: ['fire', 12],
+  },
+  {
+    headShape: 'beak', headR: 0.085, digitigrade: 1, claws: 1, wings: 'feather', wingSpan: 0.72,
+    tail: 0.45, hunch: 0.28, boots: 0, belt: 0, armLen: 0.30, glow: 1,
+  },
+  [["Agar's Pet", 13, 55], ["Agar's Monster", 15, 67, { skin: ['blood', 6], body: ['blood', 5], wing: ['blood', 7] }],
+    ["Agar's Abomination", 17, 79, { skin: ['arcane', 4], body: ['arcane', 3], wing: ['arcane', 5], horn: ['ice', 11] }]],
+  { aspect: 1.15 });
+
+F('DemonFly', 'biped', 280,
+  {
+    skin: ['blood', 6], body: ['blood', 5], skin2: ['blood', 3], cloth: ['grey', 2], cloth2: ['fire', 8],
+    horn: ['grey', 3], wing: ['blood', 3], wing2: ['grey', 2], glow: ['fire', 13], eye: ['fire', 14],
+  },
+  {
+    horns: 'devil', wings: 'bat', wingSpan: 0.95, tail: 0.5, weapon: 'sword', claws: 1,
+    digitigrade: 1, glow: 1, boots: 0, shoulderW: 0.32,
+  },
+  [['Devil Captain', 30, 180], ['Devil Master', 50, 400, { skin: ['fire', 6], body: ['fire', 5], wing: ['fire', 4] }],
+    ['Devil King', 70, 700, { skin: ['grey', 2], body: ['grey', 2], cloth2: ['fire', 12], glow: ['fire', 14] }]],
+  { flying: true, aspect: 1.2 });
+
+F('Demon', 'biped', 300,
+  {
+    skin: ['blood', 5], body: ['blood', 4], skin2: ['blood', 2], cloth: ['dirt', 3], cloth2: ['fire', 7],
+    horn: ['sand', 9], metal: ['stone', 8], eye: ['fire', 13],
+  },
+  {
+    headShape: 'bull', horns: 'ram', shoulderW: 0.36, hipW: 0.29, armLen: 0.50, armR: 0.055,
+    weapon: 'spear', claws: 1, digitigrade: 1, glow: 1, boots: 0, hunch: 0.12,
+  },
+  [['Devil Spawn', 20, 100], ['Devil Worker', 40, 280, { skin: ['blood', 3], body: ['blood', 2], cloth2: ['fire', 10] }],
+    ['Devil Warrior', 60, 540, { skin: ['fire', 4], body: ['fire', 3], horn: ['grey', 3], metal: ['grey', 10] }]],
+  { aspect: 0.95 });
+
+F('DragonCave', 'dragon', 400,
+  { skin: ['blood', 6], body: ['blood', 5], skin2: ['blood', 3], horn: ['sand', 10], glow: ['fire', 13] },
+  { wings: 0, bodyLen: 1.45, legLen: 0.26, neck: 0.5, tail: 1.0, headR: 0.10, spikes: 1 },
+  [['Fire Lizard', 40, 280], ['Lightning Lizard', 50, 400, { skin: ['water', 8], body: ['water', 6], skin2: ['water', 4], glow: ['ice', 13] }],
+    ['Thunder Lizard', 60, 540, { skin: ['arcane', 4], body: ['arcane', 3], skin2: ['arcane', 2], glow: ['arcane', 7] }]],
+  { aspect: 1.75 });
+
+F('DragonFly', 'dragon', 260,
+  {
+    skin: ['fire', 7], body: ['fire', 6], skin2: ['fire', 4], horn: ['sand', 11],
+    glow: ['fire', 14], wing: ['fire', 5], wing2: ['blood', 3],
+  },
+  { frontLegs: 0, wingSpan: 1.20, neck: 0.45, tail: 0.95, bodyLen: 0.95, headR: 0.11, legLen: 0.32 },
+  [['Flame Drake', 24, 129], ['Frost Drake', 28, 162, { skin: ['ice', 10], body: ['ice', 8], skin2: ['ice', 6], wing: ['ice', 7], glow: ['ice', 14] }],
+    ['Energy Drake', 32, 198, { skin: ['arcane', 5], body: ['arcane', 4], skin2: ['arcane', 2], wing: ['arcane', 3], glow: ['arcane', 7] }]],
+  { flying: true, aspect: 1.6 });
+
+F('DragonLand', 'dragon', 460,
+  { skin: ['swamp', 7], body: ['swamp', 5], skin2: ['swamp', 3], horn: ['sand', 9], glow: ['gold', 12] },
+  { legless: 1, wings: 0, bodyLen: 1.5, neck: 0.75, tail: 1.5, headR: 0.10, spikes: 1 },
+  [['Wyrm', 50, 400], ['Giant Wyrm', 60, 540, { skin: ['wood', 6], body: ['wood', 5], skin2: ['wood', 3] }],
+    ['Great Wyrm', 70, 700, { skin: ['gold', 6], body: ['gold', 5], skin2: ['wood', 3], glow: ['gold', 14] }]],
+  { aspect: 2.0 });
+
+F('DragonCover', 'dragon', 620,
+  {
+    skin: ['blood', 7], body: ['blood', 6], skin2: ['blood', 4], horn: ['sand', 12],
+    glow: ['fire', 14], wing: ['blood', 5], wing2: ['blood', 3],
+  },
+  {},
+  [['Red Dragon', 80, 880],
+    ['Blue Dragon', 90, 1080, { skin: ['water', 8], body: ['water', 7], skin2: ['water', 4], wing: ['water', 6], wing2: ['water', 3], glow: ['ice', 14] }],
+    ['Gold Dragon', 100, 1300, { skin: ['gold', 9], body: ['gold', 8], skin2: ['gold', 5], wing: ['gold', 7], wing2: ['gold', 4], glow: ['gold', 15] }]],
+  { aspect: 1.6 });
+
+F('Druidess', 'biped', 186,
+  { skin: ['flesh', 6], cloth: ['foliage', 6], cloth2: ['wood', 5], glow: ['grass', 12], hair: ['wood', 4], metal: ['gold', 8] },
+  { robe: 1, helm: 'hood', weapon: 'staff', hipW: 0.20, shoulderW: 0.21, hair: 'long' },
+  [['Druid', 10, 40], ['Great Druid', 16, 73, { cloth: ['wood', 5], cloth2: ['gold', 9] }],
+    ['Grand Druid', 28, 162, { cloth: ['grass', 9], cloth2: ['gold', 12], glow: ['gold', 14] }]],
+  { ranged: true });
+
+F('Dwarf', 'biped', 148,
+  { skin: ['flesh', 4], cloth: ['wood', 6], cloth2: ['blood', 5], hair: ['fire', 7], metal: ['stone', 9] },
+  {
+    headR: 0.100, legLen: 0.34, torsoH: 0.36, shoulderW: 0.31, hipW: 0.27, armLen: 0.38,
+    beard: 'long', weapon: 'axe', helm: 'cap', stride: 0.85,
+  },
+  [['Dwarf', 10, 40], ['Dwarf Warrior', 20, 100, { cloth: ['stone', 6], metal: ['stone', 11], hair: ['wood', 3] }],
+    ['Dwarf Lord', 30, 180, { cloth: ['blood', 5], metal: ['gold', 10], hair: ['grey', 11] }]]);
+
+F('ElemAir', 'blob', 250,
+  { skin: ['ice', 11], body: ['ice', 9], glow: ['ice', 14] },
+  { lobes: 6, wide: 0.58, flame: 1, glow: 0.5, core: 1, arms: 1, drip: 1 },
+  [['Dust Devil', 16, 73, { body: ['sand', 7], glow: ['sand', 12] }],
+    ['Twister', 22, 114, { body: ['stone', 8], glow: ['ice', 12] }],
+    ['Air Elemental', 33, 207]]);
+
+F('ElemEarth', 'biped', 280,
+  { skin: ['dirt', 4], body: ['dirt', 5], skin2: ['stone', 4], cloth: ['dirt', 3], cloth2: ['stone', 3], horn: ['stone', 6] },
+  {
+    headShape: 'box', headR: 0.078, shoulderW: 0.38, hipW: 0.31, armLen: 0.48, armR: 0.062,
+    legR: 0.078, legLen: 0.38, torsoH: 0.36, stride: 0.7, armSwing: 0.6, boots: 0, belt: 0, hunch: 0.10,
+  },
+  [['Rock Beast', 25, 137], ['Earth Spirit', 30, 180, { skin: ['stone', 6], body: ['stone', 6], skin2: ['stone', 3] }],
+    ['Earth Elemental', 40, 280, { skin: ['grey', 5], body: ['grey', 5], skin2: ['grey', 3], horn: ['ice', 9] }]],
+  { aspect: 0.95 });
+
+F('ElemFire', 'blob', 240,
+  { skin: ['fire', 10], body: ['fire', 8], glow: ['fire', 15] },
+  { lobes: 6, wide: 0.55, flame: 1, glow: 0.92, core: 1, arms: 1, drip: 1 },
+  [['Fire Beast', 13, 55], ['Fire Spirit', 26, 145, { body: ['fire', 11], glow: ['gold', 15] }],
+    ['Fire Elemental', 39, 269, { body: ['blood', 9], glow: ['fire', 15] }]]);
+
+F('ElemWater', 'blob', 220,
+  { skin: ['water', 10], body: ['water', 8], glow: ['water', 13] },
+  { lobes: 5, wide: 0.66, glow: 0.35, core: 1, arms: 1, drip: 1 },
+  [['Water Beast', 14, 61], ['Water Spirit', 24, 129, { body: ['ice', 9], glow: ['ice', 14] }],
+    ['Water Elemental', 36, 237, { body: ['water', 6], glow: ['ice', 12] }]]);
+
+F('FighterChain', 'biped', 196,
+  { skin: ['flesh', 5], body: ['stone', 9], cloth: ['stone', 7], cloth2: ['blood', 5], metal: ['stone', 11] },
+  { weapon: 'sword', shield: 'kite', helm: 'cap', pads: 1, shoulderW: 0.27 },
+  [['Fighter', 14, 61], ['Soldier', 24, 129, { cloth2: ['water', 6], metal: ['stone', 12] }],
+    ['Veteran', 35, 227, { body: ['grey', 10], cloth: ['grey', 8], cloth2: ['gold', 9], metal: ['grey', 13] }]]);
+
+F('FighterLeath', 'biped', 192,
+  { skin: ['flesh', 4], cloth: ['wood', 4], cloth2: ['dirt', 3], metal: ['stone', 8], hair: ['wood', 2] },
+  { weapon: 'club', hunch: 0.08, hair: 1, shoulderW: 0.27, hipW: 0.22 },
+  [['Thug', 8, 30], ['Ruffian', 14, 61, { cloth: ['dirt', 5], weapon: 'sword' }],
+    ['Brigand', 22, 114, { cloth: ['blood', 4], cloth2: ['wood', 5] }]]);
+
+F('Gargoyle', 'biped', 200,
+  {
+    skin: ['stone', 6], body: ['stone', 6], skin2: ['stone', 4], cloth: ['stone', 5], cloth2: ['stone', 3],
+    wing: ['stone', 5], wing2: ['stone', 3], horn: ['stone', 9], eye: ['fire', 11],
+  },
+  {
+    horns: 'devil', ears: 'point', claws: 1, wings: 'bat', wingSpan: 0.78, digitigrade: 1,
+    hunch: 0.30, tail: 0.4, boots: 0, belt: 0, glow: 1, legLen: 0.40, armLen: 0.46,
+  },
+  [['Stone Gargoyle', 16, 73],
+    ['Marble Gargoyle', 22, 114, { skin: ['plaster', 12], body: ['plaster', 12], skin2: ['plaster', 9], wing: ['plaster', 11], wing2: ['plaster', 8], horn: ['plaster', 14] }],
+    ['Diamond Gargoyle', 33, 207, { skin: ['ice', 11], body: ['ice', 10], skin2: ['ice', 7], wing: ['ice', 9], wing2: ['ice', 6], horn: ['ice', 14] }]],
+  { aspect: 1.15 });
+
+F('Genie', 'biped', 300,
+  { skin: ['water', 9], body: ['water', 8], skin2: ['water', 6], cloth: ['ice', 8], cloth2: ['gold', 11], metal: ['gold', 11], hair: ['grey', 2] },
+  { lower: 'smoke', beard: 1, helm: 'wrap', armLen: 0.44, shoulderW: 0.30, boots: 0, glow: 1, weapon: 'none' },
+  [['Genie', 33, 207], ['Djinn', 44, 325, { skin: ['arcane', 5], body: ['arcane', 4], skin2: ['arcane', 3], cloth: ['arcane', 2] }],
+    ['Efreet', 55, 467, { skin: ['blood', 7], body: ['blood', 6], skin2: ['blood', 4], cloth: ['fire', 6], glow: ['fire', 14] }]],
+  { flying: true, aspect: 0.95 });
+
+F('Ghost', 'biped', 200,
+  { skin: ['ice', 11], body: ['ice', 10], skin2: ['ice', 8], cloth: ['ice', 9], cloth2: ['ice', 7], eye: ['ice', 14] },
+  { lower: 'none', robe: 1, headR: 0.072, armLen: 0.44, glow: 1, boots: 0, belt: 0, float: 0.08 },
+  [['Ghost', 9, 35],
+    ['Evil Spirit', 13, 55, { skin: ['grass', 9], body: ['grass', 7], cloth: ['grass', 6], cloth2: ['foliage', 5], eye: ['grass', 13] }],
+    ['Specter', 19, 93, { skin: ['arcane', 5], body: ['arcane', 4], cloth: ['arcane', 2], cloth2: ['arcane', 4], eye: ['arcane', 7], headShape: 'skull' }]],
+  { flying: true, aspect: 0.9 });
+
+F('Goblin', 'biped', 168,
+  { skin: ['grass', 5], skin2: ['grass', 3], cloth: ['dirt', 5], cloth2: ['wood', 4], metal: ['stone', 7] },
+  {
+    headR: 0.098, legLen: 0.42, torsoH: 0.30, hunch: 0.22, ears: 'long', weapon: 'club',
+    shoulderW: 0.25, armLen: 0.44, stride: 1.1,
+  },
+  [['Goblin', 4, 13],
+    ['Goblin Shaman', 6, 21, { skin: ['swamp', 7], cloth: ['arcane', 3], cloth2: ['gold', 9], glow: ['arcane', 7], weapon: 'staff' }],
+    ['Goblin King', 10, 40, { skin: ['grass', 7], cloth: ['blood', 5], cloth2: ['blood', 7], metal: ['gold', 10], weapon: 'axe', helm: 'crown' }, 1.16]]);
+
+F('Guard', 'biped', 198,
+  { skin: ['flesh', 5], body: ['stone', 8], cloth: ['sky', 6], cloth2: ['gold', 9], metal: ['stone', 11] },
+  { weapon: 'spear', shield: 'kite', helm: 'cap', pads: 1 },
+  [['Guard', 11, 45], ['Lieutenant', 19, 93, { cloth: ['blood', 5], metal: ['stone', 12] }],
+    ['Captain', 33, 207, { cloth: ['arcane', 4], cloth2: ['gold', 12], metal: ['grey', 13] }]]);
+
+F('Harpy', 'biped', 190,
+  {
+    skin: ['flesh', 5], body: ['flesh', 5], skin2: ['wood', 5], cloth: ['wood', 6], cloth2: ['wood', 4],
+    hair: ['blood', 5], wing: ['wood', 7], wing2: ['wood', 4], horn: ['sand', 12],
+  },
+  { wings: 'feather', wingSpan: 0.88, digitigrade: 1, claws: 1, hair: 'long', flyer: 1, boots: 0, belt: 0, hipW: 0.20 },
+  [['Harpy', 14, 61], ['Harpy Hag', 17, 79, { skin: ['swamp', 7], hair: ['grey', 4], wing: ['grey', 5], wing2: ['grey', 3] }],
+    ['Harpy Witch', 19, 93, { skin: ['arcane', 5], hair: ['arcane', 3], wing: ['arcane', 4], wing2: ['arcane', 2] }]],
+  { flying: true, aspect: 1.3 });
+
+F('Hydra', 'dragon', 470,
+  { skin: ['foliage', 6], body: ['foliage', 6], skin2: ['foliage', 4], horn: ['sand', 10], glow: ['gold', 12] },
+  { necks: 3, neck: 0.58, wings: 0, bodyLen: 1.15, tail: 0.8, headR: 0.10, spikes: 1, legLen: 0.30 },
+  [['Hydra', 45, 337], ['Venomous Hydra', 55, 467, { skin: ['swamp', 8], body: ['swamp', 7], glow: ['grass', 13] }],
+    ['Colossal Hydra', 65, 617, { skin: ['arcane', 4], body: ['arcane', 3], skin2: ['arcane', 2], glow: ['arcane', 7] }]],
+  { aspect: 1.55 });
+
+F('Jackalman', 'biped', 218,
+  {
+    skin: ['sand', 7], body: ['sand', 7], skin2: ['wood', 4], cloth: ['gold', 9], cloth2: ['sky', 6],
+    metal: ['gold', 11], horn: ['gold', 12], eye: ['gold', 13],
+  },
+  { headShape: 'wolf', headR: 0.082, weapon: 'spear', shield: 'round', pads: 1, digitigrade: 1, glow: 1, boots: 0 },
+  [['Defender', 35, 227],
+    ['Sentinel', 55, 467, { cloth: ['blood', 5], metal: ['stone', 11], skin: ['dirt', 5], body: ['dirt', 5] }],
+    ['Guardian of VARN', 65, 617, { cloth: ['arcane', 4], metal: ['gold', 13], skin: ['grey', 4], body: ['grey', 4] }]],
+  { aspect: 0.95 });
+
+F('KnightPlate', 'biped', 230,
+  { skin: ['grey', 2], body: ['grey', 3], cloth: ['grey', 2], cloth2: ['blood', 4], metal: ['grey', 5], eye: ['blood', 12] },
+  { weapon: 'sword', helm: 'full', pads: 1, cape: 1, shoulderW: 0.30, hipW: 0.25, glow: 1 },
+  [['Death Knight', 40, 280],
+    ['Doom Knight', 60, 540, { body: ['stone', 4], metal: ['stone', 7], cloth2: ['arcane', 4], eye: ['arcane', 7] }],
+    ['Cuisinart', 80, 880, { body: ['grey', 9], metal: ['grey', 13], cloth2: ['fire', 9], eye: ['fire', 14] }]],
+  { aspect: 0.9 });
+
+F('Lich', 'biped', 205,
+  {
+    skin: ['plaster', 11], body: ['arcane', 2], skin2: ['plaster', 8], cloth: ['arcane', 2], cloth2: ['gold', 9],
+    metal: ['gold', 10], glow: ['arcane', 7], eye: ['arcane', 7],
+  },
+  { headShape: 'skull', robe: 1, helm: 'crown', weapon: 'staff', cape: 1, ribs: 1, armR: 0.028, glow: 1 },
+  [['Lich', 20, 100], ['Greater Lich', 30, 180, { cloth: ['blood', 3], cloth2: ['blood', 7], glow: ['blood', 12], eye: ['blood', 13] }],
+    ['Power Lich', 40, 280, { cloth: ['ice', 4], cloth2: ['ice', 10], glow: ['ice', 14], eye: ['ice', 14] }]],
+  { ranged: true });
+
+F('LizardArch', 'biped', 190,
+  {
+    skin: ['foliage', 8], body: ['foliage', 7], skin2: ['foliage', 5], cloth: ['dirt', 5], cloth2: ['sand', 6],
+    horn: ['sand', 11], eye: ['gold', 12],
+  },
+  { headShape: 'lizard', headR: 0.080, horns: 'crest', tail: 0.55, weapon: 'spear', shield: 'round', digitigrade: 1, glow: 1, boots: 0 },
+  [['Lizard Man', 4, 13],
+    ['Lizard Archer', 7, 25, { skin: ['swamp', 8], body: ['swamp', 7], weapon: 'bow', shield: 0 }],
+    ['Lizard Wizard', 11, 45, { skin: ['water', 8], body: ['water', 7], cloth: ['arcane', 3], weapon: 'staff', shield: 0, glow: ['arcane', 7] }]],
+  { aspect: 1.05 });
+
+F('Medusa', 'biped', 210,
+  { skin: ['grass', 8], body: ['grass', 7], skin2: ['grass', 5], cloth: ['gold', 8], cloth2: ['gold', 11], glow: ['gold', 13], eye: ['fire', 12] },
+  { lower: 'serpent', snakes: 1, weapon: 'bow', headR: 0.070, boots: 0, hipW: 0.20 },
+  [['Medusa', 35, 227], ['Medusa Enchantress', 40, 280, { skin: ['swamp', 9], body: ['swamp', 7], cloth: ['arcane', 4] }],
+    ['Gorgon', 45, 337, { skin: ['stone', 8], body: ['stone', 7], skin2: ['stone', 5], cloth: ['blood', 5] }]],
+  { ranged: true, aspect: 1.15 });
+
+F('Merchant', 'biped', 188,
+  { skin: ['flesh', 5], cloth: ['blood', 5], cloth2: ['plaster', 12], hair: ['wood', 3], metal: ['gold', 9] },
+  { robe: 'short', belt: 1, hipW: 0.24, torsoD: 0.17, hair: 1, beard: 1, weapon: 'none' },
+  [['Peasant', 4, 13], ['Peasant', 5, 17, { cloth: ['sky', 6] }], ['Peasant', 6, 21, { cloth: ['foliage', 6] }]]);
+
+F('Minotaur', 'biped', 320,
+  {
+    skin: ['wood', 4], body: ['wood', 4], skin2: ['wood', 2], cloth: ['blood', 4], cloth2: ['dirt', 4],
+    horn: ['sand', 12], metal: ['stone', 9], eye: ['fire', 12],
+  },
+  {
+    headShape: 'bull', horns: 'bull', headR: 0.082, shoulderW: 0.36, hipW: 0.28, armLen: 0.50,
+    armR: 0.058, legLen: 0.44, digitigrade: 1, weapon: 'axe', tail: 0.35, hunch: 0.14, glow: 1,
+  },
+  [['Minotaur', 39, 269],
+    ['Minotaur Mage', 59, 525, { skin: ['stone', 5], body: ['stone', 5], cloth: ['arcane', 3], weapon: 'staff', glow: ['arcane', 7] }],
+    ['Minotaur King', 79, 861, { skin: ['grey', 3], body: ['grey', 3], cloth: ['gold', 8], metal: ['gold', 11], horn: ['gold', 13] }]],
+  { aspect: 0.95 });
+
+F('Monk', 'biped', 192,
+  { skin: ['flesh', 5], cloth: ['sand', 9], cloth2: ['blood', 6], hair: ['grey', 2] },
+  { robe: 'short', weapon: 'none', boots: 0, armLen: 0.42, hunch: 0.05 },
+  [['Novice', 8, 30], ['Initiate', 16, 73, { cloth: ['dirt', 7], cloth2: ['sky', 7] }],
+    ['Master Monk', 27, 153, { cloth: ['plaster', 12], cloth2: ['gold', 10] }]]);
+
+F('Nobleman', 'biped', 192,
+  { skin: ['flesh', 6], body: ['stone', 10], cloth: ['sky', 7], cloth2: ['gold', 10], metal: ['stone', 12], hair: ['wood', 4] },
+  { weapon: 'sword', helm: 'hat', cape: 1, hair: 1, armR: 0.036 },
+  [['Swordsman', 10, 40], ['Expert Swordsman', 17, 79, { cloth: ['blood', 5], cloth2: ['plaster', 12] }],
+    ['Master Swordsman', 24, 129, { cloth: ['arcane', 4], cloth2: ['gold', 12], body: ['grey', 11] }]]);
+
+F('Ooze', 'blob', 130,
+  { skin: ['grass', 7], body: ['grass', 6], glow: ['grass', 12] },
+  { lobes: 4, wide: 0.88, drip: 1 },
+  [['Ooze', 12, 50], ['Acidic Ooze', 18, 86, { body: ['gold', 7], glow: ['gold', 13] }],
+    ['Corrosive Ooze', 25, 137, { body: ['arcane', 3], glow: ['arcane', 7] }]],
+  { aspect: 1.25 });
+
+F('Ogre', 'biped', 300,
+  {
+    skin: ['swamp', 8], body: ['swamp', 7], skin2: ['swamp', 5], cloth: ['dirt', 4], cloth2: ['wood', 3],
+    hair: ['wood', 2], horn: ['sand', 11],
+  },
+  {
+    headR: 0.080, shoulderW: 0.34, hipW: 0.31, armLen: 0.50, armR: 0.058, legLen: 0.42,
+    torsoH: 0.34, hunch: 0.22, weapon: 'club', beard: 1, stride: 0.8, armSwing: 0.85, ears: 'point',
+  },
+  [['Ogre', 15, 67], ['Ogre Raider', 20, 100, { skin: ['stone', 6], body: ['stone', 6], cloth: ['blood', 4] }],
+    ['Ogre Chieftain', 28, 162, { skin: ['dirt', 5], body: ['dirt', 5], cloth: ['gold', 8], horn: ['gold', 12] }]],
+  { aspect: 0.92 });
+
+// -- civilians --------------------------------------------------------------
+
+F('PeasantF1', 'biped', 176,
+  { skin: ['flesh', 6], cloth: ['sand', 9], cloth2: ['blood', 6], hair: ['wood', 4] },
+  { robe: 1, hipW: 0.20, shoulderW: 0.21, hair: 'long', weapon: 'none' },
+  [['Peasant', 1, 3], ['Peasant', 2, 6, { cloth: ['grass', 8] }], ['Peasant', 3, 9, { cloth: ['water', 8] }]]);
+
+F('PeasantF2', 'biped', 174,
+  { skin: ['flesh', 5], cloth: ['plaster', 10], cloth2: ['wood', 5], hair: ['fire', 6] },
+  { robe: 1, hipW: 0.20, shoulderW: 0.21, hair: 'long', weapon: 'none' },
+  [['Peasant', 1, 3], ['Peasant', 2, 6, { cloth: ['sky', 7] }], ['Peasant', 3, 9, { cloth: ['gold', 8] }]]);
+
+F('PeasantF3', 'biped', 178,
+  { skin: ['flesh', 5], cloth: ['grey', 2], cloth2: ['grey', 4], metal: ['stone', 10], hair: ['wood', 2] },
+  { robe: 'short', helm: 'hood', weapon: 'dagger', hipW: 0.20, shoulderW: 0.21, hunch: 0.12 },
+  [['Cutpurse', 3, 9], ['Bounty Hunter', 5, 17, { cloth: ['wood', 4], cloth2: ['blood', 5] }],
+    ['Assassin', 7, 25, { cloth: ['arcane', 2], cloth2: ['blood', 4] }]]);
+
+F('PeasantF4', 'biped', 176,
+  { skin: ['dirt', 7], skin2: ['dirt', 5], cloth: ['blood', 6], cloth2: ['sand', 11], hair: ['grey', 1], horn: ['plaster', 13] },
+  { weapon: 'spear', hair: 'long', boots: 0, hipW: 0.20, shoulderW: 0.21, robe: 'short' },
+  [['Cannibal', 6, 21], ['Head Hunter', 8, 30, { cloth: ['foliage', 5], cloth2: ['fire', 8] }],
+    ['Witch Doctor', 10, 40, { cloth: ['arcane', 3], cloth2: ['gold', 10], helm: 'hood' }]]);
+
+F('PeasantM1', 'biped', 186,
+  { skin: ['flesh', 5], cloth: ['dirt', 8], cloth2: ['wood', 5], hair: ['wood', 3] },
+  { hair: 1, weapon: 'none' },
+  [['Peasant', 1, 3], ['Peasant', 2, 6, { cloth: ['grass', 7] }], ['Peasant', 3, 9, { cloth: ['sand', 9] }]]);
+
+F('PeasantM2', 'biped', 190,
+  { skin: ['flesh', 6], cloth: ['sky', 6], cloth2: ['sky', 9], glow: ['sky', 13], hair: ['wood', 5] },
+  { robe: 1, helm: 'hood', weapon: 'staff' },
+  [['Apprentice', 2, 6], ['Journeyman Mage', 6, 21, { cloth: ['water', 7], glow: ['ice', 13] }],
+    ['Mage', 10, 40, { cloth: ['arcane', 4], cloth2: ['gold', 10], glow: ['arcane', 7], helm: 'hat' }]],
+  { ranged: true });
+
+F('PeasantM3', 'biped', 188,
+  { skin: ['flesh', 4], cloth: ['plaster', 8], cloth2: ['dirt', 5], hair: ['grey', 3] },
+  { robe: 1, helm: 'hood', weapon: 'none' },
+  [['Follower', 3, 9], ['Mystic', 5, 17, { cloth: ['stone', 6], cloth2: ['sky', 7] }],
+    ['Fanatic of Baa', 7, 25, { cloth: ['blood', 4], cloth2: ['blood', 8], weapon: 'dagger' }]]);
+
+F('PeasantM4', 'biped', 188,
+  { skin: ['dirt', 6], skin2: ['dirt', 4], cloth: ['sand', 8], cloth2: ['blood', 6], hair: ['grey', 1], horn: ['plaster', 13] },
+  { weapon: 'spear', boots: 0, helm: 'wrap', hunch: 0.08 },
+  [['Cannibal', 6, 21], ['Head Hunter', 8, 30, { cloth: ['foliage', 5], cloth2: ['fire', 8] }],
+    ['Witch Doctor', 10, 40, { cloth: ['arcane', 3], cloth2: ['gold', 10] }]]);
+
+// -- beasts, undead, constructs --------------------------------------------
+
+F('Rat', 'quad', 70,
+  { skin: ['dirt', 6], body: ['dirt', 6], skin2: ['flesh', 3], hair: ['dirt', 4], eye: ['blood', 11] },
+  { bodyLen: 1.5, legLen: 0.42, bodyR: 0.28, headShape: 'rat', headR: 0.24, ears: 'round', tail: 1.1, tailUp: -0.15, glow: 1, stride: 1.3 },
+  [['Common Rat', 2, 6], ['Large Rat', 4, 13, { skin: ['stone', 5], body: ['stone', 5] }, 1.25],
+    ['Giant Rat', 6, 21, { skin: ['wood', 3], body: ['wood', 3] }, 1.5]],
+  { aspect: 1.45 });
+
+F('Robot', 'biped', 240,
+  { skin: ['grey', 9], body: ['grey', 8], skin2: ['grey', 6], cloth: ['grey', 7], cloth2: ['stone', 5], metal: ['grey', 12], glow: ['ice', 14] },
+  {
+    headShape: 'box', headR: 0.070, shoulderW: 0.32, hipW: 0.25, armLen: 0.46, armR: 0.050,
+    legR: 0.062, legLen: 0.44, torsoH: 0.32, pads: 1, stride: 0.7, armSwing: 0.6, boots: 0, belt: 0, glow: 1,
+  },
+  [['Patrol Unit', 50, 400], ['Enforcer Unit', 70, 700, { body: ['stone', 7], metal: ['stone', 12], glow: ['gold', 14] }],
+    ['Terminator Unit', 90, 1080, { body: ['grey', 3], skin: ['grey', 4], metal: ['grey', 6], glow: ['blood', 13] }]]);
+
+F('SeaSerpent', 'dragon', 420,
+  { skin: ['water', 8], body: ['water', 7], skin2: ['ice', 6], horn: ['ice', 11], glow: ['ice', 13] },
+  { legless: 1, wings: 0, bodyLen: 1.3, neck: 0.85, tail: 1.35, headR: 0.09, spikes: 1, tailFin: 1 },
+  [['Sea Serpent', 28, 162], ['Sea Monster', 36, 237, { skin: ['swamp', 7], body: ['swamp', 6], skin2: ['swamp', 4] }],
+    ['Sea Terror', 48, 374, { skin: ['arcane', 4], body: ['arcane', 3], skin2: ['arcane', 2], glow: ['arcane', 7] }]],
+  { aspect: 1.9 });
+
+F('Skeleton', 'biped', 190,
+  {
+    skin: ['plaster', 12], body: ['plaster', 12], skin2: ['plaster', 9], cloth: ['plaster', 11],
+    cloth2: ['stone', 5], metal: ['stone', 8], eye: ['blood', 10],
+  },
+  {
+    headShape: 'skull', ribs: 1, weapon: 'sword', armR: 0.026, legR: 0.034, hipW: 0.15,
+    shoulderW: 0.20, torsoD: 0.10, boots: 0, belt: 0, glow: 1,
+  },
+  [['Skeleton', 6, 21],
+    ['Skeleton Knight', 10, 40, { cloth: ['dirt', 4], cloth2: ['blood', 4], metal: ['dirt', 6], body: ['stone', 6], shield: 'kite' }],
+    ['Skeleton Lord', 14, 61, { cloth: ['grey', 3], cloth2: ['gold', 9], metal: ['gold', 10], eye: ['fire', 12], helm: 'crown' }]]);
+
+F('Sorcerer', 'biped', 192,
+  { skin: ['flesh', 5], cloth: ['arcane', 3], cloth2: ['arcane', 6], glow: ['arcane', 7], hair: ['grey', 11], metal: ['gold', 9] },
+  { robe: 1, helm: 'hat', weapon: 'staff', beard: 'long' },
+  [['Sorcerer', 25, 137], ['Magician', 35, 227, { cloth: ['water', 5], cloth2: ['ice', 11], glow: ['ice', 14] }],
+    ['Warlock', 50, 400, { cloth: ['grey', 1], cloth2: ['blood', 6], glow: ['blood', 13], hair: ['grey', 2] }]],
+  { ranged: true });
+
+F('Spider', 'insect', 96,
+  { skin: ['wood', 3], body: ['wood', 3], skin2: ['wood', 5], eye: ['blood', 12], glow: ['blood', 12] },
+  { legs: 8, legLen: 0.72, bodyLen: 0.72, bodyR: 0.24, abdomen: 0.36, headR: 0.16, antennae: 0, carapace: 0, glow: 1 },
+  [['Spider', 5, 17], ['Giant Spider', 8, 30, { skin: ['grey', 2], body: ['grey', 2], skin2: ['grey', 4] }, 1.3],
+    ['Huge Spider', 12, 50, { skin: ['arcane', 2], body: ['arcane', 2], skin2: ['arcane', 4], glow: ['arcane', 7] }, 1.6]],
+  { aspect: 1.5 });
+
+F('Thief', 'biped', 186,
+  { skin: ['flesh', 4], cloth: ['grey', 2], cloth2: ['wood', 3], metal: ['stone', 10] },
+  { weapon: 'dagger', weapon2: 'dagger', helm: 'hood', hunch: 0.22, armLen: 0.42, stride: 1.1 },
+  [['Thief', 8, 30], ['Burglar', 12, 50, { cloth: ['water', 3], cloth2: ['grey', 4] }],
+    ['Rogue', 18, 86, { cloth: ['blood', 3], cloth2: ['gold', 8] }]]);
+
+F('Titan', 'biped', 384,
+  {
+    skin: ['gold', 10], body: ['gold', 9], skin2: ['gold', 7], cloth: ['plaster', 13], cloth2: ['sky', 8],
+    metal: ['gold', 12], hair: ['grey', 12], glow: ['ice', 14],
+  },
+  { headR: 0.070, shoulderW: 0.30, weapon: 'spear', helm: 'crown', cape: 1, pads: 1, beard: 'long', hair: 1, glow: 1, robe: 'short' },
+  [['Titan', 65, 617], ['Noble Titan', 75, 787, { cloth: ['sky', 9], metal: ['ice', 13], glow: ['sky', 14] }],
+    ['Supreme Titan', 95, 1187, { skin: ['ice', 11], body: ['ice', 10], cloth: ['gold', 11], glow: ['gold', 15] }]]);
+
+F('Werewolf', 'biped', 230,
+  {
+    skin: ['wood', 4], body: ['wood', 4], skin2: ['wood', 2], cloth: ['dirt', 3], cloth2: ['dirt', 2],
+    horn: ['plaster', 13], hair: ['wood', 3], eye: ['fire', 12],
+  },
+  {
+    headShape: 'wolf', headR: 0.085, ears: 'point', claws: 1, digitigrade: 1, hunch: 0.30,
+    tail: 0.50, shoulderW: 0.32, armLen: 0.50, boots: 0, belt: 0, glow: 1, stride: 1.15,
+  },
+  [['Wolfman', 20, 100], ['Werewolf', 30, 180, { skin: ['grey', 5], body: ['grey', 5], skin2: ['grey', 3], hair: ['grey', 4] }],
+    ['Greater Werewolf', 40, 280, { skin: ['grey', 2], body: ['grey', 2], skin2: ['grey', 1], hair: ['grey', 2] }]],
+  { aspect: 1.05 });
+
+// -- uniques ----------------------------------------------------------------
+
+F('zDemonqueen', 'biped', 420,
+  {
+    skin: ['blood', 8], body: ['blood', 6], skin2: ['blood', 4], cloth: ['grey', 1], cloth2: ['fire', 9],
+    horn: ['grey', 2], wing: ['blood', 3], wing2: ['grey', 1], glow: ['fire', 14], eye: ['fire', 14], hair: ['grey', 1],
+  },
+  {
+    horns: 'devil', wings: 'bat', wingSpan: 1.0, tail: 0.55, weapon: 'scythe', claws: 1,
+    digitigrade: 1, glow: 1, boots: 0, hipW: 0.20, shoulderW: 0.24, hair: 'long', helm: 'crown',
+  },
+  [['Demon Queen', 100, 1300, {}, 1]],
+  { flying: true, ranged: true, aspect: 1.25, suffixes: [''] });
+
+F('zReactor', 'machine', 300,
+  { skin: ['grey', 7], body: ['grey', 7], metal: ['grey', 9], glow: ['ice', 14] },
+  {},
+  [['Reactor', 100, 1300, {}, 1]],
+  { aspect: 0.95, suffixes: [''] });
+
+// ---------------------------------------------------------------------------
+
+/** Model builders, one per family. */
+export const CREATURE_FAMILIES = {};
+for (const f of FAMILY_LIST) CREATURE_FAMILIES[f.id] = f;
+
+/** Every shipped monster: tier id -> family + palette shift + scale. */
+export const CREATURE_TIERS = {};
+for (const f of FAMILY_LIST) {
+  f.tiers.forEach((t, i) => {
+    const suffix = f.suffixes[i] === undefined ? String.fromCharCode(65 + i) : f.suffixes[i];
+    const id = f.id + suffix;
+    CREATURE_TIERS[id] = {
+      id, family: f.id, tierIndex: i, name: t.name, level: t.level, hp: t.hp,
+      paletteShift: t.paletteShift, scale: t.scale,
+    };
+  });
+}
+
+/** Flat list of every monster id, in MONSTERS.TXT order. */
+export const CREATURE_KINDS = Object.keys(CREATURE_TIERS);
+
+/** Family ids, for callers that only want one sheet per model. */
+export const CREATURE_FAMILY_KINDS = Object.keys(CREATURE_FAMILIES);
+
+// A few tiers swap gear as well as colour (the Lizard Archer trades its spear
+// for a bow, the Goblin King gains a crown). Those keys ride along in the
+// palette shift; pull them back out into archetype params here.
+const GEAR_KEYS = ['weapon', 'weapon2', 'shield', 'helm', 'robe', 'cape', 'wings', 'headShape'];
+function pickParams(shift) {
+  const out = {};
+  for (const k of GEAR_KEYS) if (shift[k] !== undefined) out[k] = shift[k];
+  return out;
+}
+
+/**
+ * Back-compatible per-monster descriptor: everything a consumer used to read
+ * off CREATURE_DEFS, resolved through the family/tier split.
+ */
+export const CREATURE_DEFS = {};
+for (const id of CREATURE_KINDS) {
+  const t = CREATURE_TIERS[id];
+  const f = CREATURE_FAMILIES[t.family];
+  CREATURE_DEFS[id] = {
+    id, name: t.name, family: t.family, tier: t.tierIndex + 1, arch: f.arch,
+    height: f.height * t.scale,
+    palette: { ...f.palette, ...t.paletteShift },
+    params: { ...f.params, ...pickParams(t.paletteShift) },
+    aspect: f.aspect,
+    twoLegs: f.arch === 'biped',
+    ranged: f.ranged,
+    flying: f.flying,
+    level: t.level, hp: t.hp,
+  };
+}
 
 const ARCH_BUILD = {
   biped: buildBipedRig, ghost: buildGhostRig, quad: buildQuadRig, insect: buildInsectRig,
   serpent: buildSerpentRig, blob: buildBlobRig, dragon: buildDragonRig, wisp: buildWispRig,
+  eye: buildEyeRig, machine: buildMachineRig,
 };
 const ARCH_DEFAULTS = {
   biped: BIPED_D, ghost: BIPED_D, quad: QUAD_D, insect: INSECT_D,
-  serpent: SERP_D, blob: BLOB_D, dragon: DRAGON_D, wisp: {},
+  serpent: SERP_D, blob: BLOB_D, dragon: DRAGON_D, wisp: {}, eye: {}, machine: {},
 };
 const ARCH_POSE = {
   biped: poseBiped, ghost: poseBiped, quad: poseQuad, insect: poseInsect,
   serpent: poseSerpent, blob: poseBlob, dragon: poseDragon, wisp: poseWisp,
+  eye: poseEye, machine: poseMachine,
 };
 
 /**
  * Build a creature model.
- * @param {string} kind key of CREATURE_DEFS
+ * @param {string} kind a tier id ('GoblinB') or a bare family id ('Goblin')
  * @param {number} seed
  * @returns {{root:THREE.Group, height:number, pose:Function, dispose:Function, def:object}}
  */
 export function buildCreature(kind, seed = 1) {
-  const def = CREATURE_DEFS[kind];
-  if (!def) throw new Error('unknown creature: ' + kind);
+  const tier = CREATURE_TIERS[kind];
+  const fam = CREATURE_FAMILIES[tier ? tier.family : kind];
+  if (!fam) throw new Error('unknown creature: ' + kind);
   const rnd = new Rand((seed >>> 0) ^ 0x9e3779b9);
-  const C = resolveCols(def.palette);
-  const P = { ...ARCH_DEFAULTS[def.arch], ...def.params };
-  // A little per-instance variation so a pack of wolves is not identical.
-  const H = def.height * rnd.float(0.94, 1.06);
-  const rig = ARCH_BUILD[def.arch](H, P, C, rnd);
+  const shift = tier ? tier.paletteShift : {};
+  const C = resolveCols({ ...fam.palette, ...shift });
+  const P = { ...ARCH_DEFAULTS[fam.arch], ...fam.params, ...pickParams(shift) };
+  const H = fam.height * (tier ? tier.scale : 1) * rnd.float(0.96, 1.04);
+  const rig = ARCH_BUILD[fam.arch](H, P, C, rnd);
   if (P.float) rig.root.position.y = H * P.float;
-  const poseFn = ARCH_POSE[def.arch];
+  const poseFn = ARCH_POSE[fam.arch];
+  const def = {
+    id: tier ? tier.id : fam.id, name: tier ? tier.name : fam.id, family: fam.id,
+    tier: tier ? tier.tierIndex + 1 : 1, arch: fam.arch, aspect: fam.aspect,
+    ranged: fam.ranged, flying: fam.flying, height: H,
+    level: tier ? tier.level : 1, hp: tier ? tier.hp : 1,
+  };
   return {
     root: rig.root,
     height: H,
-    def,
-    rig,
-    pose(action, t01) { poseFn(rig, action in ACTIONS ? action : 'stand', sat(t01 || 0)); },
+    def, rig,
+    pose(action, t01) { poseFn(rig, ACTION_INTERNAL[action] || 'stand', sat(t01 || 0)); },
     dispose() { disposeTree(rig.root); },
   };
 }
@@ -2159,7 +2496,7 @@ export function buildNPC(archetype, seed = 1) {
     height: H,
     def: { name: archetype, arch: 'biped', aspect: 0.80, height: H },
     rig,
-    pose(action, t01) { poseBiped(rig, action in ACTIONS ? action : 'stand', sat(t01 || 0)); },
+    pose(action, t01) { poseBiped(rig, ACTION_INTERNAL[action] || 'stand', sat(t01 || 0)); },
     dispose() { disposeTree(rig.root); },
   };
 }

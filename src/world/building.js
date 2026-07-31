@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { getTexture } from './terrain.js';
+import { quantiseShade, sunDirection, sunTerms } from './sky.js';
 import { Rand, clamp, lerpN } from '../core/rng.js';
 
 // ---------------------------------------------------------------------------
@@ -22,21 +23,33 @@ export const HOUSE_STYLES = [
   'mill', 'lighthouse',
 ];
 
-const SUN = new THREE.Vector3(0.34, 0.80, 0.50).normalize();
-const AMBIENT = 0.44;
 const SRGB_TO_LIN = (c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
 
-/** Directional shade for a face normal, in linear space ready for a colour attr. */
+// MM6 shades everything with a single greyscale multiply quantised to 32
+// levels, lit by a sun that only ever travels the E-W great circle. Buildings
+// are baked once at generation time against the hour set here.
+let SUN = sunDirection(9.5);
+let AMBIENT = sunTerms(9.5).ambient;
+let DIFFUSE = sunTerms(9.5).diffuse;
+
+/** Set the hour buildings generated from here on will be lit for. */
+export function setBuildingLight(hours) {
+  SUN = sunDirection(hours);
+  const t = sunTerms(hours);
+  AMBIENT = t.ambient; DIFFUSE = t.diffuse;
+}
+
+/**
+ * Flat grey shade for a face normal, on MM6's 32-step ladder, in linear space
+ * ready for a colour attribute. `extra` is the artist's own face darkening
+ * (overhang undersides, back walls) applied before quantisation.
+ */
 function faceShade(nx, ny, nz, tintR = 1, tintG = 1, tintB = 1, extra = 1) {
-  const lam = Math.max(0, nx * SUN.x + ny * SUN.y + nz * SUN.z);
-  // A little extra sky light on up-facing surfaces keeps roofs from going flat.
-  const sky = 0.10 * Math.max(0, ny);
-  const s = clamp((AMBIENT + (1 - AMBIENT) * lam + sky) * extra, 0, 1);
-  return [
-    SRGB_TO_LIN(clamp(s * tintR, 0, 1)),
-    SRGB_TO_LIN(clamp(s * tintG, 0, 1)),
-    SRGB_TO_LIN(clamp(s * tintB, 0, 1)),
-  ];
+  const ndl = Math.max(0, nx * SUN.x + ny * SUN.y + nz * SUN.z);
+  // Same pulled-back curve the terrain uses, so walls and ground agree.
+  const g = quantiseShade(clamp((AMBIENT * 0.75 + clamp(DIFFUSE * ndl, 0, 0.85) * 0.68) * extra, 0, 1));
+  const l = SRGB_TO_LIN(g);
+  return [l * tintR, l * tintG, l * tintB];
 }
 
 const TEX_UNITS = 256;  // world units covered by one texture repeat

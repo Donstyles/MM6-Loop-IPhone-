@@ -181,9 +181,13 @@ const FALLBACK = {
   magic_field: { k: 'grain', ramp: 'arcane', lo: 0.2, hi: 0.8, period: 5 },
 };
 
+/** Ids we had to paint ourselves, so a preview can report coverage gaps. */
+export const missingTextureIds = [];
+
 function fallbackTexture(id) {
   const hit = _fallbackCache.get(id);
   if (hit) return hit;
+  missingTextureIds.push(id);
   const s = FALLBACK[id] || { k: 'grain', ramp: 'grey', lo: 0.3, hi: 0.7, period: 8 };
   const p = new Pix(64, 64);
   const seed = (id.length * 131 + id.charCodeAt(0) * 7) | 0;
@@ -348,7 +352,7 @@ export function generateHeightmap(seed, opts = {}) {
       const wz = v * pf.freq + pf.warp * gradNoise2(u * 1.7 + 5.1, v * 1.7 + 3.3, rs + 92);
 
       let h = fbm2(wx, wz, 5, 2.05, 0.5, rs) * pf.base;
-      h += fbm2(u * pf.freq * 5.5, v * pf.freq * 5.5, 3, 2, 0.5, rs + 411) * pf.detailAmp;
+      h += fbm2(u * pf.freq * 3.2, v * pf.freq * 3.2, 3, 2, 0.5, rs + 411) * pf.detailAmp;
 
       if (pf.ridge > 0) {
         const m = clamp(fbm2(u * 1.3, v * 1.3, 3, 2, 0.5, rs + 733) * 1.6 + 0.35, 0, 1);
@@ -363,7 +367,7 @@ export function generateHeightmap(seed, opts = {}) {
       }
 
       const c = coastAt(u, v);
-      if (c > 0) h = lerpN(h, water - 900 - c * 700, c * c);
+      if (c > 0) h = lerpN(h, water - 2400 - c * 2600, c * c);
 
       // Snap to the 32-unit height quantum. This is not a rounding detail: it
       // is why MM6 terrain visibly stair-steps and why flat-shaded facets read
@@ -572,54 +576,89 @@ export function stampTiles(hm, wx, wz, halfW, halfD, tex, mask) {
     }
   }
 }
-
 // --- lighting --------------------------------------------------------------
+//
+// MM6 lighting is a *greyscale multiply quantised to 32 levels*: the engine
+// stores a 0..31 "dimming level" and converts it to `8 * (31 - dim)`, so the
+// only legal shades are 0, 8, 16 ... 248. There are no coloured lights anywhere
+// in MM6 (RGB light fields arrived in MM7). The visible banding that produces
+// is not an artefact, it is the look.
+//
+// The sun rides the E-W great circle only - `sun = (cos t, 0, sin t)` with no
+// north/south component ever - so outdoor terrain reads as an east/west split
+// through the day and never as "north faces are dark".
 
 const SRGB_TO_LIN = (c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
 
+const DEFAULT_TOD = 9.5;
+
 /**
- * Bake the fixed sun into a per-vertex shade field.
- * MM6's outdoor sun sits high in the south, so north faces go noticeably dark
- * and the terrain reads as landform even though nothing is lit at runtime.
+ * Bake one flat-shaded triangle's grey level.
+ * @returns {number} 0..1 linear-space grey, already on the 32-step ladder.
  */
-function bakeVertexLight(hm, opts) {
-  const N = hm.size + 1;
-  const out = new Float32Array(N * N * 3);
-  const sun = (opts.sunDir || new THREE.Vector3(0.34, 0.80, 0.50)).clone().normalize();
-  const sunC = opts.sunColor || new THREE.Color(1.06, 1.00, 0.86);
-  const ambC = opts.ambientColor || new THREE.Color(0.42, 0.47, 0.58);
-  const amb = opts.ambient === undefined ? 0.46 : opts.ambient;
-  const d = hm.tile;
+function faceGrey(nx, ny, nz, sun, ambient, diffuse) {
+  const ndl = Math.max(0, nx * sun.x + ny * sun.y + nz * sun.z);
+  // The engine's raw `ambient + diffuse*N.L` saturates to white on any level
+  // ground after about 08:00, which is why MM6 snow visibly clips at noon. We
+  // hold the same shape but pull both terms back so the landform stays legible
+  // at every hour instead of blowing out for most of the day.
+  const s = clamp(ambient * 0.75 + clamp(diffuse * ndl, 0, 0.85) * 0.68, 0, 1);
+  return SRGB_TO_LIN(quantiseShade(s));
+}
 
-  for (let j = 0; j < N; j++) {
-    for (let i = 0; i < N; i++) {
-      const k = j * N + i;
-      const h = hm.height[k];
-      const hl = hm.height[j * N + Math.max(0, i - 1)];
-      const hr = hm.height[j * N + Math.min(N - 1, i + 1)];
-      const hd = hm.height[Math.max(0, j - 1) * N + i];
-      const hu = hm.height[Math.min(N - 1, j + 1) * N + i];
-      // Normal (note z uses the -Z = north convention).
-      let nx = hl - hr, ny = 2 * d, nz = hd - hu;
-      const il = 1 / Math.hypot(nx, ny, nz);
-      nx *= il; ny *= il; nz *= il;
+// --- water animation -------------------------------------------------------
+//
+// 7 frames on a 1.000 s loop with frame times 1/12, 1/6 x5, 1/12. One global
+// phase drives every water surface on screen.
 
-      const lam = Math.max(0, nx * sun.x + ny * sun.y + nz * sun.z);
-      // Cheap AO: a vertex sunk below its neighbourhood loses ambient.
-      const avg = (hl + hr + hd + hu) * 0.25;
-      const ao = clamp(1 - Math.max(0, avg - h) / 420, 0.55, 1);
-      // Exposure: hilltops catch a little more light, valleys sit in haze.
-      const expo = 1 + clamp((h - hm.water) / Math.max(1, hm.max - hm.water), 0, 1) * 0.10;
+const WATER_FRAME_TIMES = [1 / 12, 1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 12];
+const WATER_CUM = (() => {
+  const c = []; let t = 0;
+  for (const f of WATER_FRAME_TIMES) { t += f; c.push(t); }
+  return c;
+})();
 
-      const r = (ambC.r * amb * ao + sunC.r * lam * (1 - amb)) * expo;
-      const g = (ambC.g * amb * ao + sunC.g * lam * (1 - amb)) * expo;
-      const b = (ambC.b * amb * ao + sunC.b * lam * (1 - amb)) * expo;
-      out[k * 3] = SRGB_TO_LIN(clamp(r, 0, 1));
-      out[k * 3 + 1] = SRGB_TO_LIN(clamp(g, 0, 1));
-      out[k * 3 + 2] = SRGB_TO_LIN(clamp(b, 0, 1));
+/** Which of the 7 water frames is showing at time `seconds`. */
+export function waterFrameIndex(seconds) {
+  const t = ((seconds % 1) + 1) % 1;
+  for (let i = 0; i < WATER_CUM.length; i++) if (t < WATER_CUM[i]) return i;
+  return WATER_FRAME_TIMES.length - 1;
+}
+
+const _waterFrames = new Map();
+/** The 7-frame water animation group, from textures.js if it has one. */
+export function waterFrames(id = 'water') {
+  const hit = _waterFrames.get(id);
+  if (hit) return hit;
+  let frames = null;
+  if (TEXMOD && typeof TEXMOD.getAnimated === 'function') {
+    try {
+      const f = TEXMOD.getAnimated(id);
+      if (Array.isArray(f) && f.length) frames = f;
+    } catch (e) { frames = null; }
+  }
+  if (!frames) {
+    // Local stand-in: seven phases of a rolling ripple, desaturated blue-green
+    // (MM6 water is darker and greener than memory insists).
+    const spec = FALLBACK[id] || FALLBACK.water;
+    frames = [];
+    for (let f = 0; f < 7; f++) {
+      const ph = (f / 7) * Math.PI * 2;
+      const p = new Pix(64, 64);
+      for (let y = 0; y < 64; y++) {
+        for (let x = 0; x < 64; x++) {
+          const w1 = Math.sin((x * 0.30) + ph) * 0.5 + 0.5;
+          const w2 = Math.sin((y * 0.19) - ph * 0.7 + w1 * 1.4) * 0.5 + 0.5;
+          const n = valueNoise2(x * 0.16, y * 0.16 + f * 3.1, 91);
+          const t = clamp(w1 * 0.42 + w2 * 0.38 + n * 0.20, 0, 1);
+          p.setArr(x, y, rampSample(spec.ramp, spec.lo + (spec.hi - spec.lo) * t));
+        }
+      }
+      frames.push(toTexture(p, { dither: 9 }));
     }
   }
-  return out;
+  _waterFrames.set(id, frames);
+  return frames;
 }
 
 // --- mesh building ---------------------------------------------------------
@@ -628,20 +667,23 @@ const CHUNK_TILES = 8;
 
 /**
  * Turn a heightmap into renderable chunks.
- * One BufferGeometry per chunk with a material group per texture used, so a
- * chunk is a single mesh but keeps hard per-tile texture edges.
  *
- * @returns {{group:THREE.Group, chunks:Array, update:(cam:THREE.Camera)=>void,
- *            water:THREE.Mesh|null, dispose:()=>void, drawn:number}}
+ * One BufferGeometry per chunk with a material group per texture used, so a
+ * chunk is one mesh but keeps hard per-tile texture edges. Every triangle is
+ * flat-shaded from its own face normal (6 vertices per tile, no sharing), which
+ * is what makes the 32-unit height steps read as facets.
+ *
+ * @returns {{group:THREE.Group, chunks:Array, update:(cam,dt)=>void,
+ *            setTimeOfDay:(h:number)=>void, water:THREE.Mesh|null, dispose:()=>void}}
  */
 export function buildTerrain(hm, opts = {}) {
   const group = new THREE.Group();
   group.name = 'terrain';
   const size = hm.size, tile = hm.tile;
   const N = size + 1;
-  const light = bakeVertexLight(hm, opts);
-  const cliffDark = opts.cliffDarken === undefined ? 0.78 : opts.cliffDarken;
-  const fogFar = opts.fogFar || 6000;
+  const cliffDark = opts.cliffDarken === undefined ? 0.82 : opts.cliffDarken;
+  const fogFar = opts.fogFar || FAR_CLIP;
+  let tod = opts.timeOfDay === undefined ? DEFAULT_TOD : opts.timeOfDay;
 
   const materials = hm.texIds.map((id) => new THREE.MeshBasicMaterial({
     map: getTexture(id),
@@ -652,13 +694,14 @@ export function buildTerrain(hm, opts = {}) {
 
   const chunksPerSide = Math.ceil(size / CHUNK_TILES);
   const chunks = [];
-  // Scratch, reused for every chunk to keep generation allocation-light.
   const maxTiles = CHUNK_TILES * CHUNK_TILES;
-  const pos = new Float32Array(maxTiles * 4 * 3);
-  const uv = new Float32Array(maxTiles * 4 * 2);
-  const col = new Float32Array(maxTiles * 4 * 3);
-  const idx = new Uint16Array(maxTiles * 6);
+  // 6 verts per tile: two independent flat-shaded triangles.
+  const pos = new Float32Array(maxTiles * 6 * 3);
+  const uv = new Float32Array(maxTiles * 6 * 2);
+  const col = new Float32Array(maxTiles * 6 * 3);
   const byTex = new Map();
+
+  const UVS = [[0, 0], [1, 0], [1, 1], [0, 1]];
 
   for (let cj = 0; cj < chunksPerSide; cj++) {
     for (let ci = 0; ci < chunksPerSide; ci++) {
@@ -675,47 +718,50 @@ export function buildTerrain(hm, opts = {}) {
       }
       if (byTex.size === 0) continue;
 
-      let vp = 0, vu = 0, vc = 0, vi = 0, vert = 0;
+      let vp = 0, vu = 0, vc = 0, vcount = 0;
       const groups = [];
+      // Per-vertex tile/cliff bookkeeping so relighting does not rebuild geometry.
+      const faceInfo = [];
       for (const [texIdx, list] of byTex) {
-        const start = vi;
+        const start = vcount;
         for (const cell of list) {
           const i = cell % size, j = (cell / size) | 0;
           const isCliff = texIdx === hm.cliffIndex;
-          const dark = isCliff ? cliffDark : 1;
-          // Rotate UVs per tile to break up the repeat, except on roads where
-          // the ribbon should stay coherent.
           const rot = hm.roadMask[cell] ? 0 : (hash2(i, j, hm.seed) * 4) | 0;
           const x0 = hm.origin + i * tile, z0 = hm.origin + j * tile;
-          const corners = [
-            [x0, z0, i, j],
-            [x0 + tile, z0, i + 1, j],
-            [x0 + tile, z0 + tile, i + 1, j + 1],
-            [x0, z0 + tile, i, j + 1],
+          const h00 = hm.height[j * N + i], h10 = hm.height[j * N + i + 1];
+          const h11 = hm.height[(j + 1) * N + i + 1], h01 = hm.height[(j + 1) * N + i];
+          const P = [
+            [x0, h00, z0], [x0 + tile, h10, z0],
+            [x0 + tile, h11, z0 + tile], [x0, h01, z0 + tile],
           ];
-          const UVS = [[0, 0], [1, 0], [1, 1], [0, 1]];
-          for (let c = 0; c < 4; c++) {
-            const [x, z, vi2, vj2] = corners[c];
-            pos[vp++] = x; pos[vp++] = hm.height[vj2 * N + vi2]; pos[vp++] = z;
-            const u = UVS[(c + rot) & 3];
-            uv[vu++] = u[0]; uv[vu++] = u[1];
-            const li = (vj2 * N + vi2) * 3;
-            col[vc++] = light[li] * dark;
-            col[vc++] = light[li + 1] * dark;
-            col[vc++] = light[li + 2] * dark;
+          // Two triangles, matching MM6's per-cell split.
+          const tris = [[0, 3, 1], [1, 3, 2]];
+          for (const tri of tris) {
+            const a = P[tri[0]], b = P[tri[1]], c = P[tri[2]];
+            let nx = (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1]);
+            let ny = (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]);
+            let nz = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+            const il = 1 / (Math.hypot(nx, ny, nz) || 1);
+            nx *= il; ny *= il; nz *= il;
+            if (ny < 0) { nx = -nx; ny = -ny; nz = -nz; }
+            faceInfo.push(nx, ny, nz, isCliff ? cliffDark : 1);
+            for (const vi of tri) {
+              pos[vp++] = P[vi][0]; pos[vp++] = P[vi][1]; pos[vp++] = P[vi][2];
+              const u = UVS[(vi + rot) & 3];
+              uv[vu++] = u[0]; uv[vu++] = u[1];
+              col[vc++] = 1; col[vc++] = 1; col[vc++] = 1;
+              vcount++;
+            }
           }
-          idx[vi++] = vert; idx[vi++] = vert + 2; idx[vi++] = vert + 1;
-          idx[vi++] = vert; idx[vi++] = vert + 3; idx[vi++] = vert + 2;
-          vert += 4;
         }
-        groups.push({ start, count: vi - start, tex: texIdx });
+        groups.push({ start, count: vcount - start, tex: texIdx });
       }
 
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.BufferAttribute(pos.slice(0, vp), 3));
       geo.setAttribute('uv', new THREE.BufferAttribute(uv.slice(0, vu), 2));
       geo.setAttribute('color', new THREE.BufferAttribute(col.slice(0, vc), 3));
-      geo.setIndex(new THREE.BufferAttribute(idx.slice(0, vi), 1));
 
       const mats = [];
       groups.forEach((g, gi) => {
@@ -733,18 +779,42 @@ export function buildTerrain(hm, opts = {}) {
         mesh,
         sphere: geo.boundingSphere.clone(),
         ci, cj,
-        tris: vi / 3,
+        tris: vcount / 3,
+        faces: new Float32Array(faceInfo),
       });
     }
   }
 
+  /** Re-bake every facet's grey level for a new hour. ~5ms for a whole map. */
+  function setTimeOfDay(hours) {
+    tod = hours;
+    const sun = sunDirection(tod);
+    const st = sunTerms(tod);
+    for (const c of chunks) {
+      const arr = c.mesh.geometry.attributes.color.array;
+      const f = c.faces;
+      const n = f.length / 4;
+      for (let t = 0; t < n; t++) {
+        const g = faceGrey(f[t * 4], f[t * 4 + 1], f[t * 4 + 2], sun, st.ambient, st.diffuse) * f[t * 4 + 3];
+        const o = t * 9;
+        arr[o] = g; arr[o + 1] = g; arr[o + 2] = g;
+        arr[o + 3] = g; arr[o + 4] = g; arr[o + 5] = g;
+        arr[o + 6] = g; arr[o + 7] = g; arr[o + 8] = g;
+      }
+      c.mesh.geometry.attributes.color.needsUpdate = true;
+    }
+  }
+  setTimeOfDay(tod);
+
   // --- water sheet ---------------------------------------------------------
   let water = null;
+  const wFrames = waterFrames(opts.waterTex || 'water');
   if (hm.min < hm.water && opts.water !== false) {
-    const wtex = getTexture(opts.waterTex || 'water', { repeat: [size * 0.5, size * 0.5] });
     const geo = new THREE.PlaneGeometry(size * tile, size * tile, 1, 1);
     geo.rotateX(-Math.PI / 2);
-    const mat = new THREE.MeshBasicMaterial({ map: wtex, fog: true, color: 0xbfd0dd });
+    const uvs = geo.attributes.uv;
+    for (let i = 0; i < uvs.count; i++) uvs.setXY(i, uvs.getX(i) * size * 0.5, uvs.getY(i) * size * 0.5);
+    const mat = new THREE.MeshBasicMaterial({ map: wFrames[0], fog: true });
     water = new THREE.Mesh(geo, mat);
     water.position.set(hm.origin + size * tile * 0.5, hm.water, hm.origin + size * tile * 0.5);
     water.renderOrder = -2;
@@ -753,9 +823,10 @@ export function buildTerrain(hm, opts = {}) {
 
   const frustum = new THREE.Frustum();
   const mat4 = new THREE.Matrix4();
-  const state = { drawn: 0, tris: 0 };
+  const state = { drawn: 0, tris: 0, waterFrame: 0 };
+  let clock = 0;
 
-  function update(camera) {
+  function update(camera, dt = 0.016) {
     mat4.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     frustum.setFromProjectionMatrix(mat4);
     const cp = camera.position;
@@ -770,9 +841,14 @@ export function buildTerrain(hm, opts = {}) {
     }
     state.drawn = drawn; state.tris = tris;
     if (water) {
+      clock += dt;
+      const f = waterFrameIndex(clock);
+      if (f !== state.waterFrame) {
+        state.waterFrame = f;
+        water.material.map = wFrames[f];
+        water.material.needsUpdate = true;
+      }
       water.position.x = cp.x; water.position.z = cp.z;
-      water.material.map.offset.x = (performance.now() * 0.000006) % 1;
-      water.material.map.offset.y = (performance.now() * 0.000009) % 1;
     }
   }
 
@@ -782,7 +858,7 @@ export function buildTerrain(hm, opts = {}) {
     if (water) { water.geometry.dispose(); water.material.dispose(); }
   }
 
-  return { group, chunks, materials, update, water, dispose, state };
+  return { group, chunks, materials, update, setTimeOfDay, water, dispose, state };
 }
 
 // --- shared helpers for the rest of src/world ------------------------------
@@ -822,9 +898,10 @@ export function makeBillboardField(tex, instances, opts = {}) {
     uniforms: {
       map: { value: tex },
       uRight: { value: new THREE.Vector3(1, 0, 0) },
+      uLight: { value: 1 },
       fogColor: { value: new THREE.Color(opts.fogColor || 0x9ab4cc) },
-      fogNear: { value: opts.fogNear || 1200 },
-      fogFar: { value: opts.fogFar || 6000 },
+      fogNear: { value: opts.fogNear === undefined ? 2048 : opts.fogNear },
+      fogFar: { value: opts.fogFar || FAR_CLIP },
     },
     vertexShader: /* glsl */`
       attribute vec3 iOffset;
@@ -847,13 +924,16 @@ export function makeBillboardField(tex, instances, opts = {}) {
       uniform vec3 fogColor;
       uniform float fogNear;
       uniform float fogFar;
+      uniform float uLight;
       varying vec2 vUv;
       varying vec3 vTint;
       varying float vFog;
       void main() {
         vec4 c = texture2D(map, vUv);
+        // 1-bit alpha: MM6 sprites never blend edges.
         if (c.a < 0.5) discard;
-        c.rgb *= vTint;
+        // Same greyscale multiply the world uses, so flora sits in the scene.
+        c.rgb *= vTint * uLight;
         float f = clamp((vFog - fogNear) / (fogFar - fogNear), 0.0, 1.0);
         gl_FragColor = vec4(mix(c.rgb, fogColor, f), 1.0);
       }`,
@@ -864,6 +944,12 @@ export function makeBillboardField(tex, instances, opts = {}) {
 
   const mesh = new THREE.Mesh(geo, mat);
   mesh.frustumCulled = false;
+  mesh.userData.setFog = (color, near, far, light) => {
+    mat.uniforms.fogColor.value.copy(color);
+    mat.uniforms.fogNear.value = near;
+    mat.uniforms.fogFar.value = far;
+    if (light !== undefined) mat.uniforms.uLight.value = light;
+  };
   mesh.userData.updateBillboard = (camera) => {
     // World-space camera right, flattened to the ground plane.
     const e = camera.matrixWorld.elements;

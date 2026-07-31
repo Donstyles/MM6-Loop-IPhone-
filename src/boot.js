@@ -127,9 +127,40 @@ export class Boot {
       const m = await safeImport('./art/spritebake.js');
       if (!m || !m.bakeAllSheets) return null;
       this.assets.sprites = m;
-      return m.bakeAllSheets(this.engine.renderer);
+      const list = await this._spriteWorkList();
+      return m.bakeAllSheets(this.engine.renderer, list);
     }
     return null;
+  }
+
+  /**
+   * Baking all 173 monster tiers up front would cost far more than the first
+   * region needs, so we preload the scenery and a starting bestiary and let the
+   * rest bake on demand (the sheet cache makes that a one-time cost each).
+   */
+  async _spriteWorkList() {
+    const flora = await safeImport('./art/models/flora.js');
+    const props = await safeImport('./art/models/props.js');
+    const creatures = await safeImport('./art/models/creatures.js');
+    const list = [];
+    for (const k of (flora?.FLORA_KINDS || [])) list.push({ category: 'flora', kind: k, seed: 1 });
+    for (const k of (props?.PROP_KINDS || [])) list.push({ category: 'prop', kind: k, seed: 1 });
+
+    const starters = [
+      'BloodsuckerA', 'BloodsuckerB', 'GoblinA', 'GoblinB', 'GoblinC',
+      'RatA', 'RatB', 'BatA', 'BatB', 'SpiderA', 'SpiderB',
+      'PeasantM1A', 'PeasantF1A', 'GuardA', 'FighterLeathA', 'FighterLeathB',
+      'SkeletonA', 'WolfA', 'LizardArchA', 'ThiefA',
+    ];
+    const all = creatures?.CREATURE_KINDS || [];
+    const pick = starters.filter((k) => all.includes(k));
+    // If the roster ids differ from what we expect, fall back to the first few.
+    const chosen = pick.length >= 6 ? pick : all.slice(0, 16);
+    for (const k of chosen) list.push({ category: 'creature', kind: k, seed: 1 });
+
+    const npcs = ['peasant_m', 'peasant_f', 'merchant', 'guard', 'noble_m', 'noble_f'];
+    for (const k of npcs) list.push({ category: 'npc', kind: k, seed: 1 });
+    return list;
   }
 
   update(dt) { this.t += dt; }

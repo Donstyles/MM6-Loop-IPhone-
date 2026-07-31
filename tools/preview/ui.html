@@ -184,8 +184,11 @@ for (const zoom of [1, 2]) {
   g.fillStyle = grad; g.fillRect(8, 8, 458, 352);
 
   // side panel + hud
-  UI.drawStonePanel(g, 466, 0, 174, 352, { seed: 12, gold: true, rivets: true });
+  UI.drawStonePanel(g, 468, 0, 172, 352, { seed: 12, gold: true, rivets: true });
   UI.drawStonePanel(g, 0, 352, 640, 128, { seed: 13, gold: true });
+  // Inset wood panels recessed into the stone behind the portrait row.
+  UI.drawWoodInset(g, 8, 376, 452, 96, 6);
+  UI.drawRivets(g, 2, 354, 636, 124, 38);
   UI.drawFrame(g, 0, 0, 468, 362, { thickness: 8, corners: true });
 
   // automap well
@@ -198,36 +201,44 @@ for (const zoom of [1, 2]) {
     g.drawImage(UI.iconButton(34, id, i === 3 ? 'down' : 'up'), 478 + (i % 4) * 38, 162 + Math.floor(i / 4) * 38);
   });
   UI.drawDivider(g, 476, 242, 154);
-  drawText(g, 'Torch Light', 553, 248, { face: 'small', color: TEXT_LINK, align: 'center' });
+  drawText(g, 'Torch Light', 553, 248, { face: 'small', color: TEXT_HILITE, align: 'center' });
   UI.drawStatBar(g, 480, 262, 146, 5, 0.7, 'sp');
   UI.drawGoldFiligree(g, 476, 274, 154, 12, 2);
   drawText(g, '2 Feb 1165', 553, 292, { face: 'small', color: TEXT_DIM, align: 'center' });
   UI.drawScrollbar(g, 616, 306, 40, 0.2, 0.4);
 
-  // party bar
+  // status line, engine geometry: centred in a 450px field from x=11, y=357
+  drawText(g, 'You are in New Sorpigal.', 11 + 225, 353,
+    { face: 'normal', align: 'center', color: TEXT_HUD, shadow: TEXT_HUD_SHADOW });
+
+  // party bar at the real coordinates: portraits 63x73 at x=35/150/265/380 y=388,
+  // HP tube x=23/138/253/368 and SP tube x=102/217/332/447, both y=402, 5x49.
+  const PX = [35, 150, 265, 380], HPX = [23, 138, 253, 368], SPX = [102, 217, 332, 447];
+  const hpF = [0.9, 0.45, 0.2, 1], spF = [0.4, 0.8, 0.6, 0.05];
   for (let i = 0; i < 4; i++) {
-    const px = 12 + i * 100;
-    UI.drawPortraitFrame(g, px, 362, 76, 88, i === 0 ? 'active' : 'normal');
+    UI.drawPortraitNiche(g, PX[i] - 5, 381, 73, 84);
     g.fillStyle = ['#8a6a4a', '#6a5a7a', '#4a6a5a', '#7a5a4a'][i];
-    g.fillRect(px + 4, 366, 68, 80);
-    UI.drawStatBar(g, px, 452, 76, 5, [0.9, 0.5, 0.25, 1][i], 'hp');
-    UI.drawStatBar(g, px, 460, 76, 5, [0.4, 0.8, 0.6, 0.1][i], 'sp');
-    drawText(g, ['Zoltan', 'Maryn', 'Cassie', 'Roderic'][i], px + 38, 468, {
-      face: 'small', align: 'center', color: i === 0 ? TEXT_GOLD : TEXT_NORMAL,
-    });
-    UI.drawIcon(g, ['cond_good', 'cond_poison', 'cond_afraid', 'cond_asleep'][i], px + 58, 366, 16);
+    g.fillRect(PX[i], 392, 63, 69);
+    UI.drawPortraitNiche(g, PX[i] - 5, 381, 73, 84);
+    if (i === 0) UI.drawPortraitFrame(g, PX[i] - 6, 380, 75, 86, 'active');
+    UI.drawTubeWell(g, HPX[i], 402, 5, 49);
+    UI.drawTubeWell(g, SPX[i], 402, 5, 49);
+    UI.drawStatBar(g, HPX[i], 402, 5, 49, hpF[i], 'hp');
+    UI.drawStatBar(g, SPX[i], 402, 5, 49, spF[i], 'sp');
+    UI.drawIcon(g, ['init_green', 'init_yellow', 'init_red', 'init_green'][i], PX[i] + 20, 366, 14);
+    UI.drawIcon(g, ['cond_good', 'cond_poison', 'cond_afraid', 'cond_asleep'][i], PX[i] + 47, 440, 16);
   }
-  // right side of hud
-  UI.drawInset(g, 424, 362, 150, 74);
-  drawTextWrapped(g, 'You found 240 gold and a Ring of Fire.', 428, 366, 142, 12,
-    { face: 'small', color: TEXT_NORMAL });
-  UI.drawIcon(g, 'gold', 428, 440, 16);
-  drawText(g, '1,240', 448, 444, { face: 'small', color: TEXT_GOLD });
-  UI.drawIcon(g, 'food', 500, 440, 16);
-  drawText(g, '12', 520, 444, { face: 'small', color: TEXT_NORMAL });
-  for (let i = 0; i < 4; i++) {
-    g.drawImage(UI.iconButton(30, ['turnbased', 'zoom_in', 'zoom_out', 'history'][i], 'up'), 582, 362 + i * 30);
-  }
+  // bottom-right button cluster, y = 450, x = 476/518/560/602
+  ['castspell', 'rest', 'quickref', 'options'].forEach((id, i) => {
+    g.drawImage(UI.iconButton(34, id, 'up'), 476 + i * 42, 445);
+  });
+  // gold / food readout in the side panel, y = 322
+  UI.drawIcon(g, 'food', 478, 320, 14);
+  drawText(g, '12', 546, 322, { face: 'small', align: 'right', color: TEXT_HUD, shadow: TEXT_HUD_SHADOW });
+  UI.drawIcon(g, 'gold', 556, 320, 14);
+  drawText(g, '1240', 630, 322, { face: 'small', align: 'right', color: TEXT_HUD, shadow: TEXT_HUD_SHADOW });
+  // turn-based overlay at (394, 288), inside the 3D viewport
+  UI.drawIcon(g, 'turn3', 394, 288, 22);
 
   // title text over the frame
   drawText(g, 'MIGHT AND MAGIC', 234, 150, { face: 'title', color: TEXT_GOLD, align: 'center', outline: '#1a1208' });

@@ -41,7 +41,10 @@ export function canAct(c) {
 export function acOf(c) { return isMonster(c) ? c.ac + (c.buffs && c.buffs.acMod ? c.buffs.acMod : 0) : armorClass(c); }
 export function maxHPOf(c) { return isMonster(c) ? c.maxHP : maxHP(c); }
 export function levelOf(c) { return isMonster(c) ? c.level : (c.level | 0 || 1); }
-export function familyOf(c) { return isMonster(c) ? c.def.family : 'human'; }
+/** Biological kind, which is what bane enchantments match against. */
+export function familyOf(c) { return isMonster(c) ? c.def.kind : 'human'; }
+/** The sprite family a monster belongs to ('Goblin'), or null for characters. */
+export function spriteFamilyOf(c) { return isMonster(c) ? c.def.family : null; }
 
 /** Resistance value for one element. Monsters read their template table. */
 export function resistanceOf(c, element) {
@@ -550,7 +553,13 @@ export function monsterAct(monster, party, world, rand) {
     out.type = 'flee'; out.reason = 'wounded'; return out;
   }
   if (!monster.hostile) { out.reason = 'peaceful'; return out; }
-  if (d > monster.def.aggroRange && monster.state !== 'engaged') { out.reason = 'unaware'; return out; }
+
+  // MONSTERS.TXT AI classes. 'wary' keeps its distance and prefers ranged
+  // attacks; 'suicide' closes regardless; 'normal' needs to be provoked at
+  // range; 'aggress' charges the moment it notices you.
+  const ai = monster.def.aiType || 'normal';
+  const aggro = monster.def.aggroRange * (ai === 'aggress' ? 1.3 : ai === 'wary' ? 0.8 : 1);
+  if (d > aggro && monster.state !== 'engaged') { out.reason = 'unaware'; return out; }
 
   // Pick a victim: the closest conscious character, biased toward the weakest.
   const targets = party.filter((c) => isAlive(c) && !(c.conditions && c.conditions.unconscious));
@@ -568,9 +577,10 @@ export function monsterAct(monster, party, world, rand) {
 
   const r = monster.def.ranged;
   if (r && d <= (r.range || 3000)) {
-    // Casters prefer their spell; archers loose an arrow. Both only some of
-    // the time so the fight keeps moving.
-    if (rand.bool(monster.def.caster ? 0.7 : 0.55)) {
+    // Casters prefer their spell; archers loose an arrow. A wary monster shoots
+    // whenever it can rather than closing; a suicidal one never bothers.
+    const p = ai === 'wary' ? 0.9 : ai === 'suicide' ? 0.1 : monster.def.caster ? 0.7 : 0.55;
+    if (rand.bool(p)) {
       out.type = r.spell ? 'cast' : 'ranged';
       out.spell = r.spell || null;
       out.reason = 'at range';
@@ -599,7 +609,7 @@ export function performMonsterAction(monster, intent, rand) {
       const roll = attackRoll(monster, intent.target, rand, { ranged: true });
       const e = { attacker: monster.def.name, target: intent.target.name, hit: roll.hit, damage: 0, killed: false, notes: ['ranged'] };
       if (roll.hit) {
-        const amount = rand.dice(r.damage.n, r.damage.s);
+        const amount = rand.dice(r.damage.n, r.damage.s) + (r.bonus || 0);
         const res = applyDamage(intent.target, amount, r.element || 'physical', rand, { missile: true });
         e.damage = res.dealt; e.killed = res.killed;
       }
@@ -608,7 +618,7 @@ export function performMonsterAction(monster, intent, rand) {
     }
     case 'cast': {
       const r = monster.def.ranged;
-      const amount = rand.dice(r.damage.n, r.damage.s);
+      const amount = rand.dice(r.damage.n, r.damage.s) + (r.bonus || 0);
       const res = applyDamage(intent.target, amount, r.element || 'magic', rand, {});
       const e = {
         attacker: monster.def.name, target: intent.target.name, hit: true,
@@ -683,76 +693,173 @@ export function bestAttackSpell(character, spells) {
   return best;
 }
 
+/** The enemy the party should be shooting at: the one closest to dying. */
+export function pickTarget(monsters) {
+  let target = null;
+  for (const m of monsters) {
+    if (!isAlive(m)) continue;
+    if (!target || m.hp < target.hp) target = m;
+  }
+  return target;
+}
+
+/** Whichever hand this character fights better with. */
+function prefersBow(c) {
+  const eq = c.equipment || {};
+  if (!eq.bow) return false;
+  if (!eq.mainhand) return true;
+  const bowSkill = (c.skills || {}).bow;
+  const md = itemDef(eq.mainhand.def);
+  const meleeSkill = md && md.skill ? (c.skills || {})[md.skill] : null;
+  return (bowSkill ? bowSkill.level : 0) > (meleeSkill ? meleeSkill.level : 0);
+}
+
 /**
- * Resolve one full round: every conscious character acts once, then every
- * living monster acts once. Returns { log, partyDown, monstersDown }.
- * `opts.useSpells` lets casters spend spell points.
+ * One character's action against a group of monsters: heal a dying ally, nuke
+ * with the best spell that is worth its spell points, or swing.
  */
-export function autoResolveRound(party, monsters, rand, opts) {
+export function characterAct(c, party, monsters, rand, opts) {
   const o = opts || {};
   const log = [];
-  const living = () => monsters.filter(isAlive);
+  const target = pickTarget(monsters);
+  if (!target) return log;
 
-  for (const c of party) {
-    if (!canAct(c)) continue;
-    const foes = living();
-    if (!foes.length) break;
-    // Focus fire on the weakest enemy: fastest way to reduce incoming damage.
-    let target = foes[0];
-    for (const m of foes) if (m.hp < target.hp) target = m;
-
-    let acted = false;
-    if (o.useSpells !== false) {
-      const sp = bestAttackSpell(c, null);
-      if (sp) {
-        const sk = c.skills[sp.school];
-        const cost = sp.sp;
-        // Save some spell points for healing; only nuke when it is worth it.
-        if (c.sp >= cost && (c.sp > maxSP(c) * 0.35 || target.hp > 60)) {
-          c.sp -= cost;
-          log.push(resolveSpellAttack(c, sp, target, sk.level, sk.mastery, rand));
-          acted = true;
+  // Emergency healing takes priority over damage.
+  if (o.useSpells !== false && c.spells && c.spells.indexOf('first_aid') >= 0) {
+    let worst = null;
+    for (const m of party) {
+      if (!isAlive(m)) continue;
+      if (m.hp < maxHP(m) * 0.3 && (!worst || m.hp < worst.hp)) worst = m;
+    }
+    const healSpell = c.spells.indexOf('power_cure') >= 0 ? spellById('power_cure') : spellById('first_aid');
+    if (worst && healSpell) {
+      const sk = (c.skills || {})[healSpell.school];
+      if (sk && sk.level > 0 && c.sp >= healSpell.sp) {
+        c.sp -= healSpell.sp;
+        const amount = Math.round((healSpell.pow.base + healSpell.pow.per * sk.level) * (1 + sk.mastery * 0.15));
+        const targets = healSpell.target === 'party' ? party : [worst];
+        for (const t of targets) {
+          if (!isAlive(t)) continue;
+          t.hp = Math.min(maxHP(t), t.hp + amount);
+          if (t.hp > 0 && t.conditions) delete t.conditions.unconscious;
         }
+        log.push({ attacker: c.name, target: worst.name, heal: amount, damage: 0, hit: true, notes: ['heal'] });
+        return log;
       }
     }
-    if (!acted) {
-      const useBow = !!(c.equipment && c.equipment.bow) && !(c.equipment && c.equipment.mainhand);
-      log.push(resolveAttack(c, target, rand, { ranged: useBow }));
+  }
+
+  if (o.useSpells !== false) {
+    const sp = bestAttackSpell(c, null);
+    if (sp) {
+      const sk = c.skills[sp.school];
+      const cost = sp.sp;
+      // Keep a reserve so the caster is not empty the moment it matters.
+      if (c.sp >= cost && (c.sp > maxSP(c) * 0.25 || target.hp > 60)) {
+        c.sp -= cost;
+        log.push(resolveSpellAttack(c, sp, target, sk.level, sk.mastery, rand));
+        return log;
+      }
     }
   }
+  log.push(resolveAttack(c, target, rand, { ranged: prefersBow(c) }));
+  return log;
+}
 
+/** One monster's action. Places it in contact first when auto-resolving. */
+export function monsterTurn(monster, party, rand, opts) {
+  const o = opts || {};
   const world = { partyPos: { x: 0, y: 0, z: 0 }, indoors: !!o.indoors };
+  monster.x = 0; monster.y = 0;
+  monster.z = o.range !== undefined ? o.range : 100;
+  monster.state = 'engaged';
+  const intent = monsterAct(monster, party, world, rand);
+  if (monster.def.regen && monster.hp < monster.maxHP) {
+    monster.hp = Math.min(monster.maxHP, monster.hp + monster.def.regen);
+  }
+  return performMonsterAction(monster, intent, rand);
+}
+
+/**
+ * Resolve one full round: every conscious character acts once, then every
+ * living monster acts once. Simple and readable - the turn-based UI uses this.
+ * `simulateFight` uses the finer-grained recovery clock instead.
+ */
+export function autoResolveRound(party, monsters, rand, opts) {
+  const log = [];
+  for (const c of party) {
+    if (!canAct(c)) continue;
+    if (!monsters.some(isAlive)) break;
+    for (const e of characterAct(c, party, monsters, rand, opts)) log.push(e);
+  }
   for (const m of monsters) {
     if (!isAlive(m) || !canAct(m)) continue;
-    // In an auto-resolved round everything is already in contact.
-    m.x = 0; m.y = 0; m.z = o.range !== undefined ? o.range : 100;
-    const intent = monsterAct(m, party, world, rand);
-    for (const e of performMonsterAction(m, intent, rand)) log.push(e);
+    for (const e of monsterTurn(m, party, rand, opts)) log.push(e);
   }
-
   return {
     log,
     partyDown: party.every((c) => !canAct(c)),
-    monstersDown: !living().length,
+    monstersDown: !monsters.some(isAlive),
   };
 }
 
 /**
- * Fight until one side falls or `maxRounds` elapse. Returns a summary the
- * balance report reads directly.
+ * Fight on the real recovery clock: whoever recovers first acts first, and a
+ * fast character genuinely gets more swings than a slow one. `maxRounds` is in
+ * notional rounds of TICKS_PER_TURN ticks each.
+ *
+ * Returns the summary the balance report reads.
  */
 export function simulateFight(party, monsters, rand, maxRounds = 40, opts) {
-  let rounds = 0;
+  const o = opts || {};
+  const all = party.concat(monsters);
+  for (const c of all) c.recovery = 0;
+
+  const maxTicks = maxRounds * TICKS_PER_TURN;
+  let ticks = 0;
   let partyDamage = 0, monsterDamage = 0;
-  while (rounds < maxRounds) {
-    const before = monsters.reduce((t, m) => t + Math.max(0, m.hp), 0);
-    const beforeParty = party.reduce((t, c) => t + Math.max(0, c.hp), 0);
-    const r = autoResolveRound(party, monsters, rand, opts);
-    rounds++;
-    partyDamage += before - monsters.reduce((t, m) => t + Math.max(0, m.hp), 0);
-    monsterDamage += beforeParty - party.reduce((t, c) => t + Math.max(0, c.hp), 0);
-    if (r.monstersDown) return { win: true, rounds, partyDamage, monsterDamage };
-    if (r.partyDown) return { win: false, rounds, partyDamage, monsterDamage };
+  let guard = maxRounds * 200;
+
+  const partyHP = () => party.reduce((t, c) => t + Math.max(0, c.hp), 0);
+  const monsterHP = () => monsters.reduce((t, m) => t + Math.max(0, m.hp), 0);
+
+  while (ticks < maxTicks && guard-- > 0) {
+    // Who is next off the recovery clock?
+    let next = null;
+    for (const c of all) {
+      if (!isAlive(c) || !canAct(c)) continue;
+      if (!next || c.recovery < next.recovery) next = c;
+    }
+    if (!next) break;
+
+    const step = Math.max(0, next.recovery);
+    if (step > 0) {
+      for (const c of all) if (c.recovery > 0) c.recovery -= step;
+      ticks += step;
+      if (ticks >= maxTicks) break;
+    }
+
+    if (isMonster(next)) {
+      const before = partyHP();
+      monsterTurn(next, party, rand, o);
+      monsterDamage += Math.max(0, before - partyHP());
+      next.recovery = monsterRecovery(next);
+    } else {
+      const before = monsterHP();
+      characterAct(next, party, monsters, rand, o);
+      partyDamage += Math.max(0, before - monsterHP());
+      next.recovery = recoveryFor(next, prefersBow(next));
+    }
+
+    if (!monsters.some(isAlive)) {
+      return { win: true, rounds: Math.max(1, ticks / TICKS_PER_TURN), ticks, partyDamage, monsterDamage };
+    }
+    if (party.every((c) => !canAct(c))) {
+      return { win: false, rounds: Math.max(1, ticks / TICKS_PER_TURN), ticks, partyDamage, monsterDamage };
+    }
   }
-  return { win: false, rounds, partyDamage, monsterDamage, timeout: true };
+  return {
+    win: false, rounds: Math.max(1, ticks / TICKS_PER_TURN), ticks,
+    partyDamage, monsterDamage, timeout: true,
+  };
 }

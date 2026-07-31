@@ -352,7 +352,7 @@ export function generateTown(spec = {}, seed = 1) {
   }
   const trees = treeInst.length
     ? makeBillboardField(floraTexture(spec.treeKind || 'tree', 5), treeInst, {
-      fogColor: spec.fogColor || 0x9ab4cc, fogNear: spec.fogNear || 1400, fogFar: spec.fogFar || 6000,
+      fogNear: 2048, fogFar: spec.fogFar || 8192,
     })
     : null;
   if (trees) group.add(trees);

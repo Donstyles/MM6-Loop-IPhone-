@@ -27,7 +27,7 @@
 import * as THREE from 'three';
 import { EFFECT_IDS, getEffectSheet } from '../../src/art/vfxart.js';
 import { SpriteRenderer } from '../../src/ents/billboard.js';
-import { VFXSystem } from '../../src/ents/vfx.js';
+import { VFXSystem, DAMAGE_STYLE } from '../../src/ents/vfx.js';
 import { Pix, grainFill, blotch, toTexture } from '../../src/art/texcanvas.js';
 
 const errEl = document.getElementById('err');
@@ -92,8 +92,8 @@ scene.background = new THREE.Color(SKY);
 scene.fog = new THREE.Fog(SKY, 3000, 14000);
 
 const camera = new THREE.PerspectiveCamera(55, 1400 / 520, 10, 30000);
-camera.position.set(0, 330, 2050);
-camera.lookAt(0, 240, -400);
+camera.position.set(0, 260, 1250);
+camera.lookAt(0, 210, 0);
 
 const gp = new Pix(64, 64);
 grainFill(gp, 'grass', { period: 10, octaves: 5, seed: 12, lo: 0.22, hi: 0.7, contrast: 1.15 });
@@ -108,56 +108,74 @@ const sr = new SpriteRenderer(scene);
 sr.setFog(new THREE.Color(SKY), 4000, 16000);
 const vfx = new VFXSystem(sr);
 
-// 3 rows x 12 columns, one effect each, so a still frame shows the lot.
-const COLS = 12;
-const ROW_Z = [500, -350, -1200];
-const slots = [];
-EFFECT_IDS.forEach((id, i) => {
-  const row = (i / COLS) | 0;
-  const col = i % COLS;
-  const x = (col - (COLS - 1) / 2) * 340;
-  const z = ROW_Z[Math.min(ROW_Z.length - 1, row)];
-  slots.push({ id, x, y: 240, z, handle: null, wait: i * 0.11 });
-});
-
+// Nine effects at a time, spread across the view at world scale; the page
+// advances every few seconds so every id gets shown.
+const PAGE_SIZE = 9;
+const PAGES = Math.ceil(EFFECT_IDS.length / PAGE_SIZE);
 const loopIds = new Set(['flame_pillar', 'immolation_aura', 'buff_shimmer', 'portal',
   'torch_flame', 'campfire', 'wisp_glow', 'fire_bolt', 'fireball', 'ice_shard',
   'rock_shard', 'blades', 'meteor', 'dark_ray', 'arrow']);
 
+let page = 0;
+let pageTimer = 0;
+let slots = [];
+
+function setPage(pi) {
+  page = ((pi % PAGES) + PAGES) % PAGES;
+  pageTimer = 3.2;
+  vfx.clear();
+  slots = [];
+  const ids = EFFECT_IDS.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
+  ids.forEach((id, i) => {
+    slots.push({ id, x: (i - (PAGE_SIZE - 1) / 2) * 400, y: 230, z: 0, handle: null, wait: i * 0.05 });
+  });
+}
+window.__setPage = setPage;
+
 const projCtx = {
   drawDistance: 20000,
-  groundAt: (x, z, y) => 0,
+  groundAt: () => 0,
   hitEntity: () => null,
 };
 
 let shotTimer = 0;
 let shotIdx = 0;
 const PROJ = [
-  { id: 'fireball', impact: 'fire_burst', speed: 1500 },
-  { id: 'ice_shard', impact: 'ice_burst', speed: 1800 },
-  { id: 'arrow', impact: 'spark_hit', speed: 2200 },
-  { id: 'rock_shard', impact: 'earth_burst', speed: 1300 },
+  { id: 'fireball', impact: 'fire_burst', speed: 1500, kind: 'crit', dmg: '38' },
+  { id: 'ice_shard', impact: 'ice_burst', speed: 1800, kind: 'damage', dmg: '12' },
+  { id: 'arrow', impact: 'spark_hit', speed: 2200, kind: 'miss', dmg: 'Miss' },
+  { id: 'rock_shard', impact: 'earth_burst', speed: 1300, kind: 'resist', dmg: 'Resist' },
 ];
 
 function spawn(s) {
   if (loopIds.has(s.id)) {
-    s.handle = vfx.ambient(s.id, s.x, s.y, s.z, { phase: Math.random() * 3 });
+    s.handle = vfx.ambient(s.id, s.x, s.y, s.z, { phase: (s.x * 0.001) % 3 });
     s.wait = 1e9;
   } else {
     s.handle = vfx.burst(s.id, s.x, s.y, s.z, {});
     const sh = getEffectSheet(s.id);
-    s.wait = sh.frames / sh.fps + 0.35;
+    s.wait = sh.frames / sh.fps + 0.3;
   }
 }
 
 const labels = document.getElementById('labels');
 const lg = labels.getContext('2d');
 const v3 = new THREE.Vector3();
+let flash = null;
+
+setPage(0);
 
 let last = performance.now();
 let frames = 0;
+window.__dbg = () => ({ frames, page, count: vfx.count, drawn: vfx.drawn, batches: sr.drawCalls, slots: slots.map((s) => ({ id: s.id, w: +s.wait.toFixed(2), a: !!(s.handle && s.handle.active) })) });
+
 function frame(now) {
-  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  // Building the atlases blocks for seconds, and rAF hands back the timestamp
+  // of the frame that started before that, so the first delta is negative.
+  const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)); last = now;
+
+  pageTimer -= dt;
+  if (pageTimer <= 0) setPage(page + 1);
 
   for (const s of slots) {
     s.wait -= dt;
@@ -166,12 +184,11 @@ function frame(now) {
 
   shotTimer -= dt;
   if (shotTimer <= 0) {
-    shotTimer = 0.55;
+    shotTimer = 0.7;
     const p = PROJ[shotIdx % PROJ.length]; shotIdx++;
-    const fromX = -1800, toX = 1800;
-    const zz = 1300;
-    vfx.projectile(p.id, { x: fromX, y: 220, z: zz }, { x: toX - fromX, y: 0, z: 0 }, {
-      speed: p.speed, range: 1400 + Math.random() * 1600, impactId: p.impact,
+    vfx.projectile(p.id, { x: -2400, y: 200, z: 700 }, { x: 1, y: 0.02, z: 0 }, {
+      speed: p.speed, range: 2200 + (shotIdx % 4) * 500, impactId: p.impact,
+      onHit: (pos) => vfx.damageNumber(pos.x, pos.y, pos.z, p.dmg, p.kind),
     });
   }
 
@@ -181,11 +198,26 @@ function frame(now) {
   sr.end();
   renderer.render(scene, camera);
 
+  // The shell would draw these over the 3D view; do the same here so the
+  // screen-effect and floating-text queries are exercised.
+  const screen = vfx.takeScreenEffects();
+  if (screen.length) flash = { e: screen[0], t: screen[0].time || 0.3, max: screen[0].time || 0.3 };
+
   lg.clearRect(0, 0, 1400, 520);
-  lg.font = '10px monospace';
+  if (flash) {
+    flash.t -= dt;
+    if (flash.t <= 0) flash = null;
+    else {
+      const k = (flash.t / flash.max) * flash.e.amount;
+      lg.fillStyle = `rgba(${(flash.e.r * 255) | 0},${(flash.e.g * 255) | 0},${(flash.e.b * 255) | 0},${k.toFixed(3)})`;
+      lg.fillRect(0, 0, 1400, 520);
+    }
+  }
+
+  lg.font = '11px monospace';
   lg.textAlign = 'center';
   for (const s of slots) {
-    v3.set(s.x, s.y - 190, s.z).project(camera);
+    v3.set(s.x, 30, s.z).project(camera);
     if (v3.z > 1) continue;
     const sx = (v3.x * 0.5 + 0.5) * 1400, sy = (-v3.y * 0.5 + 0.5) * 520;
     lg.fillStyle = '#000';
@@ -193,9 +225,23 @@ function frame(now) {
     lg.fillStyle = '#ffe98a';
     lg.fillText(s.id, sx, sy);
   }
+
+  for (const d of vfx.damageNumbers()) {
+    v3.set(d.x, d.y, d.z).project(camera);
+    if (v3.z > 1) continue;
+    const st = DAMAGE_STYLE[d.kind];
+    lg.font = (st.big ? 'bold 18px' : 'bold 13px') + ' monospace';
+    lg.globalAlpha = Math.max(0, 1 - Math.max(0, d.t - 0.55) / 0.45);
+    const sx = (v3.x * 0.5 + 0.5) * 1400 + d.jitter * 0.3, sy = (-v3.y * 0.5 + 0.5) * 520;
+    lg.fillStyle = '#000'; lg.fillText(d.text, sx + 1, sy + 1);
+    lg.fillStyle = st.color; lg.fillText(d.text, sx, sy);
+    lg.globalAlpha = 1;
+  }
+
   lg.textAlign = 'left';
+  lg.font = '11px monospace';
   lg.fillStyle = '#ffe98a';
-  lg.fillText(`live effects ${vfx.count}  drawn ${vfx.drawn}  batches ${sr.drawCalls}`, 8, 14);
+  lg.fillText(`page ${page + 1}/${PAGES}   live effects ${vfx.count}   drawn ${vfx.drawn}   batches ${sr.drawCalls}`, 8, 14);
 
   frames++;
   if (frames === 3) window.__ready = true;

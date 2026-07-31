@@ -1,0 +1,309 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>MM6 - NPC / shop / menu screens</title>
+  <style>
+    body { background: #16171a; color: #b8ad8c; font: 12px monospace; margin: 0; padding: 10px; }
+    h1 { font-size: 13px; color: #e1cd23; margin: 4px 0 10px; }
+    .grid { display: flex; flex-wrap: wrap; gap: 10px; }
+    .cell { width: 640px; }
+    .cell h2 { font-size: 11px; margin: 0 0 2px; color: #ffff9b; font-weight: normal; }
+    canvas { display: block; image-rendering: pixelated; background: #000; }
+    #err { color: #ff6060; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>MM6 &mdash; dialogue, shops, services, menus (panel 461&times;345 at 8,8 with the dialogue column at 468)</h1>
+  <div class="grid" id="grid"></div>
+  <div id="err"></div>
+
+  <script type="module">
+    import { UIContext, MessageLog } from '/src/ui/uikit.js';
+    import { GameClock } from '/src/game/session.js';
+    import { computeLayout, layout } from '/src/core/layout.js';
+    import * as F from '/src/art/font.js';
+    import * as UI from '/src/art/uiart.js';
+    import { PORTRAIT_W, PORTRAIT_H } from '/src/art/portraits.js';
+    import { portraitOf } from '/src/ui/screens/screenbase.js';
+    import { makeItem, shopStock, itemRand } from '/src/game/items.js';
+    import { CLASSES } from '/src/game/stats.js';
+
+    import { DialogueScreen } from '/src/ui/screens/dialogue.js';
+    import { ShopScreen } from '/src/ui/screens/shop.js';
+    import { TempleScreen } from '/src/ui/screens/temple.js';
+    import { TrainingScreen } from '/src/ui/screens/training.js';
+    import { TavernScreen } from '/src/ui/screens/tavern.js';
+    import { BankScreen } from '/src/ui/screens/bank.js';
+    import { GuildScreen } from '/src/ui/screens/guild.js';
+    import { RestScreen } from '/src/ui/screens/rest.js';
+    import { LevelUpScreen } from '/src/ui/screens/levelup.js';
+    import { TitleScreen } from '/src/ui/screens/title.js';
+    import { ChargenScreen } from '/src/ui/screens/chargen.js';
+    import { TransferScreen } from '/src/ui/screens/transfer.js';
+
+    const errs = [];
+    window.addEventListener('error', (e) => { errs.push(String(e.message)); });
+
+    computeLayout(640, 480, false);
+
+    // --- fake session --------------------------------------------------------
+
+    function mkChar(name, klass, sex, seed, level, over) {
+      const k = CLASSES[klass];
+      const ch = Object.assign({
+        name, class: klass, klass, sex, portraitSeed: seed, level,
+        xp: Math.round(1000 * level * (level - 1) / 2 + 1400),
+        stats: Object.assign({}, k.startStats),
+        skills: { merchant: { level: 6, mastery: 2 }, body_building: { level: 4, mastery: 1 } },
+        conditions: {}, buffs: {}, spells: [],
+        maxHP: 30 + level * 6, hp: 30 + level * 6,
+        maxSP: k.spStat ? 12 + level * 4 : 0, sp: k.spStat ? 12 + level * 4 : 0,
+        age: 20, inventory: [], recovery: 0,
+      }, over || {});
+      return ch;
+    }
+
+    function makeSession() {
+      const rnd = itemRand('preview');
+      const knight = mkChar('Roland', 'knight', 'm', 101, 5);
+      const cleric = mkChar('Isolde', 'cleric', 'f', 202, 4, { hp: 12 });
+      const sorc = mkChar('Kestrel', 'sorcerer', 'm', 303, 4, { hp: 3 });
+      const archer = mkChar('Wren', 'archer', 'f', 404, 5);
+      cleric.conditions = { poisoned_weak: true };
+      sorc.conditions = { cursed: true };
+      archer.conditions = { dead: true };
+      knight.skills.sword = { level: 6, mastery: 2 };
+      cleric.skills.body = { level: 5, mastery: 2 };
+      cleric.skills.spirit = { level: 4, mastery: 1 };
+      sorc.skills.fire = { level: 6, mastery: 2 };
+      sorc.spells = ['torch_light', 'fire_bolt'];
+
+      // Inventory for the sell / identify / repair grids.
+      const inv = knight.inventory;
+      inv.push(makeItem('longsword'));
+      inv.push(makeItem('broadsword', { bonus: 2 }));
+      const bust = makeItem('chain_mail'); if (bust) bust.broken = true; inv.push(bust);
+      const unk = makeItem('kris'); if (unk) unk.identified = false; inv.push(unk);
+      inv.push(makeItem('red_potion'));
+      inv.push(makeItem('leather_armor'));
+      inv.push(makeItem('bow'));
+
+      const clock = new GameClock(15 * 60 + 20);
+      const session = {
+        party: {
+          members: [knight, cleric, sorc, archer],
+          gold: 4820, food: 6, hirelings: [], memberships: {}, bank: null,
+        },
+        activeChar: 0,
+        clock,
+        log: new MessageLog(),
+        quests: {},
+        shops: {},
+        map: { indoor: false },
+        inCombat: false,
+        screens: { push() {}, pop() {}, top: null },
+        audio: null,
+      };
+      return session;
+    }
+
+    const NPC = {
+      id: 'wolfram', name: 'Wolfram Hale', title: 'Captain of the Watch',
+      portraitSeed: 511, sex: 'm', klass: 'knight', house: 'The Guard House',
+      greeting: 'You have the look of people who solve problems for coin. Good. '
+        + 'Half my watch is down with fever and the goblins know it.',
+      quest: {
+        id: 'goblins', name: 'The Goblin Camp', topic: 'Ask about the goblins',
+        offer: 'Burn the camp at the old mill and bring me their banner. Fifty gold a head, and my thanks.',
+        progress: 'The camp still stands. I can see the smoke from the wall.',
+        reward: 'You did it. The road is quiet for the first time in a month.',
+        gold: 600, xp: 1500,
+      },
+      hire: { wage: 15, role: 'Man-at-arms', text: 'Fifteen gold a day and I keep my own sword.' },
+      teaches: [
+        { skill: 'sword', name: 'Sword', price: 250 },
+        { skill: 'plate', name: 'Plate Armour', price: 900, mastery: 1, classes: ['knight', 'paladin'] },
+        { skill: 'diplomacy', name: 'Diplomacy', price: 300 },
+      ],
+      topics: [
+        { id: 'town', label: 'About the town', text: 'New Sorpigal was a fishing village until the mines opened. Now it is a fishing village with a wall.' },
+        { id: 'watch', label: 'The watch', text: 'Twelve men, four of them boys. We hold the gate and pray.' },
+      ],
+      rumours: [
+        'The temple pays for anyone willing to go into the crypt. Nobody has come back to collect.',
+        'A pedlar swears he saw lights over the water at Silver Cove. He had been drinking.',
+      ],
+    };
+
+    // --- harness -------------------------------------------------------------
+
+    const grid = document.getElementById('grid');
+
+    function chrome(ctx) {
+      // The permanent frame the screens sit inside: stone surround, right column
+      // and the party bar, all of which the HUD owns at runtime.
+      const S = session;
+      UI.drawStonePanel(ctx, 0, 0, layout.side.x, layout.hud.y, { rivets: false });
+      UI.drawStonePanel(ctx, layout.side.x, 0, layout.side.w, layout.hud.y, { rivets: true, gold: true });
+      UI.drawStonePanel(ctx, 0, layout.hud.y, layout.w, layout.hud.h, { rivets: true, gold: true });
+      // Automap well in the right column.
+      UI.drawInset(ctx, layout.side.x + 10, 10, layout.side.w - 20, layout.side.w - 20);
+      F.drawText(ctx, S.clock.format(), layout.side.x + layout.side.w / 2, 168,
+        { align: 'center', color: F.TEXT_GOLD });
+      // Party bar.
+      const members = S.party.members;
+      for (let i = 0; i < 4; i++) {
+        const x = 14 + i * 101, y = layout.hud.y + 8;
+        const ch = members[i];
+        const p = portraitOf(ch, ch.conditions && ch.conditions.dead ? 'dead' : 'normal');
+        if (p) ctx.drawImage(p, x, y);
+        UI.drawPortraitFrame(ctx, x, y, PORTRAIT_W, PORTRAIT_H, i === S.activeChar ? 'active' : 'normal');
+        const bw = Math.floor((PORTRAIT_W - 3) / 2);
+        UI.drawStatBar(ctx, x, y + PORTRAIT_H + 3, bw, 6, ch.hp / ch.maxHP, 'hp');
+        UI.drawStatBar(ctx, x + bw + 3, y + PORTRAIT_H + 3, bw, 6, ch.maxSP ? ch.sp / ch.maxSP : 0, 'sp');
+        F.drawText(ctx, ch.name, x + PORTRAIT_W / 2, y + PORTRAIT_H + 12,
+          { face: 'small', align: 'center', color: F.TEXT_NORMAL });
+      }
+      const bx = 14 + 4 * 101 + 6;
+      F.drawText(ctx, `${S.party.gold} gold`, bx, layout.hud.y + 12, { color: F.TEXT_GOLD });
+      F.drawText(ctx, `${S.party.food} food`, bx, layout.hud.y + 28, { color: F.TEXT_NORMAL });
+    }
+
+    let session = makeSession();
+
+    function panel(label, make, opts = {}) {
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      const h2 = document.createElement('h2');
+      h2.textContent = label;
+      const c = document.createElement('canvas');
+      c.width = 640; c.height = 480;
+      cell.appendChild(h2); cell.appendChild(c);
+      grid.appendChild(cell);
+
+      const ctx = c.getContext('2d');
+      ctx.imageSmoothingEnabled = false;
+      try {
+        const ui = new UIContext();
+        const screen = make(session, ui);
+        if (screen.onOpen) screen.onOpen();
+        if (opts.before) opts.before(screen, session);
+        const steps = opts.steps === undefined ? 40 : opts.steps;
+        for (let i = 0; i < steps; i++) if (screen.update) screen.update(0.05);
+        ui.beginFrame(ctx, { x: opts.mx === undefined ? -50 : opts.mx, y: opts.my === undefined ? -50 : opts.my }, []);
+        if (!opts.noChrome) chrome(ctx);
+        screen.draw(ctx);
+        ui.endFrame();
+      } catch (e) {
+        errs.push(`${label}: ${e && e.stack ? e.stack : e}`);
+        ctx.fillStyle = '#400'; ctx.fillRect(0, 0, 640, 480);
+        ctx.fillStyle = '#fff'; ctx.font = '12px monospace';
+        ctx.fillText(String(e).slice(0, 80), 10, 30);
+      }
+    }
+
+    // --- the screens ---------------------------------------------------------
+
+    panel('title.js - main menu (hover: New Game)',
+      (s, ui) => new TitleScreen(s, ui, {}, {}), { noChrome: true, mx: 320, my: 348, steps: 12 });
+
+    panel('chargen.js - party creation',
+      (s, ui) => new ChargenScreen(s, ui, {}, { seed: 77 }), { noChrome: true, mx: 250, my: 90 });
+
+    panel('dialogue.js - NPC conversation (typewriter complete)',
+      (s, ui) => new DialogueScreen(s, ui, {}, { npc: JSON.parse(JSON.stringify(NPC)) }),
+      { mx: 520, my: 175 });
+
+    panel('dialogue.js - quest accepted, mid-reveal',
+      (s, ui) => new DialogueScreen(s, ui, {}, { npc: JSON.parse(JSON.stringify(NPC)) }),
+      { steps: 0, before: (sc) => { sc.choose('quest'); sc.update(0.55); }, mx: 500, my: 250 });
+
+    panel('dialogue.js - Learn Skill list',
+      (s, ui) => new DialogueScreen(s, ui, {}, { npc: JSON.parse(JSON.stringify(NPC)) }),
+      { before: (sc) => { sc.shown = 9999; sc.choose('teach'); }, mx: 540, my: 205 });
+
+    panel('shop.js - weapon smith, Buy Standard',
+      (s, ui) => new ShopScreen(s, ui, {}, {
+        kind: 'weapon', tier: 3, title: 'Steelheart Arms',
+        keeper: { name: 'Bruna Steelheart', title: 'Smith', portraitSeed: 615, sex: 'f' },
+      }), { mx: 160, my: 90 });
+
+    panel('shop.js - armourer, Sell from Roland',
+      (s, ui) => new ShopScreen(s, ui, {}, {
+        kind: 'armor', tier: 2, title: 'The Iron Coat',
+        keeper: { name: 'Tomas Ward', title: 'Armourer', portraitSeed: 616, sex: 'm' },
+      }), { before: (sc) => { sc.onOption('sell'); }, mx: 100, my: 160 });
+
+    panel('shop.js - magic shop, Buy Special',
+      (s, ui) => new ShopScreen(s, ui, {}, {
+        kind: 'magic', tier: 4, title: 'The Silver Sigil',
+        keeper: { name: 'Ilsa Venn', title: 'Enchantress', portraitSeed: 617, sex: 'f', klass: 'sorcerer' },
+      }), { before: (sc) => { sc.onOption('special'); }, mx: 300, my: 100 });
+
+    panel('shop.js - alchemist',
+      (s, ui) => new ShopScreen(s, ui, {}, {
+        kind: 'alchemy', tier: 2, title: 'Mortar & Pestle',
+        keeper: { name: 'Dorn Pyle', title: 'Alchemist', portraitSeed: 618, sex: 'm', klass: 'druid' },
+      }), { mx: 520, my: 300 });
+
+    panel('shop.js - general store, Repair',
+      (s, ui) => new ShopScreen(s, ui, {}, {
+        kind: 'general', tier: 2, title: 'Pell\'s Sundries',
+        keeper: { name: 'Marta Pell', title: 'Trader', portraitSeed: 619, sex: 'f' },
+      }), { before: (sc) => { sc.onOption('repair'); }, mx: 60, my: 80 });
+
+    panel('temple.js - services and party condition',
+      (s, ui) => new TempleScreen(s, ui, {}, {
+        tier: 2, god: 'the Sun', title: 'Temple of the Sun',
+        keeper: { name: 'Brother Aldric', title: 'Healer', portraitSeed: 620, sex: 'm', klass: 'cleric' },
+      }), { mx: 520, my: 160 });
+
+    panel('training.js - experience table',
+      (s, ui) => new TrainingScreen(s, ui, {}, {
+        maxLevel: 10, title: 'Ironfist Training Hall',
+        keeper: { name: 'Master Dunmar', title: 'Trainer', portraitSeed: 621, sex: 'm', klass: 'knight' },
+      }), { mx: 200, my: 74 });
+
+    panel('tavern.js - rumour heard',
+      (s, ui) => new TavernScreen(s, ui, {}, { tier: 1 }),
+      { before: (sc) => sc.listen(), mx: 520, my: 250 });
+
+    panel('tavern.js - hire list and arm wrestling',
+      (s, ui) => new TavernScreen(s, ui, {}, { tier: 1 }),
+      { before: (sc) => { sc.mode = 'hire'; sc.startGame(); }, steps: 20, mx: 300, my: 60 });
+
+    panel('bank.js - deposit and interest',
+      (s, ui) => new BankScreen(s, ui, {}, {}),
+      { before: (sc) => { sc.deposit(2000); sc.bank.lastMinutes -= 7 * 24 * 60 * 3; sc.settle(); }, mx: 520, my: 150 });
+
+    panel('guild.js - Guild of Fire spellbooks',
+      (s, ui) => new GuildScreen(s, ui, {}, { school: 'fire', tier: 3, fee: 1000 }),
+      { before: (sc, s) => { s.activeChar = 2; s.party.memberships.guild_fire = true; }, mx: 200, my: 150 });
+
+    panel('guild.js - Guild of the Body, not a member',
+      (s, ui) => new GuildScreen(s, ui, {}, { school: 'body', tier: 2, fee: 800 }),
+      { before: (sc, s) => { s.activeChar = 1; }, mx: 540, my: 160 });
+
+    panel('rest.js - camp, waiting an hour',
+      (s, ui) => new RestScreen(s, ui, {}, { outdoor: true }),
+      { before: (sc) => { sc.begin('hour'); }, steps: 1, mx: 140, my: 180 });
+
+    panel('transfer.js - stables, route to Free Haven',
+      (s, ui) => new TransferScreen(s, ui, {}, { mode: 'stable', from: 'sorpigal' }),
+      { before: (sc) => { sc.onOption('freehaven'); }, mx: 520, my: 205 });
+
+    panel('transfer.js - docks',
+      (s, ui) => new TransferScreen(s, ui, {}, { mode: 'boat', from: 'freehaven' }),
+      { mx: 300, my: 200 });
+
+    panel('levelup.js - Roland reaches level 6',
+      (s, ui) => new LevelUpScreen(s, ui, {}, {
+        character: s.party.members[0], level: 6, hp: 9, sp: 0, skillPoints: 5,
+      }), { mx: 320, my: 330, steps: 8 });
+
+    document.getElementById('err').textContent = errs.length ? errs.join('\n') : '';
+    window.__ready = true;
+  </script>
+</body>
+</html>

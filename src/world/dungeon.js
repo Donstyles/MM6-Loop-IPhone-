@@ -23,60 +23,71 @@ export const DUNGEON_THEMES = [
   'tower', 'lair', 'ruins', 'ice', 'volcano',
 ];
 
+/**
+ * Indoors MM6 narrows the camera from 75 deg horizontal to 60. It is a very
+ * noticeable snap on entering a dungeon and the shell must apply it.
+ */
+export const INDOOR_HFOV_DEG = 60;
+export const OUTDOOR_HFOV_DEG = 75;
+export const DUNGEON_FOG_NEAR = 512;
+export const DUNGEON_FOG_FAR = 3000;
+/** graphics.torchlight_distance: 800 units of radius per power level. */
+export const TORCHLIGHT_RADIUS = 800;
+
 const THEME = {
   cave: {
     wall: 'dun_cave', floor: 'dun_floor_dirt', ceil: 'dun_ceiling_cave',
-    amb: [0.055, 0.062, 0.080], torch: [1.00, 0.62, 0.26], torchRange: 1050,
+    ambDim: 30, torch: [1.00, 0.62, 0.26], torchRange: 1050,
     roomH: [560, 1000], corrH: 560, organic: 0.42, liquid: 'water', pillars: 0.15,
   },
   crypt: {
     wall: 'dun_tomb', floor: 'dun_floor_stone', ceil: 'dun_ceiling_stone',
-    amb: [0.050, 0.055, 0.075], torch: [0.96, 0.60, 0.30], torchRange: 950,
+    ambDim: 30, torch: [0.96, 0.60, 0.30], torchRange: 950,
     roomH: [520, 780], corrH: 512, organic: 0, liquid: 'water', pillars: 0.45,
   },
   sewer: {
     wall: 'dun_sewer', floor: 'dun_floor_stone', ceil: 'dun_ceiling_stone',
-    amb: [0.048, 0.062, 0.058], torch: [0.90, 0.68, 0.34], torchRange: 900,
+    ambDim: 29, torch: [0.90, 0.68, 0.34], torchRange: 900,
     roomH: [512, 700], corrH: 512, organic: 0.1, liquid: 'swamp_water', liquidChance: 0.5, pillars: 0.3,
   },
   temple: {
     wall: 'dun_temple', floor: 'dun_floor_tile', ceil: 'dun_ceiling_stone',
-    amb: [0.075, 0.072, 0.070], torch: [1.00, 0.80, 0.44], torchRange: 1150,
+    ambDim: 27, torch: [1.00, 0.80, 0.44], torchRange: 1150,
     roomH: [700, 1150], corrH: 620, organic: 0, liquid: 'water', pillars: 0.6,
   },
   mine: {
     wall: 'dun_cave_dark', floor: 'dun_floor_dirt', ceil: 'dun_ceiling_cave',
-    amb: [0.045, 0.048, 0.058], torch: [1.00, 0.58, 0.22], torchRange: 900,
+    ambDim: 30, torch: [1.00, 0.58, 0.22], torchRange: 900,
     roomH: [520, 820], corrH: 512, organic: 0.3, liquid: 'water', pillars: 0.35,
   },
   castle: {
     wall: 'dun_brick', floor: 'dun_floor_stone', ceil: 'dun_ceiling_stone',
-    amb: [0.062, 0.066, 0.082], torch: [1.00, 0.72, 0.36], torchRange: 1050,
+    ambDim: 28, torch: [1.00, 0.72, 0.36], torchRange: 1050,
     roomH: [620, 1000], corrH: 560, organic: 0, liquid: 'water', pillars: 0.4,
   },
   tower: {
     wall: 'dun_brick_mossy', floor: 'dun_floor_stone', ceil: 'dun_ceiling_stone',
-    amb: [0.060, 0.070, 0.078], torch: [0.96, 0.70, 0.38], torchRange: 1000,
+    ambDim: 28, torch: [0.96, 0.70, 0.38], torchRange: 1000,
     roomH: [560, 900], corrH: 512, organic: 0, liquid: 'water', pillars: 0.3,
   },
   lair: {
     wall: 'dun_cave', floor: 'dun_floor_dirt', ceil: 'dun_ceiling_cave',
-    amb: [0.050, 0.048, 0.046], torch: [1.00, 0.52, 0.20], torchRange: 1000,
+    ambDim: 30, torch: [1.00, 0.52, 0.20], torchRange: 1000,
     roomH: [700, 1250], corrH: 620, organic: 0.5, liquid: 'lava', liquidChance: 0.25, pillars: 0.2,
   },
   ruins: {
     wall: 'dun_brick_mossy', floor: 'dun_floor_stone', ceil: 'dun_ceiling_stone',
-    amb: [0.070, 0.078, 0.076], torch: [0.94, 0.66, 0.34], torchRange: 1000,
+    ambDim: 28, torch: [0.94, 0.66, 0.34], torchRange: 1000,
     roomH: [560, 900], corrH: 520, organic: 0.25, liquid: 'water', liquidChance: 0.35, pillars: 0.5,
   },
   ice: {
     wall: 'dun_ice', floor: 'dun_ice', ceil: 'dun_ice',
-    amb: [0.085, 0.100, 0.130], torch: [0.72, 0.86, 1.00], torchRange: 1200,
+    ambDim: 26, torch: [0.72, 0.86, 1.00], torchRange: 1200,
     roomH: [620, 1050], corrH: 560, organic: 0.35, liquid: 'water', pillars: 0.25,
   },
   volcano: {
     wall: 'dun_lava_rock', floor: 'dun_lava_rock', ceil: 'dun_ceiling_cave',
-    amb: [0.075, 0.048, 0.038], torch: [1.00, 0.48, 0.16], torchRange: 1100,
+    ambDim: 28, torch: [1.00, 0.48, 0.16], torchRange: 1100,
     roomH: [660, 1200], corrH: 620, organic: 0.4, liquid: 'lava', liquidChance: 0.6, pillars: 0.25,
   },
 };
@@ -138,9 +149,18 @@ class LightGrid {
   }
 }
 
-/** Bake ambient + all torches at one vertex. Returns a linear-space colour. */
-function shadeVertex(grid, amb, x, y, z, nx, ny, nz, out) {
-  let r = amb[0], g = amb[1], b = amb[2];
+/**
+ * Bake sector ambient + all torches at one vertex.
+ *
+ * MM6 lights are *monochrome*: the engine accumulates a 0..31 dimming level
+ * with a linear `lightlevel += 30*dist/radius - 30` falloff, clamps it, and
+ * turns it into a single grey multiplier `8*(31-dim)`. There is no coloured
+ * light anywhere in MM6, so the warmth of a torch-lit corridor comes entirely
+ * from the wall texture and the flame sprite, not from the light itself.
+ */
+function shadeVertex(grid, ambDim, x, y, z, nx, ny, nz, out) {
+  // Start at the sector's ambient dimming level (31 = pitch black).
+  let dim = ambDim;
   const list = grid.near(x, z);
   if (list) {
     for (let i = 0; i < list.length; i++) {
@@ -149,18 +169,16 @@ function shadeVertex(grid, amb, x, y, z, nx, ny, nz, out) {
       const d2 = dx * dx + dy * dy + dz * dz;
       if (d2 > t.range * t.range) continue;
       const d = Math.sqrt(d2) || 1;
-      // Inverse-square-ish with a hard cutoff so the pool has a visible edge -
-      // MM6 lights fall off fast and then stop.
-      let att = 1 - d / t.range;
-      att = att * att * t.power;
-      const ndl = 0.42 + 0.58 * clamp((dx * nx + dy * ny + dz * nz) / d, 0, 1);
-      const k = att * ndl;
-      r += t.col[0] * k; g += t.col[1] * k; b += t.col[2] * k;
+      // -30 at the source, 0 at the radius, linear between.
+      let contrib = (30 * d / t.range - 30) * t.power;
+      // Facing the light matters; a wall edge-on to a torch stays dark.
+      const ndl = clamp((dx * nx + dy * ny + dz * nz) / d, 0, 1);
+      contrib *= 0.35 + 0.65 * ndl;
+      dim += contrib;
     }
   }
-  out[0] = SRGB_TO_LIN(clamp(r, 0, 1));
-  out[1] = SRGB_TO_LIN(clamp(g, 0, 1));
-  out[2] = SRGB_TO_LIN(clamp(b, 0, 1));
+  const g = SRGB_TO_LIN((8 * (31 - clamp(Math.round(dim), 0, 31))) / 255);
+  out[0] = g; out[1] = g; out[2] = g;
   return out;
 }
 
@@ -171,7 +189,7 @@ const _tmp = [0, 0, 0];
  * Emit a quad subdivided su x sv, lighting every generated vertex.
  * p00..p01 are the corners in winding order (p00,p10,p11,p01).
  */
-function litQuad(b, grid, amb, tex, p00, p10, p11, p01, su, sv, uu, vv, tint) {
+function litQuad(b, grid, ambDim, tex, p00, p10, p11, p01, su, sv, uu, vv, tint) {
   let nx = 0, ny = 0, nz = 0;
   {
     const ux = p10[0] - p00[0], uy = p10[1] - p00[1], uz = p10[2] - p00[2];
@@ -194,10 +212,10 @@ function litQuad(b, grid, amb, tex, p00, p10, p11, p01, su, sv, uu, vv, tint) {
       };
       at(u0, v0, A); at(u1, v0, B); at(u1, v1, C); at(u0, v1, D);
       const cols = [
-        shadeVertex(grid, amb, A[0], A[1], A[2], nx, ny, nz, [0, 0, 0]),
-        shadeVertex(grid, amb, B[0], B[1], B[2], nx, ny, nz, [0, 0, 0]),
-        shadeVertex(grid, amb, C[0], C[1], C[2], nx, ny, nz, [0, 0, 0]),
-        shadeVertex(grid, amb, D[0], D[1], D[2], nx, ny, nz, [0, 0, 0]),
+        shadeVertex(grid, ambDim, A[0], A[1], A[2], nx, ny, nz, [0, 0, 0]),
+        shadeVertex(grid, ambDim, B[0], B[1], B[2], nx, ny, nz, [0, 0, 0]),
+        shadeVertex(grid, ambDim, C[0], C[1], C[2], nx, ny, nz, [0, 0, 0]),
+        shadeVertex(grid, ambDim, D[0], D[1], D[2], nx, ny, nz, [0, 0, 0]),
       ];
       if (tint) for (const cc of cols) { cc[0] *= tint[0]; cc[1] *= tint[1]; cc[2] *= tint[2]; }
       b.quad(tex, A.slice(), B.slice(), C.slice(), D.slice(), {
@@ -438,7 +456,7 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
     if (p.kind === 'lava') addTorch(p.x, -0 + (cells.get(key(Math.floor(p.x / CELL), Math.floor(p.z / CELL))) || { fy: 0 }).fy + 60, p.z, [1.0, 0.42, 0.12], 1.1, 1400, 'lava');
   }
   const grid = new LightGrid(torches);
-  const amb = T.amb;
+  const ambDim = T.ambDim;
 
   // --- geometry -----------------------------------------------------------
   prog(0.55, 'meshing');
@@ -453,13 +471,14 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
 
     // Floor (counter-clockwise seen from above -> normal +Y).
     const ftex = c.liquid ? c.liquid : (c.kind === 'corridor' ? T.floor : T.floor);
-    litQuad(b, grid, amb, ftex,
+    litQuad(b, grid, ambDim, ftex,
       [x0, f01, z1], [x1, f11, z1], [x1, f10, z0], [x0, f00, z0], SUB, SUB, 1, 1,
-      c.liquid === 'lava' ? [2.4, 1.5, 0.9] : null);
+      // Lava faces are self-lit: they ignore the dimming level entirely.
+      c.liquid === 'lava' ? [2.8, 2.8, 2.8] : null);
 
     // Ceiling.
     const cc0 = ceilOf(c, -0.5, -0.5), cc1 = ceilOf(c, 0.5, -0.5), cc2 = ceilOf(c, 0.5, 0.5), cc3 = ceilOf(c, -0.5, 0.5);
-    litQuad(b, grid, amb, T.ceil,
+    litQuad(b, grid, ambDim, T.ceil,
       [x0, cc0, z0], [x1, cc1, z0], [x1, cc2, z1], [x0, cc3, z1], SUB, SUB, 1, 1, null);
 
     // Walls and risers, one edge at a time.
@@ -473,7 +492,7 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
       const nb = cells.get(key(c.i + e.di, c.j + e.dj));
       const A = e.a, B = e.bp;
       if (!nb) {
-        litQuad(b, grid, amb, T.wall,
+        litQuad(b, grid, ambDim, T.wall,
           [A[0], A[1], A[2]], [B[0], B[1], B[2]], [B[0], e.cb, B[2]], [A[0], e.ca, A[2]],
           2, SUB_V, 1, Math.max(1, (e.ca - A[1]) / 400));
       } else {
@@ -483,7 +502,7 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
         if (Math.abs(na - A[1]) > 4 || Math.abs(nbh - B[1]) > 4) {
           const lo = [A[1], B[1]], hi = [na, nbh];
           if (hi[0] > lo[0] || hi[1] > lo[1]) {
-            litQuad(b, grid, amb, T.wall,
+            litQuad(b, grid, ambDim, T.wall,
               [A[0], A[1], A[2]], [B[0], B[1], B[2]], [B[0], Math.max(B[1], nbh), B[2]], [A[0], Math.max(A[1], na), A[2]],
               2, 1, 1, 0.3);
           }
@@ -491,7 +510,7 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
         const nca = cornerOfNeighbourCeil(nb, e, A, ceilOf);
         const ncb = cornerOfNeighbourCeil(nb, e, B, ceilOf);
         if (nca < e.ca - 4 || ncb < e.cb - 4) {
-          litQuad(b, grid, amb, T.wall,
+          litQuad(b, grid, ambDim, T.wall,
             [A[0], Math.min(e.ca, nca), A[2]], [B[0], Math.min(e.cb, ncb), B[2]],
             [B[0], e.cb, B[2]], [A[0], e.ca, A[2]], 2, 1, 1, 0.4);
         }
@@ -517,7 +536,7 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
         // torchlight edge-on, which is what sells the depth of a room.
         for (const [dx, dz, ux, uz] of [[0, 1, 1, 0], [1, 0, 0, -1], [0, -1, -1, 0], [-1, 0, 0, 1]]) {
           const px = x + dx * pw, pz = z + dz * pw;
-          litQuad(b, grid, amb, T.wall,
+          litQuad(b, grid, ambDim, T.wall,
             [px - ux * pw, c.fy, pz - uz * pw], [px + ux * pw, c.fy, pz + uz * pw],
             [px + ux * pw, c.fy + rm.height, pz + uz * pw], [px - ux * pw, c.fy + rm.height, pz - uz * pw],
             1, SUB_V, 0.6, rm.height / 400);
@@ -543,7 +562,7 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
     const w = 300, h = 400;
     const geo = new THREE.PlaneGeometry(w, h);
     geo.translate(0, h / 2, 0);
-    const col = shadeVertex(grid, amb, x, c.fy + h / 2, z, -ds.di, 0, -ds.dj, [0, 0, 0]);
+    const col = shadeVertex(grid, ambDim, x, c.fy + h / 2, z, -ds.di, 0, -ds.dj, [0, 0, 0]);
     geo.setAttribute('color', new THREE.Float32BufferAttribute(
       [col[0], col[1], col[2], col[0], col[1], col[2], col[0], col[1], col[2], col[0], col[1], col[2]], 3));
     const tex = ds.secret ? T.wall : 'door_dungeon';
@@ -577,7 +596,7 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
       const sub = new MeshBuilder();
       sub.box('dun_wood', -110, 0, -70, 110, 110, 70, { sides: 'nsewt', uu: 0.6, vv: 0.3 });
       sub.box('dun_metal', -115, 110, -75, 115, 160, 75, { sides: 'nsewt', uu: 0.6, vv: 0.2 });
-      const lightCol = shadeVertex(grid, amb, x, cell.fy + 90, z, 0, 1, 0, [0, 0, 0]);
+      const lightCol = shadeVertex(grid, ambDim, x, cell.fy + 90, z, 0, 1, 0, [0, 0, 0]);
       // Push the baked colour of the chest's spot into every one of its verts.
       for (const [, part] of sub.parts) {
         for (let vi = 0; vi < part.col.length; vi += 3) {
@@ -608,12 +627,10 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
     } else {
       sub.box('dun_metal', -18, -110, -18, 18, 20, 18, { sides: 'nsew', uu: 0.2, vv: 0.3 });
     }
-    // The bracket sits in its own light, so blow it out warm.
+    // The bracket sits inside its own light, so it is at dim 0 - full bright.
     for (const [, part] of sub.parts) {
       for (let vi = 0; vi < part.col.length; vi += 3) {
-        part.col[vi] = clamp(t.col[0] * 0.8, 0, 1);
-        part.col[vi + 1] = clamp(t.col[1] * 0.7, 0, 1);
-        part.col[vi + 2] = clamp(t.col[2] * 0.6, 0, 1);
+        part.col[vi] = 0.92; part.col[vi + 1] = 0.92; part.col[vi + 2] = 0.92;
       }
     }
     b.absorb(sub, new THREE.Matrix4().setPosition(t.x, t.y, t.z));

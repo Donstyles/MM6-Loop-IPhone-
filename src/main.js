@@ -211,6 +211,70 @@ async function enterTitle() {
   }
 }
 
+// --- debug harness ---------------------------------------------------------
+// Lets the capture tooling drive real gameplay rather than posing static shots.
+
+const scripted = { forward: 0, strafe: 0, turn: 0, until: 0 };
+
+window.__mm6 = {
+  get session() { return session; },
+  get hud() { return hud; },
+  ready: () => !!session && !!hud,
+  open: (id, opts) => openScreen(id, opts),
+  close: () => screens.clear(),
+  screen: () => (screens.top ? screens.top.id : null),
+  teleport(x, y, z, yaw) {
+    if (!session) return;
+    session.player.pos.set(x, y, z);
+    session.player.vel.set(0, 0, 0);
+    if (yaw !== undefined) session.player.yaw = yaw;
+    session.player.applyTo(engine.camera);
+  },
+  pos: () => (session ? session.player.pos.toArray().map(Math.round) : null),
+  setTime(hour, minute = 0) {
+    if (!session) return;
+    const day = Math.floor(session.clock.minutes / 1440);
+    session.clock.minutes = day * 1440 + hour * 60 + minute;
+  },
+  look(dx, dy) {
+    if (!session) return;
+    session.player.yaw -= dx;
+    session.player.pitch = Math.max(-0.39, Math.min(0.39, session.player.pitch - dy));
+  },
+  /** Hold a movement input for `ms` of simulated play. */
+  walk(forward, strafe, ms) {
+    scripted.forward = forward; scripted.strafe = strafe;
+    scripted.until = performance.now() + ms;
+  },
+  turn(rate, ms) { scripted.turn = rate; scripted.until = performance.now() + ms; },
+  attack: () => session && session.attack && session.attack(),
+  activate: () => doActivate(),
+  spawn(kind, dist = 700) {
+    if (!session || !session.spawner) return null;
+    const p = session.player;
+    const x = p.pos.x - Math.sin(p.yaw) * dist;
+    const z = p.pos.z - Math.cos(p.yaw) * dist;
+    return session.spawner.spawnMonster(kind, x, session.map.groundAt(x, z, p.pos.y), z);
+  },
+  region: (id) => import('./bootstrap.js').then((m) => m.loadRegion(session, id, 12345)),
+  dungeon: (spec) => import('./bootstrap.js').then((m) => m.loadDungeon(session, spec || { theme: 'cave' }, 999)),
+  stats: () => ({ ...perf, screen: screens.top ? screens.top.id : null }),
+};
+
+/** Merge scripted input into the axes the session reads. */
+const realAxes = input.axes.bind(input);
+input.axes = () => {
+  const a = realAxes();
+  if (performance.now() < scripted.until) {
+    a.forward = Math.max(-1, Math.min(1, a.forward + scripted.forward));
+    a.strafe = Math.max(-1, Math.min(1, a.strafe + scripted.strafe));
+    a.turn = Math.max(-1, Math.min(1, a.turn + scripted.turn));
+  } else {
+    scripted.forward = scripted.strafe = scripted.turn = 0;
+  }
+  return a;
+};
+
 // --- go --------------------------------------------------------------------
 
 resize();

@@ -903,7 +903,7 @@ export function generateItem(rand, opts) {
 function enchantItem(item, rand, tier, level, opts) {
   if (!item || !EQUIP_KINDS.includes(item.type)) return item;
   const o = opts || {};
-  const magicChance = o.magicChance !== undefined ? o.magicChance : Math.min(0.75, 0.12 + tier * 0.1);
+  const magicChance = o.magicChance !== undefined ? o.magicChance : Math.min(0.7, 0.04 + tier * 0.09);
 
   // Artifacts: vanishingly rare, and only deep in the world.
   if (!o.noArtifact && tier >= 5 && rand.float() < 0.012) {

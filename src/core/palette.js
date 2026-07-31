@@ -17,7 +17,9 @@
 const RAMPS = [
   // name              dark      light     hueShift  sat curve
   ['grey', 0x08080a, 0xf0f0ee, 0.00, 1.00],
-  ['stone', 0x171b21, 0xbcc3c9, -0.02, 0.95],
+  // Warm-neutral, not blue: MM6's castle and dungeon stone sits around
+  // #6A6A60..#A8A89C, and a blue-tinted ramp pulls every wall in the game cold.
+  ['stone', 0x1a1a16, 0xb8b8ac, 0.00, 0.85],
   ['plaster', 0x241f18, 0xded2be, 0.02, 0.95],
   ['dirt', 0x1c1208, 0xb08a5c, 0.01, 1.05],
   ['wood', 0x140c06, 0x8a6238, 0.01, 1.10],

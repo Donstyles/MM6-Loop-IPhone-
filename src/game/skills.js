@@ -50,13 +50,16 @@ function weaponSkill(id, name, opts) {
     text: {
       1: `+${'skill'} Attack with ${name.toLowerCase()}s.`,
       2: `+skill Attack and +skill Damage.`,
-      3: o.masterText || `+skill Attack, +skill Damage, and faster recovery.`,
+      3: o.masterText || `+skill Attack, double skill Damage, and faster recovery.`,
     },
     compute(level, mastery) {
       const m = mastery | 0;
       const out = { value: level, attack: level, damage: 0, recovery: 0, special: null };
+      // Expert adds the skill to damage; Master doubles that. This is what
+      // keeps a veteran's swing growing alongside the monster hit-point curve.
       if (m >= MASTERY.EXPERT) out.damage = level;
       if (m >= MASTERY.MASTER) {
+        out.damage = level * 2;
         out.recovery = Math.floor(level * (o.masterRecovery !== undefined ? o.masterRecovery : 1));
         out.special = o.master ? o.master(level) : null;
       }

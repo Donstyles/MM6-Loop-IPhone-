@@ -146,7 +146,30 @@ export class Session {
    * tonally unified despite mixing polygons and billboards. Returns 1.0 at
    * 13:00, 0.373 (#5F5F5F) at dawn and dusk, and 0.153 (#272727) at night.
    */
+  /** 1 in full daylight, 0 at night, ramping across the hour either side. */
+  sunLevel() {
+    const h = this.clock.hour + this.clock.minute / 60;
+    if (h >= 6 && h < 20) return 1;
+    if (h >= 5 && h < 6) return h - 5;
+    if (h >= 20 && h < 21) return 21 - h;
+    return 0;
+  }
+
+  /**
+   * The flat multiply applied to the whole scene. Daytime is left alone - MM6's
+   * days are bright and it is distance, not the sun, that greys the world out.
+   * Night drops everything to #272727.
+   */
   dayTint() {
+    return 0.153 + 0.847 * this.sunLevel();
+  }
+
+  /**
+   * The grey distant geometry fades toward: white at 13:00, #5F5F5F at dawn and
+   * dusk, #272727 at night. Distance haze and the sky share this value, which is
+   * what keeps the horizon seamless.
+   */
+  hazeTint() {
     const h = this.clock.hour, m = this.clock.minute;
     if (h < 5 || h >= 21) return 39 / 255;
     const minutes = 60 * (h - 5) + m;              // 0 at 05:00 .. 960 at 21:00
@@ -169,10 +192,10 @@ export class Session {
     if (!this.map) return;
     const scene = this.engine.scene;
     const indoor = this.map.indoor;
-    const k = indoor ? 1 : this.dayTint();
+    const k = indoor ? 1 : this.hazeTint();
 
-    // Haze is the same grey the world is being multiplied by, so geometry
-    // dissolves into the sky instead of fogging toward a separate colour.
+    // Haze is the same grey the sky is drawn at, so geometry dissolves into the
+    // horizon instead of fogging toward a separate colour.
     const c = indoor
       ? this.map.fog.color.clone()
       : new THREE.Color(k, k, k);

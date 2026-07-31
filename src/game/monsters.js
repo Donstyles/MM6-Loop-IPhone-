@@ -1,639 +1,777 @@
-// The bestiary.
+// The MM6 bestiary, rebuilt from the shipped MONSTERS.TXT roster.
 //
-// Every id here matches a sprite kind produced by src/art/models/creatures.js.
-// Do not rename an id without renaming it there too.
+// 173 entries: 57 families x 3 tiers (A/B/C) plus 2 uniques. A family shares
+// one sprite model across its three tiers; the tiers differ by palette and by
+// stats. Ids here are the internal art names (`GoblinA`, `GoblinB`, ...) and
+// must match src/art/models/creatures.js exactly.
 //
-// Balance shape: level runs 1-60. Hit points are roughly level*7 for a soldier,
-// half that for a swarmer and double for a brute. Damage per swing lands near
-// level*1.1 so a four-character party of the same level wins a straight fight
-// against two same-level monsters with a little to spare.
+// Levels are the real ones from the file. Hit points are *regenerated* from
+//     HP = floor(level * 3 + level^2 * 0.1)
+// which reproduces every published row exactly (L2 -> 6, L4 -> 13, L40 -> 280,
+// L80 -> 880, L100 -> 1300), so the whole table stays internally consistent.
+//
+// Everything else - armour class, damage, experience, gold - is derived from
+// the level by the curves below, so rebalancing is a one-line change.
 
-/** Monster families drive resistances, AI and "double damage vs" enchantments. */
-export const FAMILIES = [
-  'humanoid', 'human', 'undead', 'beast', 'insect', 'reptile', 'elemental',
-  'construct', 'giant', 'dragon', 'demon', 'plant', 'ooze', 'avian',
+/** Biological kinds. Enchantments such as Ghoulsbane match against these. */
+export const KINDS = [
+  'human', 'humanoid', 'undead', 'beast', 'insect', 'reptile', 'elemental',
+  'construct', 'giant', 'dragon', 'demon', 'ooze', 'avian', 'aberration',
 ];
 
-/** Broad regions of Enroth the spawner knows about. */
+/** Kept for callers that used the old name. */
+export const FAMILIES = KINDS;
+
+/** Regions of Enroth, plus the dungeon themes the spawner treats as regions. */
 export const REGIONS = [
   'new_sorpigal', 'castle_ironfist', 'bootleg_bay', 'free_haven', 'silver_cove',
   'blackshire', 'mire_of_the_damned', 'kriegspire', 'eel_infested_waters',
   'dragonsand', 'paradise_valley', 'sweet_water', 'white_cap', 'frozen_highlands',
-  // Dungeon themes double as regions for the spawn tables.
   'cave', 'crypt', 'temple', 'tower', 'mine', 'sewer', 'ruins', 'lair',
+  'pyramid', 'control_center', 'town',
 ];
 
-const M = [];
+/** Hop distance classes from MONSTERS.TXT. */
+export const MOVE_TYPES = ['short', 'med', 'long'];
+/** AI classes from MONSTERS.TXT. */
+export const AI_TYPES = ['normal', 'aggress', 'suicide', 'wary'];
+
+/** Party walk speed, from ARCHITECTURE.md. Monsters are a fraction of it. */
+export const PARTY_WALK_SPEED = 384;
+/** Nothing outruns the party: the Devil Master is the fastest at 300 u/s. */
+export const MAX_MONSTER_SPEED = 310;
+
+// ---------------------------------------------------------------------------
+// Derivation curves
+// ---------------------------------------------------------------------------
+
+/** The retail HP curve. Reproduces every row of the shipped table. */
+export function hpForLevel(level) {
+  return Math.floor(level * 3 + level * level * 0.1);
+}
+
+/** Armour class rises a little more slowly than level. */
+function acForLevel(level, mul) {
+  return Math.max(1, Math.round((3 + level * 0.62) * (mul === undefined ? 1 : mul)));
+}
 
 /**
- * mon(id, name, level, hp, ac, [dice, sides, bonus, element], opts)
- * `opts` fills in everything else; the defaults are a plain melee brute.
+ * Damage dice. Aims for an average swing of (2 + level * 1.1) * mul, spread
+ * across bigger dice as the monster grows so the numbers still feel rolled.
+ * The flat +2 keeps the first few levels from being completely toothless.
  */
-function mon(id, name, level, hp, ac, atk, opts) {
-  const o = opts || {};
-  const def = {
-    id, name, level, hp, ac,
-    attack: { dice: { n: atk[0], s: atk[1] }, bonus: atk[2] || 0, element: atk[3] || 'physical' },
-    attack2: o.attack2 || null,
-    ranged: o.ranged || null,
-    speed: o.speed !== undefined ? o.speed : 200,
-    recoveryTime: o.recoveryTime !== undefined ? o.recoveryTime : 100,
-    xp: o.xp !== undefined ? o.xp : Math.round(level * level * 4 + level * 12 + 5),
-    treasureLevel: o.treasureLevel !== undefined ? o.treasureLevel : Math.max(1, Math.min(6, Math.ceil(level / 10))),
-    resistances: Object.assign({ fire: 0, air: 0, water: 0, earth: 0, mind: 0, body: 0, magic: 0 }, o.resistances || {}),
-    immunities: o.immunities || [],
-    aggroRange: o.aggroRange !== undefined ? o.aggroRange : 1500,
-    family: o.family || 'humanoid',
-    size: o.size !== undefined ? o.size : 190,
-    spawnRegions: o.spawnRegions || ['cave'],
-    flying: !!o.flying,
-    undead: !!o.undead,
-    groupSize: o.groupSize || [1, 3],
-    // Behaviour knobs read by combat.js.
-    fleeAtHP: o.fleeAtHP !== undefined ? o.fleeAtHP : 0,
-    caster: !!o.caster,
-    spells: o.spells || null,
-    inflict: o.inflict || null,
-    gold: o.gold !== undefined ? o.gold : Math.round(level * level * 0.8 + level * 6),
-    desc: o.desc || '',
-  };
-  M.push(def);
-  return def;
+function attackForLevel(level, mul, element) {
+  const target = (2 + level * 1.1) * (mul === undefined ? 1 : mul);
+  const n = Math.max(1, Math.min(8, 1 + Math.floor(level / 10)));
+  const s = Math.max(4, Math.min(12, 4 + Math.floor(level / 12)));
+  const avg = (n * (s + 1)) / 2;
+  const bonus = Math.max(0, Math.round(target - avg));
+  return { dice: { n, s }, bonus, element: element || 'physical' };
+}
+
+/** Experience. Quadratic, so the curve keeps pace with the level table. */
+function xpForLevel(level, mul) {
+  return Math.round((level * level * 3.2 + level * 22) * (mul === undefined ? 1 : mul));
+}
+
+/** Gold carried. Beasts and oozes carry none. */
+function goldForLevel(level, mul) {
+  return Math.round((level * level * 0.7 + level * 6) * (mul === undefined ? 1 : mul));
+}
+
+/** Treasure quality band 1-6. */
+function treasureForLevel(level) {
+  return Math.max(1, Math.min(6, Math.ceil(level / 17)));
 }
 
 // ---------------------------------------------------------------------------
-// Goblins and bandits - the first things a new party fights
+// Family declaration
 // ---------------------------------------------------------------------------
 
-mon('goblin', 'Goblin', 1, 10, 3, [1, 4, 0], {
-  family: 'humanoid', size: 150, speed: 220, recoveryTime: 90, xp: 25, gold: 8,
-  spawnRegions: ['new_sorpigal', 'cave', 'mine', 'ruins'], groupSize: [2, 5], aggroRange: 1200,
-  desc: 'Small, mean, and never alone.',
-});
-mon('goblin_shaman', 'Goblin Shaman', 4, 24, 6, [1, 4, 1], {
-  family: 'humanoid', size: 155, speed: 200, xp: 90, gold: 30, caster: true,
-  ranged: { spell: 'fire_bolt', damage: { n: 2, s: 6 }, element: 'fire', range: 2500 },
-  spells: ['fire_bolt', 'stun'], resistances: { fire: 15, magic: 10 },
-  spawnRegions: ['new_sorpigal', 'cave', 'mine', 'ruins'], groupSize: [1, 2],
-  desc: 'Throws fire it barely understands.',
-});
-mon('goblin_king', 'Goblin King', 9, 90, 14, [2, 5, 3], {
-  family: 'humanoid', size: 185, speed: 230, xp: 400, gold: 250, treasureLevel: 3,
-  attack2: { dice: { n: 1, s: 6 }, bonus: 2, element: 'physical' },
-  resistances: { fire: 10, mind: 20 }, spawnRegions: ['cave', 'mine', 'lair'], groupSize: [1, 1],
-  desc: 'Bigger, uglier, and wearing everyone else\'s gold.',
-});
-mon('peasant', 'Peasant', 1, 8, 2, [1, 3, 0], {
-  family: 'human', size: 185, speed: 170, xp: 10, gold: 4, fleeAtHP: 0.4,
-  spawnRegions: ['new_sorpigal', 'free_haven', 'castle_ironfist'], groupSize: [1, 3],
-  desc: 'Frightened and armed with a stick.',
-});
-mon('thug', 'Thug', 3, 26, 6, [1, 6, 1], {
-  family: 'human', size: 190, speed: 200, xp: 70, gold: 25,
-  spawnRegions: ['new_sorpigal', 'free_haven', 'sewer', 'ruins'], groupSize: [2, 4],
-  desc: 'Muscle for hire, and cheap at the price.',
-});
-mon('bandit', 'Bandit', 6, 48, 10, [1, 8, 2], {
-  family: 'human', size: 190, speed: 210, xp: 190, gold: 70, treasureLevel: 2,
-  ranged: { projectile: 'arrow', damage: { n: 1, s: 6 }, element: 'physical', range: 3000 },
-  spawnRegions: ['free_haven', 'blackshire', 'ruins', 'cave'], groupSize: [2, 4],
-  desc: 'Robs travellers on the Free Haven road.',
-});
-mon('brigand', 'Brigand', 12, 105, 18, [2, 6, 4], {
-  family: 'human', size: 192, speed: 220, xp: 620, gold: 200, treasureLevel: 3,
-  ranged: { projectile: 'crossbow_bolt', damage: { n: 2, s: 6 }, element: 'physical', range: 3200 },
-  spawnRegions: ['blackshire', 'silver_cove', 'ruins'], groupSize: [2, 5],
-  desc: 'A bandit who survived long enough to get good at it.',
-});
+const M = [];
+const FAMILY_INDEX = {};
+
+// Some traits differ per tier: pass an array of exactly three and `at` picks
+// the tier's value. Scalars, objects and two-element ranges pass through.
+const at = (v, i) => (Array.isArray(v) && v.length === 3 ? v[i] : v);
+
+// Traits whose *value* is itself a list (spawn regions, immunities, spell
+// lists, group-size ranges). A per-tier version is a three-element array whose
+// entries are themselves arrays or null; anything else is a single shared list.
+const atList = (v, i) => {
+  if (!Array.isArray(v)) return v;
+  if (v.length === 3 && v.every((x) => x === null || Array.isArray(x))) return v[i];
+  return v;
+};
+
+/**
+ * Declare a family of three tiers.
+ *   internal  art base name, e.g. 'Goblin' -> GoblinA / GoblinB / GoblinC
+ *   names     the three display names
+ *   levels    the three real levels
+ *   t         traits (scalars, or 3-element arrays for per-tier values)
+ */
+function family(internal, names, levels, t) {
+  const tiers = [];
+  for (let i = 0; i < 3; i++) {
+    const level = levels[i];
+    const hp = hpForLevel(level);
+    const resist = Object.assign(
+      { fire: 0, air: 0, water: 0, earth: 0, mind: 0, body: 0, magic: 0, physical: 0 },
+      at(t.resistances, i) || {},
+    );
+    // Everything gains a little generic resistance with level; bosses a lot.
+    const drift = Math.floor(level * 0.35);
+    for (const k of ['fire', 'air', 'water', 'earth', 'magic']) {
+      if (resist[k] < drift && resist[k] >= 0) resist[k] = drift;
+    }
+
+    const def = {
+      id: internal + 'ABC'[i],
+      spriteId: internal + 'ABC'[i],
+      family: internal,
+      tier: i,
+      name: names[i],
+      level, hp,
+      ac: acForLevel(level, at(t.acMul, i)),
+      attack: attackForLevel(level, at(t.dmgMul, i) || 1, at(t.element, i)),
+      attack2: at(t.twoAttacks, i) ? attackForLevel(level, (at(t.dmgMul, i) || 1) * 0.6, at(t.element2, i) || at(t.element, i)) : null,
+      ranged: buildRanged(t, i, level),
+      speed: at(t.speed, i) || 160,
+      moveType: at(t.moveType, i) || 'med',
+      aiType: at(t.aiType, i) || 'normal',
+      recoveryTime: at(t.recovery, i) || 100,
+      xp: xpForLevel(level, at(t.xpMul, i)),
+      treasureLevel: at(t.treasure, i) || treasureForLevel(level),
+      resistances: resist,
+      immunities: (atList(t.immunities, i) || []).slice(),
+      aggroRange: at(t.aggroRange, i) || (at(t.aiType, i) === 'wary' ? 900 : 1600),
+      kind: at(t.kind, i) || 'humanoid',
+      size: at(t.size, i) || 190,
+      spawnRegions: (atList(t.spawnRegions, i) || ['cave']).slice(),
+      flying: !!at(t.flying, i),
+      undead: !!at(t.undead, i),
+      groupSize: (atList(t.groupSize, i) || [1, 3]).slice(),
+      fleeAtHP: at(t.fleeAtHP, i) || 0,
+      caster: !!at(t.caster, i),
+      spells: atList(t.spells, i) || null,
+      inflict: at(t.inflict, i) || null,
+      regen: at(t.regen, i) || 0,
+      hostile: at(t.hostile, i) !== false,
+      gold: goldForLevel(level, at(t.goldMul, i)),
+      desc: at(t.desc, i) || '',
+    };
+    M.push(def);
+    tiers.push(def);
+  }
+  FAMILY_INDEX[internal] = { id: internal, names: names.slice(), tiers, desc: t.desc || '' };
+  return tiers;
+}
+
+function buildRanged(t, i, level) {
+  const r = at(t.ranged, i);
+  if (!r) return null;
+  // Ranged damage tracks the melee curve but hits a little harder.
+  const a = attackForLevel(level, (at(t.rangedMul, i) || 1.15));
+  return {
+    spell: r.spell || null,
+    projectile: r.projectile || null,
+    damage: a.dice,
+    bonus: a.bonus,
+    element: r.element || 'physical',
+    range: r.range || 3000,
+  };
+}
+
+/** A unique, one-off monster (the two `z` entries). */
+function unique(id, name, level, t) {
+  const def = {
+    id, spriteId: id, family: id, tier: 0, name, level,
+    hp: hpForLevel(level),
+    ac: acForLevel(level, t.acMul),
+    attack: attackForLevel(level, t.dmgMul || 1, t.element),
+    attack2: t.twoAttacks ? attackForLevel(level, (t.dmgMul || 1) * 0.6, t.element2 || t.element) : null,
+    ranged: buildRanged(t, 0, level),
+    speed: t.speed || 160,
+    moveType: t.moveType || 'med',
+    aiType: t.aiType || 'aggress',
+    recoveryTime: t.recovery || 100,
+    xp: xpForLevel(level, t.xpMul || 2),
+    treasureLevel: 6,
+    resistances: Object.assign({ fire: 0, air: 0, water: 0, earth: 0, mind: 0, body: 0, magic: 0, physical: 0 }, t.resistances || {}),
+    immunities: (t.immunities || []).slice(),
+    aggroRange: t.aggroRange || 3000,
+    kind: t.kind || 'demon',
+    size: t.size || 400,
+    spawnRegions: (t.spawnRegions || ['lair']).slice(),
+    flying: !!t.flying,
+    undead: !!t.undead,
+    groupSize: [1, 1],
+    fleeAtHP: 0,
+    caster: !!t.caster,
+    spells: t.spells || null,
+    inflict: t.inflict || null,
+    regen: t.regen || 0,
+    hostile: true,
+    gold: goldForLevel(level, t.goldMul || 2),
+    desc: t.desc || '',
+    unique: true,
+  };
+  M.push(def);
+  FAMILY_INDEX[id] = { id, names: [name], tiers: [def], desc: def.desc };
+  return def;
+}
+
+// Shorthand resistance profiles.
+const R_UNDEAD = { mind: 100, body: 100, water: 30 };
+const R_CONSTRUCT = { mind: 100, body: 100, physical: 25 };
+const IMM_MINDBODY = ['mind', 'body'];
 
 // ---------------------------------------------------------------------------
-// Human casters and the cult of Baa
+// The 57 families, in MONSTERS.TXT order
 // ---------------------------------------------------------------------------
 
-mon('apprentice_mage', 'Apprentice Mage', 5, 30, 7, [1, 4, 0], {
-  family: 'human', size: 185, speed: 180, xp: 140, gold: 45, caster: true, treasureLevel: 2,
-  ranged: { spell: 'fire_bolt', damage: { n: 3, s: 6 }, element: 'fire', range: 2800 },
-  spells: ['fire_bolt', 'sparks'], resistances: { fire: 15, air: 15, magic: 15 },
-  spawnRegions: ['tower', 'free_haven', 'ruins'], groupSize: [1, 3],
-  desc: 'Knows two spells and is proud of both.',
-});
-mon('initiate_mage', 'Initiate Mage', 14, 90, 16, [1, 6, 2], {
-  family: 'human', size: 185, speed: 190, xp: 780, gold: 180, caster: true, treasureLevel: 3,
-  ranged: { spell: 'lightning_bolt', damage: { n: 5, s: 8 }, element: 'air', range: 3200 },
-  spells: ['lightning_bolt', 'fireball', 'shield'], resistances: { fire: 25, air: 25, water: 25, magic: 25 },
-  spawnRegions: ['tower', 'silver_cove', 'ruins'], groupSize: [1, 3],
-  desc: 'Robed, hostile, and disappointingly competent.',
-});
-mon('master_mage', 'Master Mage', 26, 220, 30, [2, 6, 4], {
-  family: 'human', size: 188, speed: 200, xp: 3400, gold: 800, caster: true, treasureLevel: 5,
-  ranged: { spell: 'implosion', damage: { n: 8, s: 10 }, element: 'air', range: 3500 },
-  spells: ['implosion', 'meteor_shower', 'ice_blast', 'shield'],
-  resistances: { fire: 45, air: 45, water: 45, earth: 45, magic: 50 },
-  spawnRegions: ['tower', 'kriegspire', 'ruins'], groupSize: [1, 2],
-  desc: 'The kind of wizard who ends fights in one casting.',
-});
-mon('acolyte', 'Acolyte of Baa', 7, 52, 11, [1, 6, 2], {
-  family: 'human', size: 186, speed: 190, xp: 250, gold: 80, caster: true,
-  ranged: { spell: 'harm', damage: { n: 3, s: 6 }, element: 'body', range: 2500 },
-  spells: ['harm', 'bless'], resistances: { mind: 20, body: 20 },
-  spawnRegions: ['temple', 'free_haven', 'crypt'], groupSize: [2, 4],
-  desc: 'Newly robed and eager to prove it.',
-});
-mon('cleric_of_baa', 'Cleric of Baa', 16, 130, 20, [2, 6, 3], {
-  family: 'human', size: 188, speed: 190, xp: 1100, gold: 260, caster: true, treasureLevel: 4,
-  ranged: { spell: 'harm', damage: { n: 6, s: 6 }, element: 'body', range: 2800 },
-  spells: ['harm', 'heroism', 'shared_life'], resistances: { mind: 35, body: 35, magic: 25 },
-  spawnRegions: ['temple', 'crypt', 'silver_cove'], groupSize: [1, 3],
-  desc: 'Heals its own kind, which is worse than it sounds.',
-});
-mon('priest_of_baa', 'Priest of Baa', 24, 200, 28, [2, 8, 4], {
-  family: 'human', size: 190, speed: 200, xp: 2900, gold: 700, caster: true, treasureLevel: 5,
-  ranged: { spell: 'psychic_shock', damage: { n: 8, s: 8 }, element: 'mind', range: 3000 },
-  spells: ['psychic_shock', 'paralyze', 'shared_life'],
-  resistances: { mind: 50, body: 50, magic: 40, fire: 20 },
-  spawnRegions: ['temple', 'crypt', 'kriegspire'], groupSize: [1, 2],
-  desc: 'High in the cult, and armed accordingly.',
-});
-mon('high_priest', 'High Priest of Baa', 36, 420, 42, [3, 8, 6], {
-  family: 'human', size: 195, speed: 210, xp: 9000, gold: 2500, treasureLevel: 6, caster: true,
-  ranged: { spell: 'sunray', damage: { n: 12, s: 10 }, element: 'dark', range: 3500 },
-  spells: ['sunray', 'paralyze', 'divine_intervention'],
-  resistances: { fire: 60, air: 60, water: 60, earth: 60, mind: 80, body: 80, magic: 70 },
-  spawnRegions: ['temple', 'lair'], groupSize: [1, 1],
-  desc: 'The voice of Baa on Enroth. Bring everything you have.',
+family('Archer', ['Archer', 'Master Archer', 'Fire Archer'], [9, 19, 29], {
+  kind: 'human', size: 190, speed: 140, moveType: 'med', aiType: 'wary',
+  recovery: 95, groupSize: [1, 3], dmgMul: 0.8,
+  ranged: [{ projectile: 'arrow', range: 3400 }, { projectile: 'arrow', range: 3600 },
+    { projectile: 'fire_arrow', element: 'fire', range: 3800 }],
+  element: [null, null, 'fire'], resistances: [null, null, { fire: 60 }],
+  spawnRegions: ['castle_ironfist', 'free_haven', 'blackshire', 'ruins', 'silver_cove'],
+  desc: 'Human bowman in a leather jerkin. The fire archers set their arrows alight.',
 });
 
-// ---------------------------------------------------------------------------
-// Soldiers, knights and dwarves
-// ---------------------------------------------------------------------------
-
-mon('knight', 'Knight', 15, 140, 24, [2, 8, 3], {
-  family: 'human', size: 195, speed: 190, recoveryTime: 110, xp: 950, gold: 200, treasureLevel: 4,
-  resistances: { fire: 15, magic: 15 }, spawnRegions: ['castle_ironfist', 'ruins', 'tower'], groupSize: [1, 3],
-  desc: 'Plate armour and a very long sword.',
-});
-mon('crusader', 'Crusader', 22, 240, 32, [2, 10, 5], {
-  family: 'human', size: 198, speed: 200, recoveryTime: 105, xp: 2400, gold: 500, treasureLevel: 5,
-  attack2: { dice: { n: 1, s: 8 }, bonus: 3, element: 'light' },
-  resistances: { fire: 25, mind: 30, magic: 30 }, spawnRegions: ['castle_ironfist', 'temple', 'ruins'], groupSize: [1, 3],
-  desc: 'Holy war, professionally conducted.',
-});
-mon('templar', 'Templar', 30, 340, 40, [3, 8, 6], {
-  family: 'human', size: 200, speed: 205, xp: 5200, gold: 1100, treasureLevel: 6,
-  attack2: { dice: { n: 2, s: 6 }, bonus: 4, element: 'light' },
-  resistances: { fire: 35, mind: 45, body: 35, magic: 45 },
-  spawnRegions: ['temple', 'castle_ironfist', 'lair'], groupSize: [1, 2],
-  desc: 'The order\'s finest, and they know it.',
-});
-mon('dwarf', 'Dwarf', 8, 75, 14, [1, 8, 3], {
-  family: 'humanoid', size: 130, speed: 170, recoveryTime: 110, xp: 320, gold: 110, treasureLevel: 3,
-  resistances: { earth: 30, fire: 15 }, spawnRegions: ['mine', 'cave', 'white_cap'], groupSize: [2, 4],
-  desc: 'Short, broad, and swinging a pick at your knees.',
-});
-mon('dwarf_guard', 'Dwarven Guard', 18, 190, 28, [2, 8, 5], {
-  family: 'humanoid', size: 135, speed: 175, recoveryTime: 115, xp: 1500, gold: 350, treasureLevel: 4,
-  resistances: { earth: 45, fire: 30, magic: 20 }, spawnRegions: ['mine', 'white_cap', 'cave'], groupSize: [2, 4],
-  desc: 'Guards the deep seams. Nothing gets past.',
+family('Barbarian', ['Magyar', 'Magyar Soldier', 'Magyar Matron'], [14, 25, 37], {
+  kind: 'human', size: 200, speed: 200, moveType: 'long', aiType: 'aggress',
+  recovery: 105, groupSize: [2, 4], dmgMul: 1.25, acMul: 0.85,
+  spawnRegions: ['blackshire', 'kriegspire', 'frozen_highlands', 'white_cap'],
+  desc: 'Fur-clad, bare-armed, and swinging something enormous.',
 });
 
-// ---------------------------------------------------------------------------
-// Beasts
-// ---------------------------------------------------------------------------
-
-mon('giant_rat', 'Giant Rat', 1, 8, 2, [1, 3, 0], {
-  family: 'beast', size: 70, speed: 250, recoveryTime: 80, xp: 15, gold: 0, treasureLevel: 1,
-  spawnRegions: ['sewer', 'cave', 'new_sorpigal', 'crypt', 'mine'], groupSize: [3, 6], aggroRange: 1000,
-  desc: 'Rats the size of dogs. The sewers are full of them.',
-});
-mon('boar', 'Wild Boar', 3, 30, 5, [1, 6, 1], {
-  family: 'beast', size: 120, speed: 260, xp: 75, gold: 0,
-  spawnRegions: ['new_sorpigal', 'bootleg_bay', 'castle_ironfist'], groupSize: [1, 3],
-  desc: 'Bad tempered and fast.',
-});
-mon('wolf', 'Wolf', 4, 32, 7, [1, 6, 1], {
-  family: 'beast', size: 110, speed: 300, recoveryTime: 80, xp: 95, gold: 0,
-  spawnRegions: ['new_sorpigal', 'castle_ironfist', 'white_cap', 'frozen_highlands'], groupSize: [2, 5],
-  desc: 'They hunt in packs and circle before they close.',
-});
-mon('dire_wolf', 'Dire Wolf', 11, 100, 16, [2, 6, 2], {
-  family: 'beast', size: 145, speed: 320, recoveryTime: 80, xp: 520, gold: 0,
-  spawnRegions: ['blackshire', 'frozen_highlands', 'white_cap', 'cave'], groupSize: [2, 5],
-  desc: 'Bigger than a pony and considerably less friendly.',
-});
-mon('warg', 'Warg', 19, 190, 26, [2, 8, 4], {
-  family: 'beast', size: 165, speed: 340, recoveryTime: 75, xp: 1700, gold: 0, treasureLevel: 3,
-  resistances: { mind: 25 }, spawnRegions: ['kriegspire', 'frozen_highlands', 'lair'], groupSize: [2, 4],
-  desc: 'A wolf with something worse riding under its skin.',
-});
-mon('bear', 'Bear', 9, 95, 12, [2, 6, 3], {
-  family: 'beast', size: 210, speed: 230, recoveryTime: 120, xp: 380, gold: 0,
-  attack2: { dice: { n: 1, s: 8 }, bonus: 2, element: 'physical' },
-  spawnRegions: ['castle_ironfist', 'white_cap', 'bootleg_bay'], groupSize: [1, 2],
-  desc: 'Two swipes and a bite. Do not be there for the third.',
-});
-mon('cave_bear', 'Cave Bear', 17, 210, 22, [3, 6, 4], {
-  family: 'beast', size: 250, speed: 240, recoveryTime: 120, xp: 1400, gold: 0, treasureLevel: 2,
-  attack2: { dice: { n: 2, s: 8 }, bonus: 3, element: 'physical' },
-  resistances: { water: 25 }, spawnRegions: ['cave', 'white_cap', 'frozen_highlands'], groupSize: [1, 2],
-  desc: 'It lives in the dark and has never once been afraid.',
-});
-mon('bat', 'Bat', 1, 6, 5, [1, 2, 0], {
-  family: 'beast', size: 45, speed: 340, recoveryTime: 60, xp: 12, gold: 0, flying: true,
-  spawnRegions: ['cave', 'crypt', 'mine', 'sewer'], groupSize: [3, 8], aggroRange: 900,
-  desc: 'Erratic, harmless, and infuriating to hit.',
-});
-mon('giant_bat', 'Giant Bat', 6, 40, 12, [1, 6, 1], {
-  family: 'beast', size: 90, speed: 360, recoveryTime: 60, xp: 200, gold: 0, flying: true,
-  spawnRegions: ['cave', 'crypt', 'mine'], groupSize: [2, 6],
-  desc: 'Big enough to knock a man down.',
-});
-mon('vampire_bat', 'Vampire Bat', 13, 95, 20, [1, 8, 3, 'body'], {
-  family: 'beast', size: 100, speed: 380, recoveryTime: 55, xp: 700, gold: 0, flying: true,
-  resistances: { body: 40, mind: 20 }, spawnRegions: ['crypt', 'mire_of_the_damned', 'cave'], groupSize: [2, 5],
-  inflict: { condition: 'diseased_weak', chance: 12 },
-  desc: 'It drinks, and what it leaves behind festers.',
-});
-mon('dragonfly', 'Giant Dragonfly', 5, 30, 14, [1, 5, 1, 'air'], {
-  family: 'insect', size: 80, speed: 400, recoveryTime: 55, xp: 150, gold: 0, flying: true,
-  resistances: { air: 30 }, spawnRegions: ['bootleg_bay', 'mire_of_the_damned', 'sweet_water'], groupSize: [2, 5],
-  desc: 'Fast, iridescent, and armed with a stinger.',
+family('Bat', ['Bat', 'Giant Bat', 'Vampire Bat'], [3, 6, 9], {
+  kind: 'beast', size: [45, 75, 100], speed: 260, moveType: 'long', aiType: 'normal',
+  recovery: 65, groupSize: [3, 8], flying: true, acMul: 1.5, dmgMul: 0.7, goldMul: 0,
+  aggroRange: 1000, element: [null, null, 'body'],
+  inflict: [null, null, { condition: 'diseased_weak', chance: 12 }],
+  spawnRegions: ['cave', 'crypt', 'mine', 'sewer', 'new_sorpigal'],
+  desc: 'Erratic and infuriating to hit. The black ones drink.',
 });
 
-// ---------------------------------------------------------------------------
-// Snakes, spiders, insects
-// ---------------------------------------------------------------------------
-
-mon('cobra', 'Cobra', 5, 34, 9, [1, 5, 1, 'earth'], {
-  family: 'reptile', size: 90, speed: 240, xp: 155, gold: 0,
-  resistances: { earth: 50 }, inflict: { condition: 'poisoned_weak', chance: 25 },
-  spawnRegions: ['bootleg_bay', 'dragonsand', 'cave'], groupSize: [1, 3],
-  desc: 'One bite and the poison does the rest.',
-});
-mon('serpent', 'Great Serpent', 14, 130, 19, [2, 6, 3, 'earth'], {
-  family: 'reptile', size: 160, speed: 250, xp: 800, gold: 30, treasureLevel: 2,
-  resistances: { earth: 60, water: 20 }, inflict: { condition: 'poisoned_severe', chance: 20 },
-  spawnRegions: ['mire_of_the_damned', 'bootleg_bay', 'cave'], groupSize: [1, 3],
-  desc: 'Long as a rowing boat and twice as quick.',
-});
-mon('giant_spider', 'Giant Spider', 7, 50, 12, [1, 6, 2, 'earth'], {
-  family: 'insect', size: 110, speed: 260, xp: 240, gold: 15,
-  resistances: { earth: 40 }, inflict: { condition: 'poisoned_weak', chance: 20 },
-  ranged: { projectile: 'web', damage: { n: 1, s: 4 }, element: 'earth', range: 1800 },
-  spawnRegions: ['cave', 'crypt', 'mire_of_the_damned', 'ruins'], groupSize: [2, 5],
-  desc: 'Webs the corridor behind you first.',
-});
-mon('phase_spider', 'Phase Spider', 20, 180, 28, [2, 8, 4, 'earth'], {
-  family: 'insect', size: 130, speed: 300, xp: 1900, gold: 120, treasureLevel: 4,
-  resistances: { earth: 70, magic: 40, air: 30 }, inflict: { condition: 'poisoned_deadly', chance: 22 },
-  spawnRegions: ['cave', 'kriegspire', 'lair'], groupSize: [1, 4],
-  desc: 'It is somewhere else until it is on top of you.',
-});
-mon('beetle', 'Beetle', 2, 18, 8, [1, 4, 1], {
-  family: 'insect', size: 80, speed: 180, recoveryTime: 120, xp: 40, gold: 0,
-  resistances: { earth: 20 }, spawnRegions: ['cave', 'mine', 'new_sorpigal'], groupSize: [2, 5],
-  desc: 'Armoured and slow. Mostly a nuisance.',
-});
-mon('fire_beetle', 'Fire Beetle', 8, 65, 15, [1, 8, 2, 'fire'], {
-  family: 'insect', size: 95, speed: 200, xp: 300, gold: 0,
-  resistances: { fire: 80, earth: 30 }, immunities: ['fire'],
-  spawnRegions: ['cave', 'mine', 'kriegspire', 'dragonsand'], groupSize: [2, 4],
-  desc: 'Burns from the inside. Fire will not touch it.',
-});
-mon('giant_beetle', 'Giant Beetle', 15, 175, 26, [2, 8, 3], {
-  family: 'insect', size: 140, speed: 190, recoveryTime: 125, xp: 950, gold: 20, treasureLevel: 2,
-  resistances: { earth: 50, physical: 20 }, spawnRegions: ['cave', 'mine', 'dragonsand'], groupSize: [1, 4],
-  desc: 'A shell like a shield wall.',
-});
-mon('scorpion', 'Giant Scorpion', 12, 100, 20, [1, 10, 3, 'earth'], {
-  family: 'insect', size: 120, speed: 240, xp: 620, gold: 10,
-  attack2: { dice: { n: 1, s: 6 }, bonus: 2, element: 'earth' },
-  resistances: { earth: 70 }, inflict: { condition: 'poisoned_severe', chance: 25 },
-  spawnRegions: ['dragonsand', 'cave', 'ruins'], groupSize: [1, 4],
-  desc: 'Two claws and a tail that ends arguments.',
-});
-mon('giant_ant', 'Giant Ant', 4, 28, 10, [1, 5, 1], {
-  family: 'insect', size: 85, speed: 270, xp: 100, gold: 0,
-  resistances: { earth: 25 }, spawnRegions: ['cave', 'mine', 'new_sorpigal'], groupSize: [3, 7],
-  desc: 'Where there is one there are twenty.',
-});
-mon('soldier_ant', 'Soldier Ant', 10, 90, 18, [2, 5, 2], {
-  family: 'insect', size: 105, speed: 280, xp: 440, gold: 0,
-  resistances: { earth: 35 }, spawnRegions: ['cave', 'mine', 'dragonsand'], groupSize: [2, 6],
-  desc: 'The colony\'s answer to intruders.',
+family('Beholder', ['Flying Eye', 'Terrible Eye', 'Maddening Eye'], [30, 40, 50], {
+  kind: 'aberration', size: 140, speed: 150, moveType: 'short', aiType: 'wary',
+  groupSize: [1, 3], flying: true, caster: true, acMul: 1.15, dmgMul: 0.6,
+  ranged: { spell: 'psychic_shock', element: 'mind', range: 3600 }, rangedMul: 1.4,
+  spells: ['psychic_shock', 'paralyze'], resistances: { mind: 80, magic: 50 },
+  inflict: { condition: 'paralyzed', chance: 10 },
+  spawnRegions: ['tower', 'lair', 'temple', 'cave'],
+  desc: 'A floating sphere of eyes. It never closes any of them.',
 });
 
-// ---------------------------------------------------------------------------
-// Undead
-// ---------------------------------------------------------------------------
+family('Bloodsucker', ['Blood Sucker', 'Brain Sucker', 'Soul Sucker'], [2, 4, 8], {
+  kind: 'beast', size: [70, 85, 105], speed: 170, moveType: 'short', aiType: 'aggress',
+  groupSize: [2, 5], goldMul: 0, element: [null, 'mind', 'mind'], acMul: 0.9,
+  inflict: [null, { condition: 'weak', chance: 12 }, { condition: 'insane', chance: 8 }],
+  spawnRegions: ['new_sorpigal', 'cave', 'sewer', 'bootleg_bay'],
+  desc: 'The first thing that ever tries to kill you. It attaches and it drinks.',
+});
 
-mon('skeleton', 'Skeleton', 5, 36, 10, [1, 6, 1], {
-  family: 'undead', undead: true, size: 180, speed: 190, xp: 150, gold: 12,
-  resistances: { mind: 100, body: 100, water: 30 }, immunities: ['mind', 'body'],
-  spawnRegions: ['crypt', 'cave', 'ruins', 'mire_of_the_damned'], groupSize: [2, 5],
-  desc: 'Bones held together by spite.',
+family('Cleric', ['Acolyte of Baa', 'Cleric of Baa', 'Priest of Baa'], [8, 15, 25], {
+  kind: 'human', size: 188, speed: 150, moveType: 'med', aiType: 'wary',
+  groupSize: [1, 4], caster: true, dmgMul: 0.7, goldMul: 1.4,
+  ranged: { spell: 'harm', element: 'body', range: 2800 }, rangedMul: 1.2,
+  spells: [['harm'], ['harm', 'bless'], ['harm', 'heroism', 'shared_life']],
+  resistances: { mind: 35, body: 35 },
+  spawnRegions: ['temple', 'crypt', 'free_haven', 'silver_cove'],
+  desc: 'The cult of Baa, robed by rank: black, then red, then gold.',
 });
-mon('skeleton_knight', 'Skeleton Knight', 16, 150, 24, [2, 8, 4], {
-  family: 'undead', undead: true, size: 190, speed: 195, xp: 1150, gold: 120, treasureLevel: 4,
-  resistances: { mind: 100, body: 100, water: 40, fire: 20 }, immunities: ['mind', 'body'],
-  spawnRegions: ['crypt', 'ruins', 'mire_of_the_damned'], groupSize: [1, 4],
-  desc: 'It still remembers how to use that sword.',
+
+family('Cobra', ['Cobra', 'King Cobra', 'Queen Cobra'], [5, 10, 14], {
+  kind: 'reptile', size: [90, 120, 160], speed: 200, moveType: 'med', aiType: 'aggress',
+  groupSize: [1, 3], goldMul: 0, element: 'earth', acMul: 1.1,
+  resistances: { earth: 70 },
+  inflict: [{ condition: 'poisoned_weak', chance: 22 }, { condition: 'poisoned_severe', chance: 22 }, { condition: 'poisoned_deadly', chance: 20 }],
+  spawnRegions: ['bootleg_bay', 'dragonsand', 'cave', 'mire_of_the_damned'],
+  desc: 'Hood flared. One bite and the poison does the rest.',
 });
-mon('zombie', 'Zombie', 6, 60, 6, [1, 8, 1, 'body'], {
-  family: 'undead', undead: true, size: 185, speed: 120, recoveryTime: 140, xp: 190, gold: 8,
-  resistances: { mind: 100, body: 100 }, immunities: ['mind', 'body'],
-  inflict: { condition: 'diseased_weak', chance: 15 },
-  spawnRegions: ['crypt', 'mire_of_the_damned', 'sewer', 'ruins'], groupSize: [2, 6],
-  desc: 'Slow, but it does not stop and it does not care.',
+
+family('Cockatrice', ["Agar's Pet", "Agar's Monster", "Agar's Abomination"], [13, 15, 17], {
+  kind: 'beast', size: 150, speed: 200, moveType: 'med', aiType: 'aggress',
+  groupSize: [1, 3], acMul: 1.05, goldMul: 0.3,
+  inflict: { condition: 'stoned', chance: 6 },
+  resistances: { earth: 40 },
+  spawnRegions: ['tower', 'ruins', 'cave'],
+  desc: 'Agar experimented. This is what he got. Its gaze turns flesh to stone.',
 });
-mon('ghoul', 'Ghoul', 11, 95, 17, [1, 8, 3, 'body'], {
-  family: 'undead', undead: true, size: 185, speed: 240, xp: 540, gold: 40,
-  attack2: { dice: { n: 1, s: 6 }, bonus: 2, element: 'body' },
-  resistances: { mind: 100, body: 100, water: 25 }, immunities: ['mind', 'body'],
-  inflict: { condition: 'paralyzed', chance: 12 },
-  spawnRegions: ['crypt', 'mire_of_the_damned', 'cave'], groupSize: [2, 4],
-  desc: 'Its touch locks the muscles. Then it eats.',
+
+family('DemonFly', ['Devil Captain', 'Devil Master', 'Devil King'], [30, 50, 70], {
+  kind: 'demon', size: [280, 300, 330], speed: [240, 300, 310], moveType: 'long', aiType: 'aggress',
+  groupSize: [1, 2], flying: true, twoAttacks: true, element: 'fire', dmgMul: 1.2,
+  ranged: { spell: 'fireball', element: 'fire', range: 3400 }, rangedMul: 1.3,
+  resistances: [{ fire: 80, mind: 60, body: 60 }, { fire: 90, mind: 70, body: 70 }, { fire: 100, mind: 80, body: 80 }],
+  immunities: [[], [], ['fire']], goldMul: 1.5,
+  spawnRegions: ['temple', 'lair', 'kriegspire'],
+  desc: 'Winged, horned, on fire, and in charge.',
 });
-mon('mummy', 'Mummy', 18, 175, 24, [2, 8, 4, 'body'], {
-  family: 'undead', undead: true, size: 190, speed: 150, recoveryTime: 130, xp: 1550, gold: 200, treasureLevel: 4,
-  resistances: { mind: 100, body: 100, water: 40, magic: 30 }, immunities: ['mind', 'body'],
-  inflict: { condition: 'diseased_severe', chance: 25 },
-  spawnRegions: ['crypt', 'dragonsand', 'ruins'], groupSize: [1, 3],
-  desc: 'Bandaged, patient, and carrying a curse.',
+
+family('Demon', ['Devil Spawn', 'Devil Worker', 'Devil Warrior'], [20, 40, 60], {
+  kind: 'demon', size: [250, 280, 300], speed: 220, moveType: 'med', aiType: 'aggress',
+  groupSize: [1, 3], twoAttacks: true, element: 'fire', dmgMul: 1.15,
+  resistances: [{ fire: 70, mind: 50 }, { fire: 85, mind: 60 }, { fire: 95, mind: 70 }],
+  goldMul: 1.2, spawnRegions: ['temple', 'lair', 'kriegspire'],
+  desc: 'The Kreegan rank and file. Red, muscled, and carrying a trident.',
 });
-mon('ghost', 'Ghost', 14, 100, 26, [2, 6, 2, 'magic'], {
-  family: 'undead', undead: true, size: 185, speed: 260, xp: 830, gold: 0, flying: true,
-  resistances: { mind: 100, body: 100, fire: 40, water: 40, earth: 60, magic: 40, physical: 60 },
+
+family('DragonCave', ['Fire Lizard', 'Lightning Lizard', 'Thunder Lizard'], [40, 50, 60], {
+  kind: 'dragon', size: 320, speed: 200, moveType: 'med', aiType: 'aggress',
+  groupSize: [1, 2], twoAttacks: true, dmgMul: 1.1,
+  element: ['fire', 'air', 'air'],
+  ranged: [{ spell: 'fire_bolt', element: 'fire', range: 3000 },
+    { spell: 'lightning_bolt', element: 'air', range: 3200 },
+    { spell: 'lightning_bolt', element: 'air', range: 3400 }],
+  resistances: [{ fire: 90 }, { air: 90 }, { air: 95, fire: 50 }],
+  spawnRegions: ['cave', 'lair', 'dragonsand', 'kriegspire'],
+  desc: 'Wingless, low-slung, and quicker than anything that size should be.',
+});
+
+family('DragonFly', ['Flame Drake', 'Frost Drake', 'Energy Drake'], [24, 28, 32], {
+  kind: 'dragon', size: 200, speed: 280, moveType: 'long', aiType: 'aggress',
+  groupSize: [1, 3], flying: true, dmgMul: 1.05,
+  element: ['fire', 'water', 'air'],
+  ranged: [{ spell: 'fire_bolt', element: 'fire', range: 3000 },
+    { spell: 'ice_bolt', element: 'water', range: 3000 },
+    { spell: 'lightning_bolt', element: 'air', range: 3000 }],
+  resistances: [{ fire: 80 }, { water: 80 }, { air: 80 }],
+  spawnRegions: ['dragonsand', 'kriegspire', 'mire_of_the_damned', 'lair'],
+  desc: 'A dragon in miniature, and it breathes just as well.',
+});
+
+family('DragonLand', ['Wyrm', 'Giant Wyrm', 'Great Wyrm'], [50, 60, 70], {
+  kind: 'dragon', size: [360, 400, 440], speed: 200, moveType: 'med', aiType: 'aggress',
+  groupSize: [1, 2], twoAttacks: true, element: 'earth', dmgMul: 1.15,
+  ranged: { spell: 'acid_burst', element: 'earth', range: 3200 },
+  resistances: { earth: 85, water: 50, mind: 60 },
+  inflict: { condition: 'poisoned_severe', chance: 18 },
+  spawnRegions: ['lair', 'mire_of_the_damned', 'dragonsand'],
+  desc: 'Legless, bronze, and longer than the corridor.',
+});
+
+family('DragonCover', ['Red Dragon', 'Blue Dragon', 'Gold Dragon'], [80, 90, 100], {
+  kind: 'dragon', size: [620, 660, 700], speed: [250, 260, 270], moveType: 'long', aiType: 'aggress',
+  groupSize: [1, 1], flying: true, twoAttacks: true, dmgMul: 1.2, acMul: 1.1,
+  element: ['fire', 'air', 'light'],
+  ranged: [{ spell: 'dragon_breath', element: 'fire', range: 4200 },
+    { spell: 'dragon_breath', element: 'air', range: 4200 },
+    { spell: 'dragon_breath', element: 'light', range: 4200 }],
+  rangedMul: 1.5,
+  resistances: [{ fire: 100, mind: 80, body: 80, magic: 70 },
+    { air: 100, mind: 85, body: 85, magic: 75 },
+    { fire: 90, air: 90, water: 90, earth: 90, mind: 90, body: 90, magic: 85 }],
+  immunities: [['fire'], ['air'], []], goldMul: 2.5,
+  spawnRegions: ['lair'],
+  desc: 'The one on the box. It is exactly as bad as it looks.',
+});
+
+family('Druidess', ['Druid', 'Great Druid', 'Grand Druid'], [10, 16, 28], {
+  kind: 'human', size: 185, speed: 160, moveType: 'med', aiType: 'wary',
+  groupSize: [1, 3], caster: true, dmgMul: 0.7, goldMul: 1.2,
+  ranged: { spell: 'deadly_swarm', element: 'earth', range: 3000 }, rangedMul: 1.25,
+  spells: [['deadly_swarm'], ['deadly_swarm', 'stone_skin'], ['deadly_swarm', 'death_blossom', 'stone_skin']],
+  resistances: { earth: 45, water: 30 },
+  spawnRegions: ['bootleg_bay', 'sweet_water', 'mire_of_the_damned', 'paradise_valley'],
+  desc: 'Green robes, a staff, and the marsh doing what she tells it.',
+});
+
+family('Dwarf', ['Dwarf', 'Dwarf Warrior', 'Dwarf Lord'], [10, 20, 30], {
+  kind: 'humanoid', size: 130, speed: 130, moveType: 'short', aiType: 'normal',
+  recovery: 110, groupSize: [2, 4], dmgMul: 1.1, acMul: 1.15, goldMul: 1.4,
+  resistances: { earth: 50, fire: 30 },
+  spawnRegions: ['mine', 'cave', 'white_cap', 'frozen_highlands'],
+  desc: "Snergle's people. Short, broad, and swinging at your knees.",
+});
+
+family('ElemAir', ['Dust Devil', 'Twister', 'Air Elemental'], [16, 22, 33], {
+  kind: 'elemental', size: [180, 210, 240], speed: 288, moveType: 'long', aiType: 'aggress',
+  groupSize: [1, 3], flying: true, acMul: 1.4, element: 'air', recovery: 75, goldMul: 0,
+  resistances: { air: 100, earth: -30, mind: 100, body: 100, physical: 40 },
+  immunities: ['air', 'mind', 'body'],
+  spawnRegions: ['white_cap', 'frozen_highlands', 'tower', 'kriegspire'],
+  desc: 'A whirlwind with intent. Hard to hit and harder to catch.',
+});
+
+family('ElemEarth', ['Rock Beast', 'Earth Spirit', 'Earth Elemental'], [25, 30, 40], {
+  kind: 'elemental', size: [220, 240, 260], speed: 110, moveType: 'short', aiType: 'normal',
+  recovery: 135, groupSize: [1, 3], element: 'earth', dmgMul: 1.2, goldMul: 0,
+  resistances: { earth: 100, fire: -20, mind: 100, body: 100, physical: 35 },
+  immunities: ['earth', 'mind', 'body'],
+  spawnRegions: ['mine', 'cave', 'white_cap', 'kriegspire'],
+  desc: 'Slow as a landslide, and about as survivable.',
+});
+
+family('ElemFire', ['Fire Beast', 'Fire Spirit', 'Fire Elemental'], [13, 26, 39], {
+  kind: 'elemental', size: [190, 210, 230], speed: 200, moveType: 'med', aiType: 'aggress',
+  groupSize: [1, 3], element: 'fire', goldMul: 0,
+  ranged: { spell: 'fire_bolt', element: 'fire', range: 2600 },
+  resistances: { fire: 100, water: -30, mind: 100, body: 100 },
+  immunities: ['fire', 'mind', 'body'],
+  spawnRegions: ['kriegspire', 'dragonsand', 'cave', 'tower'],
+  desc: 'A column of living flame. It lights the room it kills you in.',
+});
+
+family('ElemWater', ['Water Beast', 'Water Spirit', 'Water Elemental'], [14, 24, 36], {
+  kind: 'elemental', size: [200, 215, 230], speed: 180, moveType: 'med', aiType: 'normal',
+  groupSize: [1, 3], element: 'water', goldMul: 0,
+  resistances: { water: 100, air: -30, mind: 100, body: 100 },
+  immunities: ['water', 'mind', 'body'],
+  spawnRegions: ['eel_infested_waters', 'bootleg_bay', 'sweet_water', 'sewer'],
+  desc: 'It flows around your guard and drowns you standing up.',
+});
+
+family('FighterChain', ['Fighter', 'Soldier', 'Veteran'], [14, 24, 35], {
+  kind: 'human', size: 195, speed: 170, moveType: 'med', aiType: 'normal',
+  recovery: 105, groupSize: [2, 4], acMul: 1.2, dmgMul: 1.05, goldMul: 1.2,
+  spawnRegions: ['castle_ironfist', 'ruins', 'free_haven', 'blackshire'],
+  desc: 'Chain mail, conical helm, sword and shield. Professional.',
+});
+
+family('FighterLeath', ['Thug', 'Ruffian', 'Brigand'], [8, 14, 22], {
+  kind: 'human', size: 190, speed: 190, moveType: 'med', aiType: 'aggress',
+  groupSize: [2, 5], goldMul: 1.3,
+  spawnRegions: ['new_sorpigal', 'free_haven', 'sewer', 'ruins', 'blackshire'],
+  desc: 'Leather, no helm, and a club. Robs the Free Haven road.',
+});
+
+family('Gargoyle', ['Stone Gargoyle', 'Marble Gargoyle', 'Diamond Gargoyle'], [16, 22, 33], {
+  kind: 'construct', size: 175, speed: 220, moveType: 'long', aiType: 'aggress',
+  groupSize: [2, 4], flying: true, acMul: 1.25, goldMul: 0.5,
+  resistances: [R_CONSTRUCT, { mind: 100, body: 100, physical: 35 }, { mind: 100, body: 100, physical: 50, magic: 40 }],
+  immunities: IMM_MINDBODY,
+  spawnRegions: ['ruins', 'tower', 'temple', 'crypt'],
+  desc: 'It was a statue right up until it was not.',
+});
+
+family('Genie', ['Genie', 'Djinn', 'Efreet'], [33, 44, 55], {
+  kind: 'elemental', size: [260, 280, 300], speed: 240, moveType: 'long', aiType: 'wary',
+  groupSize: [1, 2], flying: true, caster: true, goldMul: 2,
+  ranged: [{ spell: 'ice_blast', element: 'water', range: 3400 },
+    { spell: 'lightning_bolt', element: 'air', range: 3400 },
+    { spell: 'incinerate', element: 'fire', range: 3600 }],
+  rangedMul: 1.35,
+  resistances: [{ water: 70, mind: 60, magic: 50 }, { air: 75, mind: 65, magic: 55 }, { fire: 90, mind: 70, magic: 60 }],
+  spawnRegions: ['dragonsand', 'lair', 'tower'],
+  desc: 'Smoke where the legs should be, and arms folded until they are not.',
+});
+
+family('Ghost', ['Ghost', 'Evil Spirit', 'Specter'], [9, 13, 19], {
+  kind: 'undead', undead: true, size: 185, speed: 230, moveType: 'long', aiType: 'normal',
+  groupSize: [1, 4], flying: true, acMul: 1.6, element: 'magic', goldMul: 0,
+  resistances: { mind: 100, body: 100, earth: 60, physical: 65, magic: 40 },
   immunities: ['mind', 'body', 'earth'],
-  spawnRegions: ['crypt', 'mire_of_the_damned', 'ruins', 'tower'], groupSize: [1, 4],
+  inflict: [null, null, { condition: 'afraid', chance: 20 }],
+  spawnRegions: ['crypt', 'mire_of_the_damned', 'ruins', 'tower'],
   desc: 'Steel passes through it. Light does not.',
 });
-mon('spectre', 'Spectre', 25, 215, 34, [3, 6, 4, 'magic'], {
-  family: 'undead', undead: true, size: 190, speed: 280, xp: 3100, gold: 0, flying: true, treasureLevel: 4,
-  resistances: { mind: 100, body: 100, fire: 50, water: 50, earth: 80, magic: 60, physical: 70 },
-  immunities: ['mind', 'body', 'earth'], inflict: { condition: 'afraid', chance: 25 },
-  spawnRegions: ['crypt', 'mire_of_the_damned', 'kriegspire'], groupSize: [1, 3],
-  desc: 'A ghost that has had time to grow bitter.',
+
+family('Goblin', ['Goblin', 'Goblin Shaman', 'Goblin King'], [4, 6, 10], {
+  kind: 'humanoid', size: [150, 155, 180], speed: 160, moveType: 'med', aiType: 'aggress',
+  recovery: 90, groupSize: [2, 5], aggroRange: 1300,
+  caster: [false, true, false],
+  ranged: [null, { spell: 'fire_bolt', element: 'fire', range: 2400 }, null],
+  spells: [null, ['fire_bolt'], null],
+  goldMul: [1, 1.2, 2.5], twoAttacks: [false, false, true],
+  spawnRegions: ['new_sorpigal', 'cave', 'mine', 'ruins'],
+  desc: 'Green, hunched, in rags, carrying a crude club. Never alone.',
 });
-mon('vampire', 'Vampire', 32, 340, 40, [3, 8, 6, 'body'], {
-  family: 'undead', undead: true, size: 192, speed: 300, xp: 6800, gold: 1500, treasureLevel: 6,
-  attack2: { dice: { n: 2, s: 8 }, bonus: 4, element: 'body' },
-  resistances: { mind: 100, body: 100, water: 50, earth: 50, magic: 50 },
-  immunities: ['mind', 'body'], inflict: { condition: 'weak', chance: 30 },
-  spawnRegions: ['crypt', 'mire_of_the_damned', 'lair'], groupSize: [1, 2],
-  desc: 'It drains what it drinks and heals on your blood.',
+
+family('Guard', ['Guard', 'Lieutenant', 'Captain'], [11, 19, 33], {
+  kind: 'human', size: 195, speed: 165, moveType: 'med', aiType: 'normal',
+  recovery: 105, groupSize: [1, 4], acMul: 1.25, goldMul: 1.2,
+  spawnRegions: ['castle_ironfist', 'free_haven', 'silver_cove', 'new_sorpigal', 'town'],
+  desc: 'Tabard over mail, kite shield, and no sense of humour.',
 });
-mon('lich', 'Lich', 42, 520, 50, [3, 8, 8, 'dark'], {
-  family: 'undead', undead: true, size: 190, speed: 220, xp: 16000, gold: 4000, treasureLevel: 6, caster: true,
-  ranged: { spell: 'souldrinker', damage: { n: 14, s: 10 }, element: 'dark', range: 3800 },
+
+family('Harpy', ['Harpy', 'Harpy Hag', 'Harpy Witch'], [14, 17, 19], {
+  kind: 'avian', size: 170, speed: 260, moveType: 'long', aiType: 'aggress',
+  recovery: 80, groupSize: [2, 5], flying: true, acMul: 1.2, goldMul: 0.6,
+  inflict: { condition: 'afraid', chance: 18 },
+  resistances: { air: 40, mind: 30 },
+  spawnRegions: ['bootleg_bay', 'blackshire', 'cave', 'ruins'],
+  desc: 'It screams, and the scream is half the fight.',
+});
+
+family('Hydra', ['Hydra', 'Venomous Hydra', 'Colossal Hydra'], [45, 55, 65], {
+  kind: 'reptile', size: [320, 360, 400], speed: 150, moveType: 'short', aiType: 'aggress',
+  groupSize: [1, 1], twoAttacks: true, element: 'earth', dmgMul: 1.1, regen: 10,
+  ranged: { projectile: 'venom', element: 'earth', range: 2600 },
+  resistances: { earth: 85, water: 60, mind: 60 },
+  inflict: { condition: 'poisoned_deadly', chance: 20 },
+  spawnRegions: ['mire_of_the_damned', 'eel_infested_waters', 'lair'],
+  desc: 'Every head bites and every head grows back.',
+});
+
+family('Jackalman', ['Defender', 'Sentinel', 'Guardian of VARN'], [35, 55, 65], {
+  kind: 'construct', size: 205, speed: 200, moveType: 'med', aiType: 'normal',
+  groupSize: [1, 3], acMul: 1.2, dmgMul: 1.05, goldMul: 1.5,
+  resistances: { mind: 100, body: 100, magic: 50, physical: 25 },
+  immunities: IMM_MINDBODY,
+  spawnRegions: ['pyramid', 'dragonsand', 'lair'],
+  desc: 'Jackal-headed and still standing its post after a thousand years.',
+});
+
+family('KnightPlate', ['Death Knight', 'Doom Knight', 'Cuisinart'], [40, 60, 80], {
+  kind: 'human', size: [200, 205, 210], speed: 180, moveType: 'med', aiType: 'aggress',
+  recovery: 100, groupSize: [1, 3], acMul: 1.35, dmgMul: 1.2, twoAttacks: true, goldMul: 1.8,
+  resistances: [{ mind: 50, body: 50, fire: 40 }, { mind: 60, body: 60, fire: 50, magic: 40 },
+    { mind: 75, body: 75, fire: 60, magic: 55 }],
+  spawnRegions: ['lair', 'crypt', 'ruins', 'tower'],
+  desc: 'Black plate, closed helm, no face. The last one is called Cuisinart and it earns the name.',
+});
+
+family('Lich', ['Lich', 'Greater Lich', 'Power Lich'], [20, 30, 40], {
+  kind: 'undead', undead: true, size: 190, speed: 140, moveType: 'short', aiType: 'wary',
+  groupSize: [1, 2], caster: true, dmgMul: 0.7, goldMul: 2.2,
+  ranged: { spell: 'souldrinker', element: 'dark', range: 3800 }, rangedMul: 1.5,
   spells: ['souldrinker', 'toxic_cloud', 'paralyze'],
-  resistances: { mind: 100, body: 100, fire: 70, air: 70, water: 70, earth: 70, magic: 80 },
-  immunities: ['mind', 'body'], spawnRegions: ['crypt', 'tower', 'lair'], groupSize: [1, 1],
+  resistances: [{ mind: 100, body: 100, magic: 60, fire: 50, water: 50 },
+    { mind: 100, body: 100, magic: 70, fire: 60, water: 60 },
+    { mind: 100, body: 100, magic: 80, fire: 70, water: 70, air: 70, earth: 70 }],
+  immunities: IMM_MINDBODY,
+  spawnRegions: ['crypt', 'tower', 'lair'],
   desc: 'It gave up its body centuries ago and has not missed it.',
 });
 
-// ---------------------------------------------------------------------------
-// Elementals, constructs and spirits
-// ---------------------------------------------------------------------------
-
-mon('fire_elemental', 'Fire Elemental', 20, 170, 26, [2, 8, 4, 'fire'], {
-  family: 'elemental', size: 220, speed: 250, xp: 1950, gold: 0, treasureLevel: 3,
-  ranged: { spell: 'fire_bolt', damage: { n: 5, s: 6 }, element: 'fire', range: 2500 },
-  resistances: { fire: 100, water: -30, mind: 100, body: 100, magic: 40 },
-  immunities: ['fire', 'mind', 'body'],
-  spawnRegions: ['kriegspire', 'dragonsand', 'cave', 'tower'], groupSize: [1, 3],
-  desc: 'A column of living flame. Cold hurts it; nothing else does much.',
-});
-mon('air_elemental', 'Air Elemental', 20, 150, 34, [2, 8, 3, 'air'], {
-  family: 'elemental', size: 230, speed: 380, recoveryTime: 70, xp: 1950, gold: 0, flying: true, treasureLevel: 3,
-  resistances: { air: 100, earth: -30, mind: 100, body: 100, magic: 40, physical: 40 },
-  immunities: ['air', 'mind', 'body'],
-  spawnRegions: ['white_cap', 'frozen_highlands', 'tower'], groupSize: [1, 3],
-  desc: 'A whirlwind with intent. Hard to hit and harder to catch.',
-});
-mon('water_elemental', 'Water Elemental', 20, 200, 24, [2, 8, 4, 'water'], {
-  family: 'elemental', size: 220, speed: 230, xp: 1950, gold: 0, treasureLevel: 3,
-  resistances: { water: 100, air: -30, mind: 100, body: 100, magic: 40 },
-  immunities: ['water', 'mind', 'body'],
-  spawnRegions: ['eel_infested_waters', 'bootleg_bay', 'sweet_water', 'sewer'], groupSize: [1, 3],
-  desc: 'It flows around your guard and drowns you standing up.',
-});
-mon('earth_elemental', 'Earth Elemental', 21, 260, 30, [3, 6, 5, 'earth'], {
-  family: 'elemental', size: 240, speed: 170, recoveryTime: 130, xp: 2200, gold: 0, treasureLevel: 3,
-  resistances: { earth: 100, fire: -20, mind: 100, body: 100, magic: 40, physical: 30 },
-  immunities: ['earth', 'mind', 'body'],
-  spawnRegions: ['mine', 'cave', 'white_cap', 'kriegspire'], groupSize: [1, 3],
-  desc: 'Slow as a landslide, and about as survivable.',
-});
-mon('gargoyle', 'Gargoyle', 13, 120, 22, [2, 6, 3], {
-  family: 'construct', size: 175, speed: 260, xp: 700, gold: 60, flying: true, treasureLevel: 2,
-  resistances: { mind: 100, body: 100, earth: 50, physical: 25 }, immunities: ['mind', 'body'],
-  spawnRegions: ['ruins', 'tower', 'temple', 'crypt'], groupSize: [2, 4],
-  desc: 'It was a statue right up until it was not.',
-});
-mon('stone_gargoyle', 'Stone Gargoyle', 23, 260, 34, [3, 6, 5], {
-  family: 'construct', size: 195, speed: 250, xp: 2700, gold: 180, flying: true, treasureLevel: 4,
-  resistances: { mind: 100, body: 100, earth: 70, fire: 40, physical: 40 }, immunities: ['mind', 'body'],
-  spawnRegions: ['ruins', 'tower', 'kriegspire'], groupSize: [1, 4],
-  desc: 'Granite with wings and a grudge.',
-});
-mon('golem', 'Golem', 27, 380, 32, [3, 8, 6], {
-  family: 'construct', size: 260, speed: 160, recoveryTime: 140, xp: 3800, gold: 0, treasureLevel: 4,
-  resistances: { mind: 100, body: 100, fire: 50, water: 50, earth: 50, magic: 50, physical: 30 },
-  immunities: ['mind', 'body'], spawnRegions: ['tower', 'ruins', 'mine'], groupSize: [1, 2],
-  desc: 'Clay and a word. It does not tire and it does not stop.',
-});
-mon('iron_golem', 'Iron Golem', 38, 620, 46, [4, 8, 8], {
-  family: 'construct', size: 290, speed: 170, recoveryTime: 140, xp: 11000, gold: 0, treasureLevel: 5,
-  resistances: { mind: 100, body: 100, fire: 70, water: 70, earth: 70, air: 70, magic: 70, physical: 50 },
-  immunities: ['mind', 'body'], spawnRegions: ['tower', 'ruins', 'lair'], groupSize: [1, 2],
-  desc: 'Iron all the way through. Bring a blaster.',
-});
-mon('will_o_wisp', "Will-o'-Wisp", 24, 130, 44, [2, 8, 4, 'air'], {
-  family: 'elemental', size: 60, speed: 420, recoveryTime: 50, xp: 2600, gold: 0, flying: true, treasureLevel: 4,
-  resistances: { air: 100, fire: 60, mind: 100, body: 100, magic: 60, physical: 80 },
-  immunities: ['air', 'mind', 'body'],
-  spawnRegions: ['mire_of_the_damned', 'bootleg_bay', 'sweet_water'], groupSize: [1, 4],
-  desc: 'A light in the marsh that leads you somewhere worse.',
+family('LizardArch', ['Lizard Man', 'Lizard Archer', 'Lizard Wizard'], [4, 7, 11], {
+  kind: 'reptile', size: 195, speed: 190, moveType: 'med', aiType: 'normal',
+  groupSize: [2, 5], goldMul: 0.9,
+  caster: [false, false, true],
+  ranged: [null, { projectile: 'arrow', range: 2800 }, { spell: 'poison_spray', element: 'earth', range: 2600 }],
+  resistances: { water: 40, earth: 30 },
+  spawnRegions: ['bootleg_bay', 'mire_of_the_damned', 'eel_infested_waters'],
+  desc: 'Green scales, a tail, and a tribe behind it.',
 });
 
-// ---------------------------------------------------------------------------
-// Giants and brutes
-// ---------------------------------------------------------------------------
-
-mon('ogre', 'Ogre', 10, 110, 14, [2, 6, 4], {
-  family: 'giant', size: 290, speed: 200, recoveryTime: 120, xp: 460, gold: 90, treasureLevel: 2,
-  spawnRegions: ['cave', 'blackshire', 'white_cap', 'ruins'], groupSize: [1, 3],
-  desc: 'Enormous, stupid, and carrying a tree.',
-});
-mon('troll', 'Troll', 21, 280, 26, [2, 10, 5], {
-  family: 'giant', size: 310, speed: 220, recoveryTime: 110, xp: 2300, gold: 250, treasureLevel: 4,
-  attack2: { dice: { n: 1, s: 10 }, bonus: 4, element: 'physical' },
-  resistances: { water: 30, earth: 30, body: 40 }, regen: 6,
-  spawnRegions: ['mire_of_the_damned', 'cave', 'blackshire'], groupSize: [1, 3],
-  desc: 'It heals as fast as you cut. Fire fixes that.',
-});
-mon('cyclops', 'Cyclops', 28, 400, 32, [4, 6, 6], {
-  family: 'giant', size: 380, speed: 210, recoveryTime: 125, xp: 4300, gold: 600, treasureLevel: 5,
-  ranged: { projectile: 'boulder', damage: { n: 4, s: 8 }, element: 'physical', range: 3000 },
-  resistances: { earth: 40, mind: 30 }, spawnRegions: ['kriegspire', 'cave', 'white_cap'], groupSize: [1, 2],
-  desc: 'One eye, no manners, and a very good throwing arm.',
-});
-mon('minotaur', 'Minotaur', 26, 330, 34, [3, 8, 6], {
-  family: 'giant', size: 300, speed: 280, xp: 3500, gold: 400, treasureLevel: 5,
-  attack2: { dice: { n: 2, s: 6 }, bonus: 4, element: 'physical' },
-  resistances: { earth: 30, mind: 40 }, spawnRegions: ['lair', 'cave', 'ruins'], groupSize: [1, 3],
-  desc: 'It charges, and the charge is the problem.',
-});
-mon('giant', 'Hill Giant', 33, 480, 36, [4, 8, 7], {
-  family: 'giant', size: 450, speed: 220, recoveryTime: 130, xp: 7200, gold: 900, treasureLevel: 5,
-  ranged: { projectile: 'boulder', damage: { n: 5, s: 8 }, element: 'physical', range: 3200 },
-  resistances: { earth: 40, physical: 20 }, spawnRegions: ['kriegspire', 'white_cap', 'frozen_highlands'], groupSize: [1, 2],
-  desc: 'Tall as a house and it throws parts of the house.',
-});
-mon('titan', 'Titan', 50, 900, 58, [5, 10, 10, 'air'], {
-  family: 'giant', size: 520, speed: 260, recoveryTime: 110, xp: 32000, gold: 6000, treasureLevel: 6,
-  ranged: { spell: 'lightning_bolt', damage: { n: 12, s: 10 }, element: 'air', range: 4000 },
-  attack2: { dice: { n: 4, s: 8 }, bonus: 8, element: 'air' },
-  resistances: { fire: 60, air: 90, water: 60, earth: 60, mind: 70, body: 70, magic: 70 },
-  spawnRegions: ['lair', 'kriegspire'], groupSize: [1, 2],
-  desc: 'Lightning walks with it. Almost nothing survives the first exchange.',
-});
-
-// ---------------------------------------------------------------------------
-// Dragons and other flyers
-// ---------------------------------------------------------------------------
-
-mon('harpy', 'Harpy', 9, 70, 18, [1, 8, 2], {
-  family: 'avian', size: 170, speed: 320, recoveryTime: 75, xp: 390, gold: 40, flying: true,
-  resistances: { air: 30, mind: 20 }, inflict: { condition: 'afraid', chance: 15 },
-  spawnRegions: ['bootleg_bay', 'blackshire', 'cave', 'ruins'], groupSize: [2, 5],
-  desc: 'It screams, and the scream is half the fight.',
-});
-mon('griffin', 'Griffin', 24, 250, 32, [3, 6, 5], {
-  family: 'avian', size: 290, speed: 360, recoveryTime: 80, xp: 2800, gold: 300, flying: true, treasureLevel: 4,
-  attack2: { dice: { n: 2, s: 6 }, bonus: 4, element: 'physical' },
-  resistances: { air: 50, mind: 30 }, spawnRegions: ['white_cap', 'paradise_valley', 'kriegspire'], groupSize: [1, 3],
-  desc: 'Eagle in front, lion behind, trouble throughout.',
-});
-mon('roc', 'Roc', 34, 460, 40, [4, 8, 7], {
-  family: 'avian', size: 480, speed: 380, recoveryTime: 85, xp: 8000, gold: 800, flying: true, treasureLevel: 5,
-  resistances: { air: 60, mind: 30, physical: 20 },
-  spawnRegions: ['white_cap', 'dragonsand', 'kriegspire'], groupSize: [1, 2],
-  desc: 'It could carry off a horse, and has.',
-});
-mon('wyvern', 'Wyvern', 29, 360, 36, [3, 8, 6, 'earth'], {
-  family: 'dragon', size: 340, speed: 340, recoveryTime: 90, xp: 4700, gold: 500, flying: true, treasureLevel: 5,
-  attack2: { dice: { n: 2, s: 8 }, bonus: 5, element: 'earth' },
-  resistances: { earth: 70, fire: 30, mind: 40 }, inflict: { condition: 'poisoned_severe', chance: 25 },
-  spawnRegions: ['dragonsand', 'kriegspire', 'lair'], groupSize: [1, 2],
-  desc: 'A dragon\'s poor cousin, with a poisoned tail.',
-});
-mon('hydra', 'Hydra', 31, 520, 34, [3, 8, 5, 'earth'], {
-  family: 'reptile', size: 360, speed: 200, recoveryTime: 90, xp: 6000, gold: 700, treasureLevel: 5,
-  attack2: { dice: { n: 3, s: 8 }, bonus: 5, element: 'earth' },
-  ranged: { projectile: 'venom', damage: { n: 6, s: 8 }, element: 'earth', range: 2500 },
-  resistances: { earth: 80, water: 50, fire: 20, mind: 50 }, regen: 10,
-  spawnRegions: ['mire_of_the_damned', 'eel_infested_waters', 'lair'], groupSize: [1, 1],
-  desc: 'Every head bites and every head grows back.',
-});
-mon('dragon_green', 'Green Dragon', 40, 700, 48, [4, 10, 8, 'earth'], {
-  family: 'dragon', size: 620, speed: 300, recoveryTime: 100, xp: 14000, gold: 3500, treasureLevel: 6, flying: true,
-  attack2: { dice: { n: 3, s: 10 }, bonus: 6, element: 'physical' },
-  ranged: { spell: 'toxic_cloud', damage: { n: 12, s: 10 }, element: 'earth', range: 3500 },
-  resistances: { earth: 90, fire: 40, water: 40, air: 40, mind: 60, body: 60, magic: 50 },
-  spawnRegions: ['lair', 'mire_of_the_damned', 'dragonsand'], groupSize: [1, 1],
-  desc: 'Its breath rots armour off a man.',
-});
-mon('dragon_red', 'Red Dragon', 48, 850, 54, [5, 10, 9, 'fire'], {
-  family: 'dragon', size: 660, speed: 310, recoveryTime: 100, xp: 26000, gold: 6000, treasureLevel: 6, flying: true,
-  attack2: { dice: { n: 4, s: 10 }, bonus: 7, element: 'physical' },
-  ranged: { spell: 'dragon_breath', damage: { n: 16, s: 10 }, element: 'fire', range: 4000 },
-  resistances: { fire: 100, earth: 50, water: 40, air: 50, mind: 70, body: 70, magic: 60 },
-  immunities: ['fire'], spawnRegions: ['lair', 'kriegspire', 'dragonsand'], groupSize: [1, 1],
-  desc: 'The one on the box art. It is exactly as bad as it looks.',
-});
-mon('dragon_black', 'Black Dragon', 58, 1100, 62, [6, 10, 12, 'dark'], {
-  family: 'dragon', size: 700, speed: 320, recoveryTime: 95, xp: 55000, gold: 12000, treasureLevel: 6, flying: true,
-  attack2: { dice: { n: 5, s: 10 }, bonus: 10, element: 'dark' },
-  ranged: { spell: 'dragon_breath', damage: { n: 22, s: 10 }, element: 'dark', range: 4200 },
-  resistances: { fire: 90, earth: 70, water: 70, air: 70, mind: 90, body: 90, magic: 85 },
-  spawnRegions: ['lair'], groupSize: [1, 1],
-  desc: 'Older than the kingdom. It has eaten better parties than yours.',
-});
-
-// ---------------------------------------------------------------------------
-// Swamp, sea and the strange
-// ---------------------------------------------------------------------------
-
-mon('lizardman', 'Lizardman', 8, 70, 14, [1, 8, 2], {
-  family: 'reptile', size: 195, speed: 230, xp: 310, gold: 55, treasureLevel: 2,
-  ranged: { projectile: 'javelin', damage: { n: 1, s: 8 }, element: 'physical', range: 2200 },
-  resistances: { water: 30, earth: 20 }, spawnRegions: ['bootleg_bay', 'mire_of_the_damned', 'eel_infested_waters'], groupSize: [2, 5],
-  desc: 'Tribal, territorial, and better organised than it looks.',
-});
-mon('naga', 'Naga', 22, 220, 28, [2, 10, 4, 'earth'], {
-  family: 'reptile', size: 260, speed: 240, xp: 2350, gold: 400, treasureLevel: 4, caster: true,
-  ranged: { spell: 'acid_burst', damage: { n: 7, s: 8 }, element: 'earth', range: 2800 },
-  resistances: { earth: 70, water: 50, mind: 40, magic: 30 },
-  inflict: { condition: 'poisoned_severe', chance: 20 },
-  spawnRegions: ['eel_infested_waters', 'mire_of_the_damned', 'temple'], groupSize: [1, 3],
-  desc: 'Serpent below, sorcerer above.',
-});
-mon('medusa', 'Medusa', 30, 300, 36, [2, 10, 5], {
-  family: 'reptile', size: 240, speed: 250, xp: 5400, gold: 900, treasureLevel: 5,
-  ranged: { spell: 'stone_gaze', damage: { n: 6, s: 8 }, element: 'earth', range: 2500 },
-  resistances: { earth: 60, mind: 70, magic: 40 }, inflict: { condition: 'stoned', chance: 8 },
-  spawnRegions: ['ruins', 'temple', 'lair'], groupSize: [1, 2],
+family('Medusa', ['Medusa', 'Medusa Enchantress', 'Gorgon'], [35, 40, 45], {
+  kind: 'reptile', size: 240, speed: 190, moveType: 'med', aiType: 'wary',
+  groupSize: [1, 2], goldMul: 1.6,
+  ranged: { projectile: 'arrow', range: 3200 }, rangedMul: 1.2,
+  inflict: { condition: 'stoned', chance: 9 },
+  resistances: { earth: 60, mind: 70, magic: 40 },
+  spawnRegions: ['ruins', 'temple', 'lair', 'dragonsand'],
   desc: 'Do not look at it. It is very hard not to look at it.',
 });
-mon('swamp_thing', 'Swamp Thing', 19, 210, 22, [2, 10, 4, 'earth'], {
-  family: 'plant', size: 260, speed: 160, recoveryTime: 130, xp: 1750, gold: 30, treasureLevel: 3,
-  resistances: { earth: 70, water: 60, mind: 100, fire: -40 }, immunities: ['mind'],
-  inflict: { condition: 'diseased_weak', chance: 20 },
-  spawnRegions: ['mire_of_the_damned', 'bootleg_bay', 'sweet_water'], groupSize: [1, 3],
-  desc: 'Half the marsh stood up. Fire is the answer.',
+
+family('Merchant', ['Peasant', 'Peasant', 'Peasant'], [4, 5, 6], {
+  kind: 'human', size: 185, speed: 120, moveType: 'short', aiType: 'wary',
+  groupSize: [1, 2], hostile: false, fleeAtHP: 0.6, dmgMul: 0.5, goldMul: 1.5,
+  aggroRange: 700, spawnRegions: ['town', 'free_haven', 'castle_ironfist', 'new_sorpigal'],
+  desc: 'Townsfolk in tunic and apron. They would rather you did not.',
 });
-mon('slime', 'Slime', 4, 40, 4, [1, 6, 1, 'earth'], {
-  family: 'ooze', size: 90, speed: 110, recoveryTime: 150, xp: 90, gold: 0,
-  resistances: { earth: 60, water: 40, mind: 100, body: 100, physical: 30 }, immunities: ['mind', 'body'],
-  spawnRegions: ['sewer', 'cave', 'crypt'], groupSize: [2, 4],
-  desc: 'It eats the floor and would like to eat your boots.',
+
+family('Minotaur', ['Minotaur', 'Minotaur Mage', 'Minotaur King'], [39, 59, 79], {
+  kind: 'giant', size: [290, 300, 320], speed: 240, moveType: 'long', aiType: 'aggress',
+  groupSize: [1, 3], twoAttacks: true, dmgMul: 1.25, goldMul: 1.6,
+  caster: [false, true, true],
+  ranged: [null, { spell: 'implosion', element: 'air', range: 3200 }, { spell: 'implosion', element: 'air', range: 3400 }],
+  resistances: { earth: 50, mind: 55 },
+  spawnRegions: ['lair', 'cave', 'ruins'],
+  desc: 'It charges, and the charge is the problem.',
 });
-mon('ooze', 'Great Ooze', 15, 220, 8, [2, 8, 2, 'earth'], {
-  family: 'ooze', size: 150, speed: 110, recoveryTime: 150, xp: 900, gold: 20, treasureLevel: 2,
-  resistances: { earth: 80, water: 60, fire: 30, mind: 100, body: 100, physical: 50 },
-  immunities: ['mind', 'body'], inflict: { condition: 'poisoned_weak', chance: 20 },
-  spawnRegions: ['sewer', 'cave', 'mire_of_the_damned'], groupSize: [1, 3],
-  desc: 'Enormous, acidic, and it splits when you cut it.',
+
+family('Monk', ['Novice', 'Initiate', 'Master Monk'], [8, 16, 27], {
+  kind: 'human', size: 185, speed: 240, moveType: 'long', aiType: 'normal',
+  recovery: 70, groupSize: [1, 4], acMul: 1.15, twoAttacks: true, dmgMul: 0.75, goldMul: 0.6,
+  resistances: { mind: 45, body: 30 },
+  spawnRegions: ['temple', 'tower', 'free_haven'],
+  desc: 'Bare arms, a sash, and hands that count as weapons.',
+});
+
+family('Nobleman', ['Swordsman', 'Expert', 'Master Swordsman'], [10, 17, 24], {
+  kind: 'human', size: 190, speed: 180, moveType: 'med', aiType: 'normal',
+  recovery: 90, groupSize: [1, 3], acMul: 1.1, goldMul: 1.6,
+  spawnRegions: ['castle_ironfist', 'free_haven', 'silver_cove'],
+  desc: 'Silver Helm nobility. Plumed hat, tabard, and a very quick rapier.',
+});
+
+family('Ooze', ['Ooze', 'Acidic Ooze', 'Corrosive Ooze'], [12, 18, 25], {
+  kind: 'ooze', size: [110, 130, 155], speed: 96, moveType: 'short', aiType: 'normal',
+  recovery: 150, groupSize: [1, 4], acMul: 0.4, element: 'earth', goldMul: 0.2,
+  resistances: { earth: 80, water: 60, mind: 100, body: 100, physical: 45 },
+  immunities: IMM_MINDBODY,
+  inflict: { condition: 'poisoned_weak', chance: 18 },
+  spawnRegions: ['sewer', 'cave', 'crypt', 'mire_of_the_damned'],
+  desc: 'Amorphous, acidic, and it eats the floor on the way to you.',
+});
+
+family('Ogre', ['Ogre', 'Ogre Raider', 'Ogre Chieftain'], [15, 20, 28], {
+  kind: 'giant', size: [280, 290, 310], speed: 160, moveType: 'short', aiType: 'aggress',
+  recovery: 120, groupSize: [1, 3], dmgMul: 1.3, acMul: 0.85, goldMul: 1.3,
+  spawnRegions: ['cave', 'blackshire', 'white_cap', 'ruins'],
+  desc: 'Grey-brown, pot-bellied, tusked, and carrying a tree.',
+});
+
+family('PeasantF1', ['Peasant', 'Peasant', 'Peasant'], [1, 2, 3], {
+  kind: 'human', size: 180, speed: 120, moveType: 'short', aiType: 'wary',
+  groupSize: [1, 3], hostile: false, fleeAtHP: 0.7, dmgMul: 0.6, aggroRange: 600,
+  spawnRegions: ['town', 'new_sorpigal', 'free_haven', 'castle_ironfist'],
+  desc: 'A woman in a long skirt and shawl. Non-hostile filler.',
+});
+family('PeasantF2', ['Peasant', 'Peasant', 'Peasant'], [1, 2, 3], {
+  kind: 'human', size: 180, speed: 120, moveType: 'short', aiType: 'wary',
+  groupSize: [1, 3], hostile: false, fleeAtHP: 0.7, dmgMul: 0.6, aggroRange: 600,
+  spawnRegions: ['town', 'new_sorpigal', 'free_haven', 'silver_cove'],
+  desc: 'Another townswoman. Enroth is full of them.',
+});
+family('PeasantF3', ['Cutpurse', 'Bounty Hunter', 'Assassin'], [3, 5, 7], {
+  kind: 'human', size: 180, speed: 210, moveType: 'long', aiType: 'aggress',
+  recovery: 80, groupSize: [1, 3], dmgMul: 1.1, goldMul: 1.6,
+  spawnRegions: ['free_haven', 'sewer', 'new_sorpigal', 'ruins'],
+  desc: 'Dark hood, dagger, and she was behind you a moment ago.',
+});
+family('PeasantF4', ['Cannibal', 'Head Hunter', 'Witch Doctor'], [6, 8, 10], {
+  kind: 'human', size: 182, speed: 200, moveType: 'med', aiType: 'aggress',
+  groupSize: [2, 4], goldMul: 0.8,
+  caster: [false, false, true],
+  ranged: [null, { projectile: 'javelin', range: 2400 }, { spell: 'poison_spray', element: 'earth', range: 2400 }],
+  spawnRegions: ['bootleg_bay'],
+  desc: 'Bone jewellery, war paint, and a spear. Bootleg Bay is not a holiday.',
+});
+
+family('PeasantM1', ['Peasant', 'Peasant', 'Peasant'], [1, 2, 3], {
+  kind: 'human', size: 185, speed: 120, moveType: 'short', aiType: 'wary',
+  groupSize: [1, 3], hostile: false, fleeAtHP: 0.7, dmgMul: 0.6, aggroRange: 600,
+  spawnRegions: ['town', 'new_sorpigal', 'free_haven', 'castle_ironfist'],
+  desc: 'A man in a tunic and trousers, going about his day.',
+});
+family('PeasantM2', ['Apprentice', 'Journeyman Mage', 'Mage'], [2, 6, 10], {
+  kind: 'human', size: 185, speed: 150, moveType: 'med', aiType: 'wary',
+  groupSize: [1, 3], caster: true, dmgMul: 0.6, goldMul: 1.3,
+  ranged: [{ spell: 'fire_bolt', element: 'fire', range: 2400 },
+    { spell: 'sparks', element: 'air', range: 2600 },
+    { spell: 'fireball', element: 'fire', range: 2800 }],
+  rangedMul: 1.3, spells: [['fire_bolt'], ['fire_bolt', 'sparks'], ['fireball', 'sparks', 'shield']],
+  resistances: { fire: 30, air: 30, magic: 25 },
+  spawnRegions: ['tower', 'free_haven', 'ruins'],
+  desc: 'Blue robe, pointed hood, and two spells it is very proud of.',
+});
+family('PeasantM3', ['Follower of Baa', 'Mystic of Baa', 'Fanatic of Baa'], [3, 5, 7], {
+  kind: 'human', size: 185, speed: 170, moveType: 'med', aiType: ['normal', 'normal', 'suicide'],
+  groupSize: [2, 5], goldMul: 0.9,
+  resistances: { mind: 30 },
+  spawnRegions: ['temple', 'free_haven', 'crypt', 'new_sorpigal'],
+  desc: 'Plain robe, hood up. The fanatics do not stop coming.',
+});
+family('PeasantM4', ['Cannibal', 'Head Hunter', 'Witch Doctor'], [6, 8, 10], {
+  kind: 'human', size: 188, speed: 200, moveType: 'med', aiType: 'aggress',
+  groupSize: [2, 4], goldMul: 0.8,
+  caster: [false, false, true],
+  ranged: [null, { projectile: 'javelin', range: 2400 }, { spell: 'poison_spray', element: 'earth', range: 2400 }],
+  spawnRegions: ['bootleg_bay'],
+  desc: 'Bone mask, spear, and no interest in negotiating.',
+});
+
+family('Rat', ['Common Rat', 'Large Rat', 'Giant Rat'], [2, 4, 6], {
+  kind: 'beast', size: [55, 75, 95], speed: 200, moveType: 'med', aiType: 'normal',
+  recovery: 80, groupSize: [3, 6], goldMul: 0, aggroRange: 1000, acMul: 0.9,
+  spawnRegions: ['sewer', 'cave', 'crypt', 'mine', 'new_sorpigal'],
+  desc: 'Brown, long-tailed, low to the ground, and there are always more.',
+});
+
+family('Robot', ['Patrol Unit', 'Enforcer Unit', 'Terminator Unit'], [50, 70, 90], {
+  kind: 'construct', size: [210, 220, 235], speed: 180, moveType: 'med', aiType: 'normal',
+  recovery: 90, groupSize: [1, 3], acMul: 1.4, goldMul: 0, element: 'magic',
+  ranged: { projectile: 'blaster_bolt', element: 'magic', range: 3600 }, rangedMul: 1.4,
+  resistances: { mind: 100, body: 100, fire: 80, air: 80, water: 80, earth: 80, magic: 70, physical: 45 },
+  immunities: IMM_MINDBODY, treasure: 6,
+  spawnRegions: ['control_center'],
+  desc: 'Ancient machinery still running its patrol. The optic tracks you.',
+});
+
+family('SeaSerpent', ['Sea Serpent', 'Sea Monster', 'Sea Terror'], [28, 36, 48], {
+  kind: 'reptile', size: [340, 380, 420], speed: 200, moveType: 'med', aiType: 'aggress',
+  groupSize: [1, 2], element: 'water', dmgMul: 1.15, goldMul: 0.8,
+  resistances: { water: 85, earth: 40, mind: 40 },
+  spawnRegions: ['eel_infested_waters', 'bootleg_bay', 'sweet_water'],
+  desc: 'Long-necked, finned, and it was under the boat the whole time.',
+});
+
+family('Skeleton', ['Skeleton', 'Skeleton Knight', 'Skeleton Lord'], [6, 10, 14], {
+  kind: 'undead', undead: true, size: 180, speed: 170, moveType: 'med', aiType: 'normal',
+  groupSize: [2, 5], acMul: [1, 1.2, 1.3], goldMul: 0.7,
+  resistances: R_UNDEAD, immunities: IMM_MINDBODY,
+  spawnRegions: ['crypt', 'cave', 'ruins', 'mire_of_the_damned'],
+  desc: 'Bones held together by spite. The Lord wears a crown.',
+});
+
+family('Sorcerer', ['Sorcerer', 'Magician', 'Warlock'], [25, 35, 50], {
+  kind: 'human', size: 188, speed: 160, moveType: 'med', aiType: 'wary',
+  groupSize: [1, 2], caster: true, dmgMul: 0.6, goldMul: 2,
+  ranged: [{ spell: 'lightning_bolt', element: 'air', range: 3200 },
+    { spell: 'ice_blast', element: 'water', range: 3400 },
+    { spell: 'implosion', element: 'air', range: 3600 }],
+  rangedMul: 1.5,
+  spells: [['lightning_bolt', 'shield'], ['ice_blast', 'shield'], ['implosion', 'meteor_shower', 'shield']],
+  resistances: { fire: 50, air: 50, water: 50, earth: 50, magic: 60 },
+  spawnRegions: ['tower', 'kriegspire', 'ruins', 'lair'],
+  desc: 'Long beard, high collar, and a spell that ends the fight in one casting.',
+});
+
+family('Spider', ['Spider', 'Giant Spider', 'Huge Spider'], [5, 8, 12], {
+  kind: 'insect', size: [80, 105, 130], speed: 210, moveType: 'long', aiType: 'aggress',
+  groupSize: [2, 5], element: 'earth', goldMul: 0.2,
+  resistances: { earth: 55 },
+  inflict: [{ condition: 'poisoned_weak', chance: 18 }, { condition: 'poisoned_weak', chance: 22 }, { condition: 'poisoned_severe', chance: 20 }],
+  ranged: [null, null, { projectile: 'web', element: 'earth', range: 1800 }],
+  spawnRegions: ['cave', 'crypt', 'mire_of_the_damned', 'ruins'],
+  desc: 'Eight legs, hairy, and it webs the corridor behind you first.',
+});
+
+family('Thief', ['Thief', 'Burglar', 'Rogue'], [8, 12, 18], {
+  kind: 'human', size: 185, speed: 230, moveType: 'long', aiType: 'wary',
+  recovery: 75, groupSize: [1, 4], twoAttacks: true, dmgMul: 0.8, goldMul: 1.8,
+  spawnRegions: ['sewer', 'free_haven', 'ruins', 'silver_cove'],
+  desc: 'Dark leather, hood, twin daggers, and your purse.',
+});
+
+family('Titan', ['Titan', 'Noble Titan', 'Supreme Titan'], [65, 75, 95], {
+  kind: 'giant', size: [480, 520, 560], speed: 260, moveType: 'long', aiType: 'aggress',
+  recovery: 105, groupSize: [1, 2], twoAttacks: true, element: 'air', dmgMul: 1.15, goldMul: 2,
+  ranged: { spell: 'lightning_bolt', element: 'air', range: 4000 }, rangedMul: 1.4,
+  resistances: { air: 90, fire: 60, water: 60, earth: 60, mind: 70, body: 70, magic: 70 },
+  spawnRegions: ['lair', 'kriegspire'],
+  desc: 'Golden-skinned, twice your height, and it throws lightning.',
+});
+
+family('Werewolf', ['Wolfman', 'Werewolf', 'Greater Werewolf'], [20, 30, 40], {
+  kind: 'beast', size: [200, 210, 225], speed: 270, moveType: 'long', aiType: 'aggress',
+  recovery: 80, groupSize: [2, 4], twoAttacks: true, dmgMul: 1.1, goldMul: 0.4,
+  resistances: { mind: 40, physical: 20 },
+  inflict: [null, { condition: 'diseased_weak', chance: 12 }, { condition: 'diseased_severe', chance: 12 }],
+  spawnRegions: ['blackshire', 'mire_of_the_damned', 'white_cap', 'frozen_highlands'],
+  desc: 'Bipedal wolf, all claws, and it moves faster than you can back away.',
 });
 
 // ---------------------------------------------------------------------------
-// Devils - the endgame of MM6
+// The two uniques
 // ---------------------------------------------------------------------------
 
-mon('imp', 'Imp', 12, 85, 22, [1, 8, 3, 'fire'], {
-  family: 'demon', size: 110, speed: 340, recoveryTime: 70, xp: 640, gold: 80, flying: true, treasureLevel: 3,
-  ranged: { spell: 'fire_bolt', damage: { n: 4, s: 6 }, element: 'fire', range: 2500 },
-  resistances: { fire: 70, mind: 40, magic: 30 },
-  spawnRegions: ['temple', 'kriegspire', 'ruins', 'lair'], groupSize: [2, 5],
-  desc: 'Small, fast, on fire, and laughing.',
+unique('zDemonqueen', 'Demon Queen', 100, {
+  kind: 'demon', size: 420, speed: 280, moveType: 'long', aiType: 'aggress',
+  twoAttacks: true, element: 'fire', element2: 'dark', dmgMul: 1.3, acMul: 1.2,
+  caster: true, spells: ['incinerate', 'armageddon', 'paralyze'],
+  ranged: { spell: 'incinerate', element: 'fire', range: 4000 }, rangedMul: 1.6,
+  resistances: { fire: 100, air: 80, water: 80, earth: 80, mind: 95, body: 95, magic: 90 },
+  immunities: ['fire', 'mind', 'body'],
+  spawnRegions: ['lair'], goldMul: 4,
+  desc: 'The end of the war, wearing a crown. Bring everything you have.',
 });
-mon('demon', 'Demon', 35, 450, 44, [4, 8, 8, 'fire'], {
-  family: 'demon', size: 300, speed: 300, xp: 9500, gold: 2000, treasureLevel: 6,
-  attack2: { dice: { n: 3, s: 8 }, bonus: 6, element: 'fire' },
-  ranged: { spell: 'fireball', damage: { n: 12, s: 8 }, element: 'fire', range: 3200 },
-  resistances: { fire: 90, air: 40, water: 30, earth: 40, mind: 70, body: 70, magic: 60 },
-  spawnRegions: ['temple', 'kriegspire', 'lair'], groupSize: [1, 3],
-  desc: 'The Kreegan foot soldier. It came a long way to be here.',
-});
-mon('devil', 'Devil', 45, 720, 54, [5, 10, 10, 'fire'], {
-  family: 'demon', size: 330, speed: 320, xp: 21000, gold: 5000, treasureLevel: 6, caster: true,
-  attack2: { dice: { n: 4, s: 10 }, bonus: 8, element: 'fire' },
-  ranged: { spell: 'incinerate', damage: { n: 18, s: 10 }, element: 'fire', range: 3800 },
-  spells: ['incinerate', 'paralyze', 'toxic_cloud'],
-  resistances: { fire: 100, air: 60, water: 50, earth: 60, mind: 85, body: 85, magic: 80 },
-  immunities: ['fire'], spawnRegions: ['temple', 'lair'], groupSize: [1, 2],
-  desc: 'A Kreegan lord. This is what the whole war was about.',
+
+unique('zReactor', 'Reactor', 100, {
+  kind: 'construct', size: 300, speed: 0, moveType: 'short', aiType: 'normal',
+  dmgMul: 0.8, acMul: 1.5, element: 'magic',
+  ranged: { projectile: 'energy_pulse', element: 'magic', range: 3000 }, rangedMul: 1.5,
+  resistances: { fire: 90, air: 90, water: 90, earth: 90, mind: 100, body: 100, magic: 85, physical: 60 },
+  immunities: ['mind', 'body'],
+  spawnRegions: ['control_center'], goldMul: 0, aggroRange: 3000,
+  desc: 'It does not move. It does not need to.',
 });
 
 // ---------------------------------------------------------------------------
@@ -643,43 +781,56 @@ mon('devil', 'Devil', 45, 720, 54, [5, 10, 10, 'fire'], {
 export const MONSTERS = M;
 const BY_ID = new Map(M.map((m) => [m.id, m]));
 
-export function monsterById(id) { return BY_ID.get(id) || null; }
 export const MONSTER_IDS = M.map((m) => m.id);
+/** { Goblin: { id, names, tiers } } - the sprite families. */
+export const MONSTER_FAMILIES = FAMILY_INDEX;
+export const FAMILY_IDS = Object.keys(FAMILY_INDEX);
 
-/** Every monster of a family. */
-export function monstersOfFamily(family) { return M.filter((m) => m.family === family); }
+export function monsterById(id) { return BY_ID.get(id) || null; }
 
-/** Every monster whose level falls in [lo, hi]. */
+/** The three tiers of a sprite family. */
+export function tiersOf(familyId) {
+  const f = FAMILY_INDEX[familyId];
+  return f ? f.tiers : [];
+}
+
+/** Every monster of a biological kind ('undead', 'demon', ...). */
+export function monstersOfKind(kind) { return M.filter((m) => m.kind === kind); }
+/** Back-compat alias. */
+export const monstersOfFamily = monstersOfKind;
+
 export function monstersInLevelRange(lo, hi) {
   return M.filter((m) => m.level >= lo && m.level <= hi);
 }
 
 /**
- * A weighted spawn table for a region at a given difficulty.
- * `difficulty` is roughly the party's level; the window widens as it grows so
- * high-level areas stay varied.
+ * A weighted spawn table for a region at a given difficulty. `difficulty` is
+ * roughly the party's level; the band widens with it so deep regions stay
+ * varied. Non-hostile filler (peasants) is included at low weight in towns
+ * only.
  */
 export function spawnTableFor(regionId, difficulty) {
   const d = Math.max(1, difficulty || 1);
-  const lo = Math.max(1, Math.floor(d * 0.55) - 1);
-  const hi = Math.ceil(d * 1.45) + 2;
+  const lo = Math.max(1, Math.floor(d * 0.5) - 1);
+  const hi = Math.ceil(d * 1.6) + 2;
 
-  let pool = M.filter((m) => m.spawnRegions.indexOf(regionId) >= 0);
+  let pool = M.filter((m) => m.spawnRegions.indexOf(regionId) >= 0 && !m.unique);
   if (!pool.length) pool = M.filter((m) => m.spawnRegions.indexOf('cave') >= 0);
+  if (regionId !== 'town') pool = pool.filter((m) => m.hostile);
 
   const inBand = pool.filter((m) => m.level >= lo && m.level <= hi);
-  const chosen = inBand.length ? inBand : pool.slice().sort(
-    (a, b) => Math.abs(a.level - d) - Math.abs(b.level - d)).slice(0, 4);
+  const chosen = inBand.length ? inBand : pool.slice()
+    .sort((a, b) => Math.abs(a.level - d) - Math.abs(b.level - d)).slice(0, 5);
 
   return chosen.map((m) => {
-    // Monsters at the middle of the band are the commonest; the edges are rare.
-    const dist = Math.abs(m.level - d) / Math.max(1, hi - lo);
-    const w = Math.max(1, Math.round(100 * (1 - Math.min(0.9, dist))));
+    const span = Math.max(1, hi - lo);
+    const dist = Math.abs(m.level - d) / span;
+    const w = Math.max(1, Math.round(100 * (1 - Math.min(0.92, dist))));
     return { id: m.id, w, level: m.level, groupSize: m.groupSize };
   });
 }
 
-/** Roll one spawn group: an id and how many of them. */
+/** Roll one spawn group: an id and how many. */
 export function rollSpawn(rand, regionId, difficulty) {
   const table = spawnTableFor(regionId, difficulty);
   if (!table.length) return null;
@@ -688,8 +839,12 @@ export function rollSpawn(rand, regionId, difficulty) {
   return { id: pick.id, count: rand.int(lo, hi) };
 }
 
-/** Instantiate a live monster from its template. */
+// ---------------------------------------------------------------------------
+// Live instances
+// ---------------------------------------------------------------------------
+
 let MUID = 1;
+
 export function spawnMonster(id, opts) {
   const def = BY_ID.get(id);
   if (!def) return null;
@@ -707,7 +862,7 @@ export function spawnMonster(id, opts) {
     recovery: 0,
     conditions: {},
     buffs: {},
-    hostile: o.hostile !== undefined ? o.hostile : true,
+    hostile: o.hostile !== undefined ? o.hostile : def.hostile,
     state: 'idle',
     target: null,
     alive: true,
@@ -720,27 +875,41 @@ export function resetMonsterUids(n) { MUID = n | 0 || 1; }
 /** Total XP a group is worth, before Learning and party-size division. */
 export function groupXP(monsters) {
   let t = 0;
-  for (const m of monsters) t += (m.def ? m.def.xp : (BY_ID.get(m.id) || { xp: 0 }).xp);
+  for (const m of monsters) t += m.def ? m.def.xp : ((BY_ID.get(m.id) || { xp: 0 }).xp);
   return t;
 }
 
-/** Sanity check for the test harness: every id present, levels sane. */
+// ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+
+/** Sanity check used by the test harness. */
 export function validateMonsters(requiredIds) {
   const problems = [];
   const have = new Set(MONSTER_IDS);
-  if (requiredIds) {
+  if (requiredIds && requiredIds.length) {
     for (const id of requiredIds) if (!have.has(id)) problems.push(`missing monster "${id}"`);
     for (const id of MONSTER_IDS) if (requiredIds.indexOf(id) < 0) problems.push(`extra monster "${id}"`);
   }
+  if (M.length !== 173) problems.push(`expected 173 monsters, found ${M.length}`);
+  if (FAMILY_IDS.length !== 59) problems.push(`expected 57 families + 2 uniques, found ${FAMILY_IDS.length}`);
   for (const m of M) {
-    if (m.level < 1 || m.level > 60) problems.push(`${m.id}: level ${m.level} out of range`);
-    if (m.hp < 1) problems.push(`${m.id}: no hit points`);
-    if (!FAMILIES.includes(m.family)) problems.push(`${m.id}: unknown family ${m.family}`);
+    if (m.level < 1 || m.level > 100) problems.push(`${m.id}: level ${m.level} out of range`);
+    if (m.hp !== hpForLevel(m.level)) problems.push(`${m.id}: hp ${m.hp} off the retail curve`);
+    if (!KINDS.includes(m.kind)) problems.push(`${m.id}: unknown kind ${m.kind}`);
     if (m.size < 20 || m.size > 900) problems.push(`${m.id}: implausible size ${m.size}`);
+    // Monster speed sits between 25% and ~80% of the party's 384 u/s walk so
+    // the party can always disengage. The fastest thing in the game is the
+    // Devil Master at 300; the Reactor is bolted down at 0.
+    if (m.speed !== 0 && (m.speed < 96 || m.speed > MAX_MONSTER_SPEED)) {
+      problems.push(`${m.id}: speed ${m.speed} outside the 96-${MAX_MONSTER_SPEED} band`);
+    }
+    if (!MOVE_TYPES.includes(m.moveType)) problems.push(`${m.id}: bad move type`);
+    if (!AI_TYPES.includes(m.aiType)) problems.push(`${m.id}: bad ai type`);
     for (const r of m.spawnRegions) if (!REGIONS.includes(r)) problems.push(`${m.id}: unknown region ${r}`);
   }
   const levels = M.map((m) => m.level);
-  if (Math.min(...levels) > 1) problems.push('no level-1 monsters');
-  if (Math.max(...levels) < 55) problems.push('no endgame monsters');
+  if (Math.min(...levels) !== 1) problems.push('roster should start at level 1');
+  if (Math.max(...levels) !== 100) problems.push('roster should top out at level 100');
   return problems;
 }

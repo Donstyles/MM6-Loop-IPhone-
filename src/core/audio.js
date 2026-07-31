@@ -19,6 +19,38 @@ import { Rand, hashStr, clamp } from './rng.js';
 // Synth rig - the toolbox every recipe is written against.
 // ---------------------------------------------------------------------------
 
+/**
+ * StereoPannerNode is missing on Safari before 14.5. Fall back to the old
+ * PannerNode, and to nothing at all if even that is absent - a mono mix is a
+ * far better outcome than a thrown exception during a user gesture.
+ */
+export function mkPan(ctx, v) {
+  if (ctx.createStereoPanner) {
+    const p = ctx.createStereoPanner();
+    p.pan.value = v;
+    return p;
+  }
+  if (ctx.createPanner) {
+    const p = ctx.createPanner();
+    p.panningModel = 'equalpower';
+    const z = Math.sqrt(Math.max(0, 1 - v * v));
+    if (p.positionX) { p.positionX.value = v; p.positionY.value = 0; p.positionZ.value = z; }
+    else p.setPosition(v, 0, z);
+    return p;
+  }
+  return null;
+}
+
+/** Promise-shaped offline render that also works on the pre-promise API. */
+export function renderOffline(off) {
+  return new Promise((resolve, reject) => {
+    off.oncomplete = (e) => resolve(e.renderedBuffer);
+    let p;
+    try { p = off.startRendering(); } catch (err) { reject(err); return; }
+    if (p && typeof p.then === 'function') p.then(resolve, reject);
+  });
+}
+
 /** Cheap curve builder for pitch/filter contours. */
 function curveOf(points, n = 64) {
   const out = new Float32Array(n);
@@ -313,8 +345,8 @@ class Rig {
 
   /** Stereo widener: pushes a source hard left/right at a fixed amount. */
   side(amount = 0.6) {
-    const p = this.ctx.createStereoPanner();
-    p.pan.value = amount;
+    const p = mkPan(this.ctx, amount);
+    if (!p) return this.out;
     p.connect(this.out);
     return p;
   }
@@ -521,7 +553,7 @@ def('hiss', 0.75, 0.42, (r) => {
   r.nz({ t: 0.04, dur: 0.5, g: 0.2, f: 7600, Q: 3, a: 0.1, d: 0.45 });
 });
 
-def('screech', 0.7, 0.7, (r) => {
+def('screech', 0.7, 0.58, (r) => {
   r.vox({
     t: 0, dur: 0.55, g: 0.4, a: 0.015, h: 0.2, d: 0.34,
     f0: [[0, 620], [0.25, 1480], [0.7, 1320], [1, 780]],
@@ -575,7 +607,7 @@ def('insect_chitter', 0.6, 0.42, (r) => {
   r.tone({ t: 0.02, f: 2400, f2: 3100, dur: 0.4, g: 0.06, type: 'square', a: 0.02, d: 0.36, bp: 4200, Q: 6 });
 });
 
-def('wolf_howl', 1.9, 0.72, (r) => {
+def('wolf_howl', 1.9, 0.56, (r) => {
   const v = r.verb(1.8, 2.4, 0.32);
   const o = {
     t: 0, dur: 1.7, g: 0.42, a: 0.18, h: 0.8, d: 0.7,
@@ -657,7 +689,7 @@ def('cast_water', 0.95, 0.66, (r) => {
   r.tone({ t: 0.1, f: 160, f2: 70, dur: 0.4, g: 0.22, type: 'sine', a: 0.04, d: 0.36 });
 });
 
-def('cast_earth', 1.15, 0.82, (r) => {
+def('cast_earth', 1.15, 0.74, (r) => {
   const v = r.verb(1.2, 2.6, 0.24);
   r.tone({ t: 0, f: 62, f2: 34, dur: 0.85, g: 0.6, type: 'sine', a: 0.09, d: 0.78 });
   r.tone({ t: 0, f: 93, f2: 51, dur: 0.7, g: 0.24, type: 'triangle', a: 0.1, d: 0.62 });
@@ -1020,8 +1052,7 @@ const AMB = { loop: true, xfade: 0.9 };
 def('amb_wind', 7.0, 0.34, (r) => {
   const ctx = r.ctx;
   for (let k = 0; k < 3; k++) {
-    const pan = ctx.createStereoPanner();
-    pan.pan.value = [-0.7, 0.1, 0.75][k];
+    const pan = mkPan(ctx, [-0.7, 0.1, 0.75][k]) || ctx.createGain();
     pan.connect(r.out);
     const src = ctx.createBufferSource();
     src.buffer = r.noise('brown', 4);
@@ -1085,7 +1116,7 @@ def('amb_town', 7.0, 0.34, (r) => {
     const lfo = ctx.createOscillator(); lfo.type = 'sine'; lfo.frequency.value = 0.9 + k * 0.7;
     const la = ctx.createGain(); la.gain.value = 0.09;
     lfo.connect(la); la.connect(g.gain);
-    const pan = ctx.createStereoPanner(); pan.pan.value = k ? 0.4 : -0.4; pan.connect(r.out);
+    const pan = mkPan(ctx, k ? 0.4 : -0.4) || ctx.createGain(); pan.connect(r.out);
     src.connect(bp); bp.connect(g); g.connect(pan);
     src.start(0, r.rng.float(0, 2)); src.stop(8.2);
     lfo.start(0); lfo.stop(8.2);
@@ -1195,7 +1226,7 @@ def('amb_rain', 7.0, 0.36, (r) => {
     const lfo = ctx.createOscillator(); lfo.type = 'sine'; lfo.frequency.value = 0.11 + k * 0.07;
     const la = ctx.createGain(); la.gain.value = 0.05;
     lfo.connect(la); la.connect(g.gain);
-    const pan = ctx.createStereoPanner(); pan.pan.value = k ? 0.5 : -0.5; pan.connect(r.out);
+    const pan = mkPan(ctx, k ? 0.5 : -0.5) || ctx.createGain(); pan.connect(r.out);
     src.connect(bp); bp.connect(g); g.connect(pan);
     src.start(0, r.rng.float(0, 2)); src.stop(8.2);
     lfo.start(0); lfo.stop(8.2);
@@ -1352,6 +1383,9 @@ export class Audio {
     this.ambience = null;
     this._ambHandles = [];
     this.initMs = 0;
+    this.ctxMs = 0;
+    this.resumeMs = 0;
+    this.bakeMs = 0;
     this.refDistance = 700;   // world units - see ARCHITECTURE.md, a tile is 512
     this.maxDistance = 9000;
   }
@@ -1391,9 +1425,14 @@ export class Audio {
     this.musicBus.connect(this.master);
 
     this.ok = true;
+    const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    this.ctxMs = now() - t0;
     await this.resume();
+    this.resumeMs = now() - t0 - this.ctxMs;
+    const tb = now();
     await Promise.all(HOT.map((id) => this._ensure(id)));
-    this.initMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
+    this.bakeMs = now() - tb;
+    this.initMs = now() - t0;
 
     if (typeof document !== 'undefined' && !this._visBound) {
       this._visBound = true;
@@ -1455,7 +1494,7 @@ export class Audio {
     const rig = new Rig(off, bus, new Rand(hashStr('mm6sfx:' + id)));
     try { spec.build(rig); } catch (e) { /* a broken recipe must not kill audio */ }
 
-    const p = off.startRendering().then((buf) => {
+    const p = renderOffline(off).then((buf) => {
       const done = finish(this.ctx, buf, spec);
       this.buffers.set(id, done);
       this.pending.delete(id);
@@ -1468,14 +1507,20 @@ export class Audio {
   /** Debug/verification hook: force a render and hand back the raw buffer. */
   renderToBuffer(id) { return this._ensure(id); }
 
-  /** Render everything. Used by the preview page and the audit tool. */
-  async prerenderAll(onProgress) {
-    const ids = SFX_IDS.slice();
+  /**
+   * Bake a named set ahead of time. The loading screen should hand this the
+   * sounds the region about to load will actually use - ambience beds are the
+   * expensive ones (7 s each) and are worth paying for behind a progress bar.
+   */
+  async prerender(ids, onProgress) {
     for (let i = 0; i < ids.length; i += 8) {
       await Promise.all(ids.slice(i, i + 8).map((id) => this._ensure(id)));
       if (onProgress) onProgress(Math.min(1, (i + 8) / ids.length));
     }
   }
+
+  /** Render everything. Used by the preview page and the audit tool. */
+  prerenderAll(onProgress) { return this.prerender(SFX_IDS.slice(), onProgress); }
 
   // -- playback -------------------------------------------------------------
 
@@ -1491,10 +1536,8 @@ export class Audio {
     g.gain.value = vol;
     let node = g;
     if (opts.pan) {
-      const p = ctx.createStereoPanner();
-      p.pan.value = clamp(opts.pan, -1, 1);
-      g.connect(p);
-      node = p;
+      const p = mkPan(ctx, clamp(opts.pan, -1, 1));
+      if (p) { g.connect(p); node = p; }
     }
     node.connect(bus || this.sfxBus);
     src.connect(g);
@@ -1585,9 +1628,8 @@ export class Audio {
       g.gain.value = 0;
       let node = g;
       if (opts.pan) {
-        const p = ctx.createStereoPanner();
-        p.pan.value = clamp(opts.pan, -1, 1);
-        g.connect(p); node = p;
+        const p = mkPan(ctx, clamp(opts.pan, -1, 1));
+        if (p) { g.connect(p); node = p; }
       }
       node.connect(opts.bus || this.sfxBus);
       src.connect(g);
@@ -1631,11 +1673,17 @@ export class Audio {
     this.sfxBus.gain.linearRampToValueAtTime(this.vol.sfx, t + 0.12);
   }
 
-  suspend() { if (this.ctx && this.ctx.state === 'running') return this.ctx.suspend(); }
+  /** Let suspend/resume cascade into the score without the shell wiring it. */
+  attachMusic(music) { this.music = music; }
+
+  suspend() {
+    if (this.music) this.music.suspend();
+    if (this.ctx && this.ctx.state === 'running') return this.ctx.suspend();
+  }
   resume() {
     if (!this.ctx) return Promise.resolve();
-    if (this.ctx.state === 'suspended') return this.ctx.resume().catch(() => {});
-    return Promise.resolve();
+    const done = this.ctx.state === 'suspended' ? this.ctx.resume().catch(() => {}) : Promise.resolve();
+    return done.then(() => { if (this.music) this.music.resume(); });
   }
 
   get voiceCount() { return this.voices; }

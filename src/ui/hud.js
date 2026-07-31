@@ -102,10 +102,13 @@ export class HUD {
     const m = this.minimapRect;
     UI.drawInset(g, m.x - 4, m.y - 4, m.w + 8, m.h + 8);
     for (let i = 0; i < 4; i++) {
-      UI.drawInset(g, PORTRAIT_X[i] - 4, PORTRAIT_Y - 4, PORTRAIT_W + 8, PORTRAIT_H + 8);
-      // Recessed tubes for health and spell points.
-      UI.drawInset(g, HP_X[i] - 1, BAR_Y - 1, BAR_W + 2, BAR_H + 2);
-      UI.drawInset(g, SP_X[i] - 1, BAR_Y - 1, BAR_W + 2, BAR_H + 2);
+      // Arch-topped niches, with the health and spell tubes let into the stone
+      // on either side of each portrait.
+      const niche = UI.drawPortraitNiche || UI.drawInset;
+      niche(g, PORTRAIT_X[i] - 6, PORTRAIT_Y - 8, PORTRAIT_W + 12, PORTRAIT_H + 14);
+      const well = UI.drawTubeWell || UI.drawInset;
+      well(g, HP_X[i] - 2, BAR_Y - 2, BAR_W + 4, BAR_H + 4);
+      well(g, SP_X[i] - 2, BAR_Y - 2, BAR_W + 4, BAR_H + 4);
     }
 
     this._chromeCache = c;
@@ -309,15 +312,17 @@ export class HUD {
       const p = getPortrait(ch.portraitSeed, { sex: ch.sex, klass: ch.klass }, this.expressionFor(ch));
       ctx.drawImage(p, px, PORTRAIT_Y);
 
-      // Ready-to-act marker: green when the character can act, red while
-      // recovering. In turn-based mode only queued characters show one.
+      // Ready-to-act marker: a small pip above the portrait, green when the
+      // character can act and red while they are still recovering.
       const ready = ch.recovery <= 0 && ch.hp > 0;
-      UI.drawIcon(ctx, ready ? 'init_green' : 'init_red',
-        px + READY_DX, PORTRAIT_Y + READY_DY, PORTRAIT_W + 8);
+      if (!S.turnBased || S.turnQueue.includes(i)) {
+        UI.drawIcon(ctx, ready ? 'init_green' : 'init_red',
+          px + PORTRAIT_W / 2 - 5, PORTRAIT_Y + READY_DY - 6, 10);
+      }
 
       if (i === S.activeChar) {
         UI.drawPortraitFrame(ctx, px + SELECT_DX, PORTRAIT_Y + SELECT_DY,
-          PORTRAIT_W + 18, PORTRAIT_H + 16, 'active');
+          PORTRAIT_W - 2 * SELECT_DX, PORTRAIT_H - 2 * SELECT_DY, 'active');
       }
 
       // Vertical tubes: health on the left of the portrait, spell on the right.

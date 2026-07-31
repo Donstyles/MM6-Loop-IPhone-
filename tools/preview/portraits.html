@@ -70,7 +70,7 @@ if (true) {
 
 // --- B: all expressions ----------------------------------------------------
 function exprSheet(face, host) {
-  const Z = 3, COLS = 6, CW = PW * Z + 8, CH = PH * Z + 16;
+  const Z = 3, COLS = 7, CW = PW * Z + 8, CH = PH * Z + 16;
   const { c, g } = sheetOf(COLS * CW + 8, Math.ceil(EXPRESSIONS.length / COLS) * CH + 8);
   EXPRESSIONS.forEach((e, i) => {
     const p = renderPortrait(face, e);

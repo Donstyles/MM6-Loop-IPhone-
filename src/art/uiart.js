@@ -67,7 +67,50 @@ function rect(g, x, y, w, h, color) {
 function hline(g, x, y, w, color) { rect(g, x, y, w, 1, color); }
 function vline(g, x, y, h, color) { rect(g, x, y, 1, h, color); }
 
+// --- UI palette ------------------------------------------------------------
+// The chrome does NOT go through the world's 256-colour table. MM6's HUD ships
+// as separate PCX images with their own palettes, and ours has no neutral warm
+// greys at all - snapping #5A5248 through it lands on rgb(94,84,62), which is
+// why an early pass came out looking like a tan picture frame. So we palettise
+// the chrome to its own fixed table built from the material ramps: still a hard
+// banded 8-bit surface with no gradients, just in the right hues.
+const UI_PALETTE = [];
+function buildUiPalette() {
+  const push = (c) => UI_PALETTE.push([Math.round(c[0]), Math.round(c[1]), Math.round(c[2])]);
+  for (const r of [STONE, BRASS, WOOD, PARCH]) for (let i = 0; i < 16; i++) push(r(i / 15));
+  for (let i = 0; i < 8; i++) push([i * 36, i * 36, i * 36]);        // neutrals
+  for (const c of [LEATHER, PAGE_SPELL, PAGE_BOOK, BAR_EMPTY]) push(c);
+  for (const h of [0x28c828, 0x0c7a0c, 0xe0d020, 0x8a7c0c, 0xd02010, 0x7a1408,
+    0x2848d8, 0x122a7a, 0x1a1208, 0x0e0c0a]) push(hexC(h));
+}
+buildUiPalette();
+
+function uiNearest(r, g, b) {
+  let best = 0, bd = Infinity;
+  for (let i = 0; i < UI_PALETTE.length; i++) {
+    const p = UI_PALETTE[i];
+    const dr = r - p[0], dg = g - p[1], db = b - p[2];
+    const d = 0.30 * dr * dr + 0.59 * dg * dg + 0.11 * db * db;
+    if (d < bd) { bd = d; best = i; }
+  }
+  return UI_PALETTE[best];
+}
+
 function quantise(canvas) {
+  const g = ctx2d(canvas);
+  const img = g.getImageData(0, 0, canvas.width, canvas.height);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i + 3] === 0) continue;
+    const p = uiNearest(d[i], d[i + 1], d[i + 2]);
+    d[i] = p[0]; d[i + 1] = p[1]; d[i + 2] = p[2];
+  }
+  g.putImageData(img, 0, 0);
+  return canvas;
+}
+
+/** Palettise through the world table instead - for art that sits in the 3D view. */
+export function worldQuantise(canvas) {
   const g = ctx2d(canvas);
   const img = g.getImageData(0, 0, canvas.width, canvas.height);
   quantizeImageData(img);
@@ -81,7 +124,7 @@ function quantise(canvas) {
  * Paint the mottled stone body of a panel into a Pix.
  * Fine grain plus a couple of darker veins; flat fills read as plastic.
  */
-function stoneBody(pix, seed, base = 0.50, spread = 0.16) {
+function stoneBody(pix, seed, base = 0.36, spread = 0.22) {
   const { w, h } = pix;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -91,11 +134,30 @@ function stoneBody(pix, seed, base = 0.50, spread = 0.16) {
       let t = base + (coarse - 0.5) * spread * 2 + (fine - 0.5) * 0.035;
       // Sparse darker veins running diagonally, like the original's cast panels.
       const vein = tileFbm2(x * 0.035 + y * 0.012, y * 0.09, 64, 2, 0.5, seed + 401);
-      if (vein > 0.62) t -= (vein - 0.62) * 0.55;
-      pix.setArr(x, y, stoneTone(t));
+      if (vein > 0.62) t -= (vein - 0.62) * 0.60;
+      pix.setArr(x, y, STONE(t));
     }
   }
   return pix;
+}
+
+/**
+ * Cut a recessed groove. Grooves are lit the opposite way to raised forms - the
+ * hard shadow is on the TOP/LEFT lip and the light catches the BOTTOM/RIGHT -
+ * which is the single cue that makes a panel read as carved rather than printed.
+ */
+function drawGroove(g, x, y, w, h, depth = 2) {
+  hline(g, x, y, w, STONE(0.02));
+  vline(g, x, y, h, STONE(0.02));
+  hline(g, x, y + h - 1, w, STONE(0.88));
+  vline(g, x + w - 1, y, h, STONE(0.88));
+  // Floor of the cut, darker than the field around it.
+  for (let d = 1; d < depth; d++) {
+    hline(g, x + d, y + d, w - d * 2, STONE(0.10));
+    vline(g, x + d, y + d, h - d * 2, STONE(0.10));
+    hline(g, x + d, y + h - d - 1, w - d * 2, STONE(0.30));
+    vline(g, x + w - d - 1, y + d, h - d * 2, STONE(0.30));
+  }
 }
 
 /**
@@ -106,12 +168,22 @@ function stoneBody(pix, seed, base = 0.50, spread = 0.16) {
 export function stonePanel(w, h, opts = {}) {
   const {
     seed = 7, gold = false, rivets = false,
-    base = 0.50, spread = 0.16, groove = true, wood = false,
+    base = 0.36, spread = 0.22, groove = true, wood = false,
   } = opts;
   w = Math.max(6, w | 0); h = Math.max(6, h | 0);
 
   const pix = new Pix(w, h);
   stoneBody(pix, seed, base, spread);
+  // Dome the field very slightly - brighter along the top third, falling away
+  // to the bottom - so the slab has volume before any edge treatment.
+  for (let y = 0; y < h; y++) {
+    const v = h < 8 ? 0 : (1 - y / h) * 0.10 - 0.03;
+    for (let x = 0; x < w; x++) {
+      const u = w < 8 ? 0 : (1 - Math.abs(x / w - 0.5) * 2) * 0.04;
+      const c = pix.get(x, y);
+      pix.setArr(x, y, [c[0] * (1 + v + u), c[1] * (1 + v + u), c[2] * (1 + v + u)]);
+    }
+  }
   const canvas = pix.toCanvas();
   const g = ctx2d(canvas);
 
@@ -128,45 +200,45 @@ export function stonePanel(w, h, opts = {}) {
       { depth: 1, raised: false, light: WOOD(0.85), dark: hexC(0x1a1208) });
   }
 
-  // Raised outer bevel: 2px lit top/left, 2px shadowed bottom/right.
-  hline(g, 0, 0, w, STONE_EDGE_HI);
-  vline(g, 0, 0, h, STONE_EDGE_HI);
-  hline(g, 1, 1, w - 2, STONE_HI);
-  vline(g, 1, 1, h - 2, STONE_HI);
-  hline(g, 0, h - 1, w, STONE_EDGE_LO);
-  vline(g, w - 1, 0, h, STONE_EDGE_LO);
+  // Hard outer keyline, then a 2px raised arris: lit top/left, dark bottom/right.
+  hline(g, 0, 0, w, STONE(0.00));
+  vline(g, 0, 0, h, STONE(0.00));
+  hline(g, 0, h - 1, w, STONE(0.00));
+  vline(g, w - 1, 0, h, STONE(0.00));
+  hline(g, 1, 1, w - 2, STONE_EDGE_HI);
+  vline(g, 1, 1, h - 2, STONE_EDGE_HI);
+  hline(g, 2, 2, w - 4, STONE_HI);
+  vline(g, 2, 2, h - 4, STONE_HI);
   hline(g, 1, h - 2, w - 2, STONE_LO);
   vline(g, w - 2, 1, h - 2, STONE_LO);
+  hline(g, 2, h - 3, w - 4, STONE(0.28));
+  vline(g, w - 3, 2, h - 4, STONE(0.28));
 
-  // Recessed groove 3px in - the "carved slab" cut.
-  if (groove && w > 12 && h > 12) {
-    const i = 3;
-    hline(g, i, i, w - i * 2, STONE_LO);
-    vline(g, i, i, h - i * 2, STONE_LO);
-    hline(g, i, h - i - 1, w - i * 2, STONE_EDGE_HI);
-    vline(g, w - i - 1, i, h - i * 2, STONE_EDGE_HI);
-    // Bottom of the cut is darker still so it reads as depth, not a line.
-    hline(g, i + 1, i + 1, w - i * 2 - 2, STONE_EDGE_LO);
-    vline(g, i + 1, i + 1, h - i * 2 - 2, STONE_EDGE_LO);
+  // The deep cut 4px in, then a second inner chamfer that lifts the field back
+  // up. Groove -> field -> chamfer is the whole "carved slab" read.
+  if (groove && w > 18 && h > 18) {
+    drawGroove(g, 4, 4, w - 8, h - 8, 2);
+    drawBevel(g, 7, 7, w - 14, h - 14, { depth: 1, raised: true, light: STONE(0.70), dark: STONE(0.20) });
   }
 
-  if (gold && w > 16 && h > 16) {
-    const i = 5;
+  if (gold && w > 20 && h > 20) {
+    // Brass reads as a thin inlay following the groove, never as a filled area.
+    const i = 6;
     const gm = goldC(8), gh = goldC(13), gd = goldC(4);
-    hline(g, i, i, w - i * 2, gm);
-    vline(g, i, i, h - i * 2, gm);
-    hline(g, i, h - i - 1, w - i * 2, gd);
-    vline(g, w - i - 1, i, h - i * 2, gd);
-    // Brighter nubs at the corners where the trim is pinned down.
+    hline(g, i, i, w - i * 2, gd);
+    vline(g, i, i, h - i * 2, gd);
+    hline(g, i, h - i - 1, w - i * 2, gm);
+    vline(g, w - i - 1, i, h - i * 2, gm);
+    // Small fittings pinning the inlay down at the corners.
     for (const [cx, cy] of [[i, i], [w - i - 1, i], [i, h - i - 1], [w - i - 1, h - i - 1]]) {
       rect(g, cx - 1, cy - 1, 3, 3, gm);
       rect(g, cx - 1, cy - 1, 2, 2, gh);
-      rect(g, cx, cy, 1, 1, gh);
+      rect(g, cx + 1, cy + 1, 1, 1, gd);
     }
   }
 
   if (rivets) {
-    const m = gold ? 8 : 6;
+    const m = gold ? 9 : 7;
     for (const [cx, cy] of [[m, m], [w - m - 1, m], [m, h - m - 1], [w - m - 1, h - m - 1]]) {
       drawRivet(g, cx, cy);
     }
@@ -176,7 +248,7 @@ export function stonePanel(w, h, opts = {}) {
 }
 
 export function drawStonePanel(ctx, x, y, w, h, opts = {}) {
-  const key = `sp:${w}:${h}:${opts.seed || 7}:${opts.gold ? 1 : 0}:${opts.rivets ? 1 : 0}:${opts.base || ''}:${opts.groove === false ? 0 : 1}`;
+  const key = `sp:${w}:${h}:${opts.seed || 7}:${opts.gold ? 1 : 0}:${opts.rivets ? 1 : 0}:${opts.base || ''}:${opts.groove === false ? 0 : 1}:${opts.wood ? 1 : 0}`;
   const c = cached(key, () => stonePanel(w, h, opts));
   const s = ctx.imageSmoothingEnabled;
   ctx.imageSmoothingEnabled = false;
@@ -185,13 +257,13 @@ export function drawStonePanel(ctx, x, y, w, h, opts = {}) {
   return c;
 }
 
-/** A 3px domed stud lit from the upper left. */
+/** A 3px domed brass stud lit from the upper left. */
 function drawRivet(g, cx, cy) {
-  rect(g, cx - 1, cy - 1, 3, 3, stoneTone(0.20));
-  rect(g, cx - 1, cy - 1, 2, 2, stoneTone(0.62));
-  rect(g, cx, cy, 2, 2, stoneTone(0.36));
-  rect(g, cx + 1, cy + 1, 1, 1, stoneTone(0.10));
-  rect(g, cx - 1, cy - 1, 1, 1, stoneTone(0.78));
+  rect(g, cx - 1, cy - 1, 3, 3, BRASS(0.22));
+  rect(g, cx - 1, cy - 1, 2, 2, BRASS(0.70));
+  rect(g, cx, cy, 2, 2, BRASS(0.45));
+  rect(g, cx + 1, cy + 1, 1, 1, STONE(0.02));
+  rect(g, cx - 1, cy - 1, 1, 1, BRASS(1));
 }
 
 export function drawRivets(ctx, x, y, w, h, spacing = 16) {
@@ -562,6 +634,80 @@ export function drawPortraitFrame(ctx, x, y, w, h, state = 'normal') {
   }
 }
 
+/**
+ * The arch-topped recess a party portrait sits in. Four of these across the
+ * bottom bar are most of what makes the HUD read as a dungeon lintel: the
+ * shadow falls inside the top-left of the opening and the lit lip is along the
+ * bottom-right, which is the opposite of a raised frame.
+ */
+export function drawPortraitNiche(ctx, x, y, w, h, opts = {}) {
+  x |= 0; y |= 0; w |= 0; h |= 0;
+  const { fill = null, arch = Math.min(h >> 1, w >> 1) } = opts;
+  const cx = x + w / 2;
+  // Row-by-row half-width: straight sides below the springing line, a circular
+  // arch above it.
+  const inset = (row) => {
+    const dy = arch - row;                      // >0 while inside the arch
+    if (dy <= 0) return 0;
+    const r = w / 2;
+    const dx = r - Math.sqrt(Math.max(0, r * r - dy * dy));
+    return Math.round(dx);
+  };
+
+  for (let row = 0; row < h; row++) {
+    const i = inset(row);
+    const left = x + i, right = x + w - 1 - i;
+    if (right < left) continue;
+    if (fill) rect(ctx, left, y + row, right - left + 1, 1, fill);
+    // Inner shadow on the left/top of the opening.
+    rect(ctx, left, y + row, 2, 1, STONE(0.04));
+    rect(ctx, left + 2, y + row, 1, 1, STONE(0.18));
+    // Lit lower-right lip.
+    rect(ctx, right - 1, y + row, 2, 1, STONE(0.66));
+    rect(ctx, right - 2, y + row, 1, 1, STONE(0.40));
+  }
+  // The arch soffit itself: darkest right under the crown.
+  for (let row = 0; row < arch; row++) {
+    const i = inset(row);
+    const left = x + i, right = x + w - 1 - i;
+    if (right < left) continue;
+    const k = 1 - row / Math.max(1, arch);
+    if (k > 0.35) rect(ctx, left, y + row, right - left + 1, 1, STONE(0.06 + (1 - k) * 0.10));
+  }
+  // Brass keystone at the crown, and a sill under the opening.
+  const kw = Math.max(3, w >> 3);
+  rect(ctx, Math.round(cx - kw / 2), y - 1, kw, 3, BRASS(0.55));
+  rect(ctx, Math.round(cx - kw / 2), y - 1, kw, 1, BRASS(0.90));
+  hline(ctx, x - 1, y + h, w + 2, STONE(0.80));
+  hline(ctx, x - 1, y + h + 1, w + 2, STONE(0.14));
+}
+
+/** A recessed inset-wood rectangle - the panels let into the stone bar. */
+export function drawWoodInset(ctx, x, y, w, h, seed = 5) {
+  x |= 0; y |= 0; w |= 0; h |= 0;
+  for (let py = 0; py < h; py++) {
+    for (let px = 0; px < w; px++) {
+      // Grain runs along the panel; knots are cheap fbm at a second scale.
+      const grain = tileFbm2(px * 0.05, py * 0.5, 64, 3, 0.55, seed);
+      const knot = tileFbm2(px * 0.12, py * 0.12, 64, 2, 0.5, seed + 31);
+      rect(ctx, x + px, y + py, 1, 1, WOOD(0.32 + (grain - 0.5) * 0.5 + (knot - 0.5) * 0.18));
+    }
+  }
+  drawBevel(ctx, x, y, w, h, { depth: 1, raised: false, light: STONE(0.80), dark: hexC(0x140e08) });
+  drawBevel(ctx, x - 1, y - 1, w + 2, h + 2, { depth: 1, raised: false, light: STONE(0.88), dark: STONE(0.06) });
+}
+
+/** The 5 x 49 recessed slot an HP/SP tube is let into. */
+export function drawTubeWell(ctx, x, y, w = 5, h = 49) {
+  x |= 0; y |= 0; w |= 0; h |= 0;
+  rect(ctx, x - 1, y - 1, w + 2, h + 2, STONE(0.22));
+  drawBevel(ctx, x - 1, y - 1, w + 2, h + 2, { depth: 1, raised: false, light: STONE(0.78), dark: STONE(0.02) });
+  rect(ctx, x, y, w, h, BAR_EMPTY);
+  // Brass collars top and bottom, the fitting that holds the tube.
+  hline(ctx, x - 1, y - 2, w + 2, BRASS(0.72));
+  hline(ctx, x - 1, y + h + 1, w + 2, BRASS(0.30));
+}
+
 // --- decorative ------------------------------------------------------------
 
 /** A run of brass vine-work along a band; seeded so panels differ. */
@@ -699,9 +845,9 @@ const ICON_SRC = {
     '', '.NN...nnnn...NN.', '..NNnnnnnnnnNN..', '...NNNNNNNNNN...',
   ],
   quickref: [
-    '', '..kkkkkkkkkkkk..', '..keeeeeeeeeeEk.', '..ke.kkkk....Ek.', '..ke.k..k....Ek.',
-    '..ke....k....Ek.', '..ke...k.....Ek.', '..ke..k......Ek.', '..ke.........Ek.',
-    '..ke..k......Ek.', '..ke.........Ek.', '..keEEEEEEEEEEk.', '..kkkkkkkkkkkk..',
+    '', '..NNNNNNNNNN....', '.NeeeeeeeeeeN...', '.Ne.NNNNN..eN...', '.Ne.N...N..eN...',
+    '.Ne.....N..eN...', '.Ne....N...eN...', '.Ne...N....eN...', '.Ne........eN...',
+    '.Ne...N....eN...', '.NeEEEEEEEEeN...', '.NeeeeeeeeeeN...', '..NNNNNNNNNN....',
   ],
   options: [
     '', '......ll........', '.....lmml.......', '..l..lXXl..l....', '.llllmXXmllll...',
@@ -722,9 +868,9 @@ const ICON_SRC = {
     '...NNNNNyNNNNN..',
   ],
   map: [
-    '', '..eeeeEeeeeEee..', '.eeEeeeeEeeeeEe.', '.ee.RR.eeeee.ee.', '.eeR..Reeeeeeee.',
-    '.ee.RR..eee.eee.', '.eeeeeeeeeGeeee.', '.eeGeeeeeGGGeee.', '.eeeee..eeGeeee.',
-    '.eeee.RR..eeeee.', '.eEee..RR.eeeEe.', '.eeeeeeeeeeeeee.', '..eeeEeeeeEeee..',
+    '', '.eeeeeeeeeeeee..', '.eEeeeeeeeeeEe..', '.eeGGeeeeeeeee..', '.eeGGeeeeeeeee..',
+    '.eeeeeeeeeeeee..', '.eeeeeR.Reeeee..', '.eeeeeeReeeeee..', '.eeeeeR.Reeeee..',
+    '.eeeeeeeeeGeeee.', '.eEeeeeeeGGGeee.', '.eeeeeeeeeGeeee.', '.eeeeeeeeeeeee..',
   ],
   quest: [
     '', '.....kkkkkk.....', '....keeeeeek....', '...keEEEEEEek...', '...ke.RRRR.ek...',
@@ -738,9 +884,9 @@ const ICON_SRC = {
     '..keNNNNN...yYe.', '..ke.......yY...', '..keeeeeeyY.....', '..kkkkkkY.......',
   ],
   history: [
-    '', '.....mmmmm......', '...mmlllllmm....', '..ml.......lm...', '..ml...k...lm...',
-    '.ml....k....lm..', '.ml....kkk..lm..', '..ml.......lm...', '..ml.......lm...',
-    '...mmlllllmm....', '.....mmmmm......',
+    '', '.....yyyy.......', '...yy....yy.....', '..y........y....', '.y....y.....y...',
+    '.y....y.....y...', 'y.....yyyy...y..', '.y..........y...', '.y..........y...',
+    '..y........y....', '...yy....yy.....', '.....yyyy.......',
   ],
   zoom_in: [
     '', '....llllll......', '...lXXXXXXl.....', '..lXXXwwXXXl....', '..lXwwwwwwXl....',
@@ -823,14 +969,14 @@ const ICON_SRC = {
     '..SSSS..........',
   ],
   cond_afraid: [
-    '', '......ooo.......', '.....oyyyo......', '....oykkkyo.....', '....oyk.kyo.....',
-    '....oykkkyo.....', '....oyyyyyo.....', '....oyk.kyo.....', '....oykkkyo.....',
-    '....oyyyyyo.....', '.....oyyyo......', '......ooo.......',
+    '', '', '...ssssss.......', '..s......s......', '.s.dd..dd.s.....',
+    '.s.dd..dd.s.....', '.s........s.....', '.s...dd...s.....', '.s..dddd..s.....',
+    '..s.dddd.s......', '...ssssss.......',
   ],
   cond_drunk: [
-    '', '..llllllll......', '..lXXXXXXl......', '..lXwwwwXl.lll..', '..lXwwwwXl.l.l..',
-    '..lXXXXXXl.l.l..', '..lXwwwwXllll...', '..lXwwwwXl......', '..lXXXXXXl......',
-    '..lXwwwwXl......', '..llllllll......', '..lllllll.......',
+    '', '..llllllll......', '..lXXXXXXl......', '..loooooXl.lll..', '..loooooXl.l.l..',
+    '..lnnnnnXl.l.l..', '..lnnnnnXllll...', '..lnnnnnXl......', '..lnnnnnXl......',
+    '..lnnnnnXl......', '..llllllll......', '...llllll.......',
   ],
   cond_insane: [
     '', '.....ppppp......', '...pp.....pp....', '..p...ppp...p...', '..p..p...p..p...',
@@ -971,9 +1117,9 @@ const ICON_SRC2 = {
     'RrrrrRrrrrRrrrrR', 'RRrrrRrrrrRrrrRR', '.RRRRRrrrrRRRRR.', '.....RRRRRR.....',
   ],
   slot_amulet: [
-    '', '..yy........yy..', '...yy......yy...', '....yy....yy....', '.....yy..yy.....',
-    '......yyyy......', '.......yy.......', '......yYYy......', '.....yYbbYy.....',
-    '.....yYbSbYy....', '.....yYbbbYy....', '......yYYy......', '.......yy.......',
+    '', '.y........y.....', '..y......y......', '..y......y......', '...y....y.......',
+    '....y..y........', '.....yy.........', '....yyyy........', '...yYbbYy.......',
+    '...yYbSbYy......', '...yYbbbYy......', '....yyyy........',
   ],
   slot_ring: [
     '', '', '.......bb.......', '......bSSb......', '.....yybbyy.....', '....yyYYYYyy....',
@@ -1092,32 +1238,92 @@ Object.assign(ICON_SRC, ICON_SRC2, ICON_SRC3);
 export const ICONS = Object.keys(ICON_SRC);
 
 const _iconCache = new Map();
+const _iconGrid = new Map();
+const OUTLINE = hexC(0x0e0c0a);
 
-/** Render an icon to its own canvas, integer-scaled from the 16x16 source. */
+/**
+ * Turn the authored 16x16 character grid into painted pixels.
+ *
+ * The source art is flat blocks of colour, which reads as a modern flat icon
+ * set. MM6's icons are painted: muted, outlined, and lit from the upper left.
+ * So every icon gets the same treatment here rather than being hand-shaded 78
+ * times - desaturate a quarter, lift the pixels whose up/left neighbour is
+ * empty, drop the ones whose down/right neighbour is empty, then ring the whole
+ * silhouette in near-black.
+ */
+function iconGrid(id) {
+  let grid = _iconGrid.get(id);
+  if (grid) return grid;
+  const src = ICON_SRC[id] || [];
+  const N = 16;
+  const cells = new Array(N * N).fill(null);
+  const solid = new Uint8Array(N * N);
+
+  for (let y = 0; y < N; y++) {
+    const row = src[y] || '';
+    for (let x = 0; x < N; x++) {
+      const ch = row[x];
+      if (!ch || ch === '.' || ch === ' ') continue;
+      const c = IKEY[ch];
+      if (!c) continue;
+      // Mute: pull a quarter of the way to the pixel's own luma.
+      const l = c[0] * 0.30 + c[1] * 0.59 + c[2] * 0.11;
+      cells[y * N + x] = mixC(c, [l, l, l], 0.25);
+      solid[y * N + x] = 1;
+    }
+  }
+
+  const at = (x, y) => (x < 0 || y < 0 || x >= N || y >= N ? 0 : solid[y * N + x]);
+  const shaded = cells.slice();
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      if (!solid[y * N + x]) continue;
+      const c = cells[y * N + x];
+      const lit = !at(x - 1, y) || !at(x, y - 1);
+      const dark = !at(x + 1, y) || !at(x, y + 1);
+      if (lit && !dark) shaded[y * N + x] = mixC(c, [255, 255, 255], 0.26);
+      else if (dark && !lit) shaded[y * N + x] = scaleC(c, 0.66);
+    }
+  }
+  // Outline last so the shading never eats it.
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      if (solid[y * N + x]) continue;
+      let touch = false;
+      for (let dy = -1; dy <= 1 && !touch; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if ((dx || dy) && at(x + dx, y + dy)) { touch = true; break; }
+        }
+      }
+      if (touch) shaded[y * N + x] = OUTLINE;
+    }
+  }
+  grid = shaded;
+  _iconGrid.set(id, grid);
+  return grid;
+}
+
+/** Render an icon to its own canvas, nearest-sampled from the 16x16 source. */
 export function iconCanvas(id, size = 16) {
   const s = Math.max(4, size | 0);
   const key = id + ':' + s;
   let c = _iconCache.get(key);
   if (c) return c;
 
-  const src = ICON_SRC[id];
   const canvas = makeCanvas(s, s);
-  if (!src) { _iconCache.set(key, canvas); return canvas; }
+  if (!ICON_SRC[id]) { _iconCache.set(key, canvas); return canvas; }
+  const grid = iconGrid(id);
 
   const g = ctx2d(canvas);
   const img = g.createImageData(s, s);
   const d = img.data;
-  // Nearest sample from the 16x16 grid so any size stays crisp; sizes that are
-  // not multiples of 16 just drop or double rows, which is what the original
-  // scaled art did too.
+  // Sizes that are not multiples of 16 just drop or double rows, which is what
+  // the original's scaled art did too.
   for (let y = 0; y < s; y++) {
     const sy = Math.min(15, Math.floor((y * 16) / s));
-    const row = src[sy] || '';
     for (let x = 0; x < s; x++) {
       const sx = Math.min(15, Math.floor((x * 16) / s));
-      const ch = row[sx];
-      if (!ch || ch === '.' || ch === ' ') continue;
-      const c2 = IKEY[ch];
+      const c2 = grid[sy * 16 + sx];
       if (!c2) continue;
       const p = (y * s + x) * 4;
       d[p] = c2[0]; d[p + 1] = c2[1]; d[p + 2] = c2[2]; d[p + 3] = 255;

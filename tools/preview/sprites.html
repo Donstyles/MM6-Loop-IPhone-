@@ -17,8 +17,8 @@
 <div id="out"></div>
 <script type="module">
 import * as THREE from 'three';
-import { getSheet, bakeSheet, ANGLES } from '/src/art/spritebake.js';
-import { CREATURE_DEFS, NPC_ARCHETYPES, ACTIONS, buildNPC } from '/src/art/models/creatures.js';
+import { getSheet, bakeSheet, ANGLES, VIEWS } from '/src/art/spritebake.js';
+import { CREATURE_DEFS, CREATURE_FAMILIES, CREATURE_TIERS, NPC_ARCHETYPES, ACTIONS } from '/src/art/models/creatures.js';
 import { FLORA_KINDS } from '/src/art/models/flora.js';
 import { PROP_KINDS } from '/src/art/models/props.js';
 
@@ -59,14 +59,23 @@ function label(g, text, x, y, col = '#f0e0a0') {
   g.fillText(text, x, y);
 }
 
-/** Draw one strip of cells from a sheet. */
+/** Draw one strip of cells from a sheet, honouring the octant mirror flag. */
 function strip(g, sheet, cells, x, y, zoom, bg) {
   const w = sheet.cellW * zoom, h = sheet.cellH * zoom;
   if (bg === 'checker') checker(g, x, y, w * cells.length, h);
   else { g.fillStyle = bg; g.fillRect(x, y, w * cells.length, h); }
   cells.forEach((c, i) => {
     const r = sheet.rect(c[0], c[1], c[2]);
-    g.drawImage(sheet.canvas, r.x, r.y, r.w, r.h, x + i * w, y, w, h);
+    const dx = x + i * w;
+    if (r.mirror) {
+      g.save();
+      g.translate(dx + w, y);
+      g.scale(-1, 1);
+      g.drawImage(sheet.canvas, r.x, r.y, r.w, r.h, 0, 0, w, h);
+      g.restore();
+    } else {
+      g.drawImage(sheet.canvas, r.x, r.y, r.w, r.h, dx, y, w, h);
+    }
   });
   return { w: w * cells.length, h };
 }
@@ -89,33 +98,36 @@ function sheetOf(cat, kind, seed = 3) {
 }
 
 function pageAngles(kinds, cat) {
-  heading(`${cat}: 8 angles (stand frame 0) at 2x  -  angle 0 = facing camera, 4 = back`);
+  heading(`${cat}: all 8 octants (stand frame 0) - octant 0 faces the camera, 4 is the back, 5-7 are mirrors of 3-1`);
   for (const kind of kinds) {
     const sh = sheetOf(cat, kind);
-    const zoom = Math.max(1, Math.min(3, Math.floor(120 / sh.cellH) || 1));
+    const zoom = Math.max(1, Math.min(3, Math.floor(150 / sh.cellH) || 1));
     const cells = [];
     for (let a = 0; a < ANGLES; a++) cells.push(['stand', 0, a]);
     const { c, g } = makeCv(1390, sh.cellH * zoom + 16);
     g.fillStyle = '#14151a'; g.fillRect(0, 0, c.width, c.height);
-    label(g, `${kind}  ${sh.atlasW}x${sh.atlasH}  cell ${sh.cellW}x${sh.cellH}  frames ${sh.frames}`, 4, 11);
+    const nm = CREATURE_DEFS[kind] ? CREATURE_DEFS[kind].name : (CREATURE_FAMILIES[kind] ? CREATURE_FAMILIES[kind].tiers[0].name : kind);
+    label(g, `${kind} (${nm})  atlas ${sh.atlasW}x${sh.atlasH}  cell ${sh.cellW}x${sh.cellH}  ${sh.frames}f x ${sh.views}v  world ${sh.worldH | 0}u`, 4, 11);
     strip(g, sh, cells, 4, 14, zoom, 'checker');
-    // the same 8 angles on magenta: any soft edge shows up instantly
+    // the same octants on magenta: any soft edge shows up instantly
     strip(g, sh, cells, 4 + sh.cellW * zoom * 8 + 12, 14, zoom, '#c0208c');
     out.appendChild(c);
   }
 }
 
 function pageAnim(kinds) {
-  heading('walk (8) / attack (6) / cast (6) / die (8), viewed at angle 2 and angle 0, 2x');
+  heading('animation groups at octant 2 (side) and octant 6 (mirrored side), 2x');
   for (const kind of kinds) {
     const sh = sheetOf('creature', kind);
     const zoom = 2;
+    const n = (a) => sh.actions[a].frames;
     const rows = [
-      ['walk a2', Array.from({ length: 8 }, (_, i) => ['walk', i, 2])],
-      ['walk a0', Array.from({ length: 8 }, (_, i) => ['walk', i, 0])],
-      ['attack a2', Array.from({ length: 6 }, (_, i) => ['attack', i, 2])],
-      ['cast a2', Array.from({ length: 6 }, (_, i) => ['cast', i, 2])],
-      ['die a2', Array.from({ length: 8 }, (_, i) => ['die', i, 2])],
+      ['walk o2', Array.from({ length: n('walk') }, (_, i) => ['walk', i, 2])],
+      ['walk o6*', Array.from({ length: n('walk') }, (_, i) => ['walk', i, 6])],
+      ['melee o2', Array.from({ length: n('attack_melee') }, (_, i) => ['attack_melee', i, 2])],
+      ['ranged o2', Array.from({ length: n('attack_ranged') }, (_, i) => ['attack_ranged', i, 2])],
+      ['bored o2', Array.from({ length: n('bored') }, (_, i) => ['bored', i, 2])],
+      ['dying o2', Array.from({ length: n('dying') }, (_, i) => ['dying', i, 2])],
     ];
     const h = 16 + rows.length * (sh.cellH * zoom + 4);
     const { c, g } = makeCv(1390, h);
@@ -131,7 +143,7 @@ function pageAnim(kinds) {
 }
 
 function pageGame(kinds) {
-  heading('in-game size: a 176-unit creature at ~1000 units is about 62px tall on a 460x352 buffer');
+  heading('in-game size: a 192-unit humanoid at 1000 units is ~65px tall on a 460x352 buffer (top row), and the same sprite at 3x (bottom)');
   const { c, g } = makeCv(1390, 620);
   g.fillStyle = '#5a6a4a'; g.fillRect(0, 0, c.width, 300);
   g.fillStyle = '#7c8fa8'; g.fillRect(0, 0, c.width, 120);
@@ -164,7 +176,7 @@ function pageAtlas(kinds) {
   }
 }
 
-const CREATURES = Object.keys(CREATURE_DEFS);
+const CREATURES = qs.get('tiers') ? Object.keys(CREATURE_TIERS) : Object.keys(CREATURE_FAMILIES);
 
 try {
   if (page === 'angles') pageAngles(CREATURES.slice(from, from + count), 'creature');

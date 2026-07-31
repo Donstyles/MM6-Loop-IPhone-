@@ -76,18 +76,30 @@ export async function startGame(shell) {
 
   session.modules = { partyMod, questMod, combatMod, monsterMod, itemMod, regionMod, dungeonMod, spriteMod, vfxMod };
 
-  if (audioMod && audioMod.Audio) {
-    session.audio = new audioMod.Audio();
-    // iOS will not start an AudioContext outside a gesture.
-    const kick = () => { session.audio.init(); removeEventListener('pointerdown', kick); };
-    addEventListener('pointerdown', kick, { once: true });
-  }
-  if (musicMod && musicMod.Music && session.audio) {
-    session.music = new musicMod.Music(session.audio);
-  }
-  if (vfxMod && vfxMod.VFXSystem) {
-    session.vfx = new vfxMod.VFXSystem(session.sprites);
-  }
+  // Audio, music and effects are all optional: a failure in any of them must
+  // not stop the game from starting.
+  try {
+    if (audioMod && audioMod.Audio) {
+      session.audio = new audioMod.Audio();
+      // iOS will not start an AudioContext outside a user gesture.
+      const kick = () => {
+        try {
+          session.audio.init();
+          if (musicMod && musicMod.Music && !session.music) {
+            const ctx = session.audio.ctx || session.audio.context;
+            const bus = session.audio.musicBus || session.audio.master || null;
+            if (ctx) session.music = new musicMod.Music(ctx, bus);
+          }
+        } catch (e) { console.warn('audio init failed', e); }
+        removeEventListener('pointerdown', kick);
+      };
+      addEventListener('pointerdown', kick, { once: true });
+    }
+  } catch (e) { console.warn('audio unavailable', e); }
+
+  try {
+    if (vfxMod && vfxMod.VFXSystem) session.vfx = new vfxMod.VFXSystem(session.sprites);
+  } catch (e) { console.warn('vfx unavailable', e); }
 
   // --- world ---------------------------------------------------------------
   session.setMap(emptyMap(), 'void');

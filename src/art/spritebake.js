@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { ditherImageData } from '../core/palette.js';
+import { PALETTE, nearestIndex } from '../core/palette.js';
 import { makeCanvas, ctx2d } from './texcanvas.js';
-import { ACTIONS, CREATURE_DEFS, buildCreature, buildNPC } from './models/creatures.js';
+import { ACTIONS, CREATURE_DEFS, CREATURE_FAMILIES, buildCreature, buildNPC } from './models/creatures.js';
 import { FLORA_DEFS, buildFlora } from './models/flora.js';
 import { PROP_DEFS, buildProp } from './models/props.js';
 
@@ -29,16 +29,33 @@ import { PROP_DEFS, buildProp } from './models/props.js';
 
 export const ANGLES = 8;
 
-// Light rig, in view space. Key from the upper-front-left, a cool bounce from
-// the lower right, and enough ambient that the shadow side keeps its hue.
+// MM6 ships five distinct views per animation frame and flags the other three
+// octants as horizontal mirrors (SPRITE_FRAME_MIRROR_n = 0x100 << n): octants
+// 5, 6 and 7 reuse the bitmaps of 3, 2 and 1. Baking the same way costs 40%
+// less atlas and is bit-for-bit the layout the engine expects.
+export const VIEWS = 5;
+export const OCTANT_VIEW = [0, 1, 2, 3, 4, 3, 2, 1];
+export const OCTANT_MIRROR = [0, 0, 0, 0, 0, 1, 1, 1];
+
+/** The engine's octant pick, in MM6's 2048-unit angle space. */
+export function octantFor(actorYaw, angleToCam) {
+  return ((1024 + 128 + (actorYaw | 0) - (angleToCam | 0)) >> 8) & 7;
+}
+
+// Light rig, in view space. A single baked key from the camera's upper-front-
+// left, exactly as the original turntable renders were lit - which is why an
+// MM6 sprite stays lit from the left no matter where the sun is. The fill is
+// only strong enough to keep the shadow side from going flat black; there is
+// deliberately no rim, no outline and no cel banding, because the 256-colour
+// palettisation is what does the banding.
 const LIGHT_D = {
-  keyDir: [-0.46, 0.70, 0.54],
-  fillDir: [0.58, -0.40, 0.36],
-  fillCol: [0.34, 0.44, 0.66],
-  ambient: 0.30,
-  key: 0.82,
-  fill: 0.26,
-  bands: 5,
+  keyDir: [-0.46, 0.62, 0.64],
+  fillDir: [0.58, -0.30, 0.30],
+  fillCol: [0.30, 0.38, 0.58],
+  ambient: 0.34,
+  key: 0.78,
+  fill: 0.14,
+  bands: 0,
 };
 
 const VERT = `
@@ -67,7 +84,9 @@ void main() {
   float k = max(nd, 0.0) * 0.78 + (nd * 0.5 + 0.5) * 0.22;
   float f = max(dot(N, uFillDir), 0.0);
   float s = uAmbient + uKey * k;
-  s = floor(s * uBands + 0.5) / uBands;          // cel bands
+  // uBands > 0 forces discrete shading; MM6 did not do this, the palette did,
+  // so the default is 0 and the gradient stays smooth until it is palettised.
+  if (uBands > 0.5) s = floor(s * uBands + 0.5) / uBands;
   vec3 c = uColor * s + uFillCol * (f * uFill) * (0.35 + uColor);
   c = mix(c, uColor * (1.0 + 0.25 * s), uEmissive);
   gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
@@ -180,27 +199,42 @@ const _cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 4000);
 const _box = new THREE.Box3();
 const _v = new THREE.Vector3();
 
+// How much of each pose's extra reach the frame has to accommodate. MM6 crops
+// every frame to its own bounding box; we are stuck with one cell for the whole
+// sheet, so the idle and walk poses get the frame to themselves and the extreme
+// poses (a raised staff, a corpse lying full-length) are allowed to run over the
+// edge a little rather than shrinking the sprite you look at 95% of the time.
+const POSE_WEIGHT = [
+  ['stand', 0, 1], ['walk', 0.25, 1], ['bored', 0.25, 1],
+  ['attack_melee', 0.55, 0.85], ['attack_ranged', 0.5, 0.75], ['dying', 1, 0.40],
+];
+
 function measure(model, actionList) {
-  let minY = Infinity, maxY = -Infinity, R = 0;
-  const sample = (action, t, wk) => {
+  const grab = (action, t) => {
     if (model.pose) model.pose(action, t);
     model.root.updateMatrixWorld(true);
     _box.setFromObject(model.root, true);
-    if (!isFinite(_box.min.y)) return;
-    minY = Math.min(minY, _box.min.y);
-    maxY = Math.max(maxY, _box.max.y);
-    const r = Math.max(Math.abs(_box.min.x), Math.abs(_box.max.x), Math.abs(_box.min.z), Math.abs(_box.max.z));
-    R = Math.max(R, r * wk);
+    if (!isFinite(_box.min.y)) return null;
+    return {
+      minY: _box.min.y, maxY: _box.max.y,
+      R: Math.max(Math.abs(_box.min.x), Math.abs(_box.max.x), Math.abs(_box.min.z), Math.abs(_box.max.z)),
+    };
   };
-  sample('stand', 0, 1);
-  if (actionList.includes('walk')) sample('walk', 0.25, 1);
-  if (actionList.includes('attack')) sample('attack', 0.55, 1);
-  if (actionList.includes('cast')) sample('cast', 0.5, 1);
-  // The fallen pose is much wider than the standing one; letting it clip a
-  // little keeps the live sprite big instead of shrinking every frame to fit.
-  if (actionList.includes('die')) sample('die', 1, 0.82);
+  const base = grab('stand', 0);
+  if (!base) {
+    const h = model.height || 1;
+    return { minY: 0, maxY: h, R: h * 0.3 };
+  }
+  let minY = base.minY, maxY = base.maxY, R = base.R;
+  for (const [action, t, w] of POSE_WEIGHT) {
+    if (!actionList.includes(action)) continue;
+    const s = grab(action, t);
+    if (!s) continue;
+    minY = Math.min(minY, base.minY + (s.minY - base.minY) * w);
+    maxY = Math.max(maxY, base.maxY + (s.maxY - base.maxY) * w);
+    R = Math.max(R, base.R + (s.R - base.R) * w);
+  }
   if (model.pose) model.pose('stand', 0);
-  if (!isFinite(minY)) { minY = 0; maxY = model.height || 1; R = (model.height || 1) * 0.3; }
   minY = Math.min(minY, 0);
   return { minY, maxY, R: Math.max(R, 1e-3) };
 }
@@ -217,15 +251,15 @@ export function bakeSheet(renderer, builderFn, opts = {}) {
     kind = 'sprite',
     seed = 1,
     actions: actionSpec = ACTIONS,
-    angles = ANGLES,
-    maxCellH = 64,
+    views = VIEWS,
+    maxCellH = 96,
     maxAtlas = 1024,
     aspect: aspectHint = 0,
     light = null,
-    outline = true,
+    outline = false,
     palette = true,
-    dither = 6,
-    margin = 1.10,
+    dither = 5,
+    margin = 1.06,
     elevation = 0.17,
     keepModel = false,
   } = opts;
@@ -252,7 +286,7 @@ export function bakeSheet(renderer, builderFn, opts = {}) {
   const measured = halfW / Math.max(1e-4, halfH);
   const aspect = Math.min(2.8, Math.max(0.35, aspectHint || measured));
 
-  const lay = fitAtlas(total, angles, aspect, maxAtlas, maxCellH);
+  const lay = fitAtlas(total, views, aspect, maxAtlas, maxCellH);
   // Re-fit the camera box to the cell's exact aspect so nothing is squashed.
   const cellAspect = lay.cellW / lay.cellH;
   if (halfW / halfH > cellAspect) halfH = halfW / cellAspect; else halfW = halfH * cellAspect;
@@ -288,7 +322,7 @@ export function bakeSheet(renderer, builderFn, opts = {}) {
   renderer.setScissor(0, 0, rt.width, rt.height);
   renderer.clear(true, true, false);
 
-  const step = (Math.PI * 2) / angles;
+  const step = (Math.PI * 2) / ANGLES;
   for (let a = 0; a < actionNames.length; a++) {
     const name = actionNames[a];
     const info = actionMap[name];
@@ -300,9 +334,9 @@ export function bakeSheet(renderer, builderFn, opts = {}) {
       const blk = idx % lay.blocks;
       // GL's origin is bottom-left; row 0 is the top of the finished atlas.
       const gy = lay.atlasH - (row + 1) * lay.cellH;
-      for (let ang = 0; ang < angles; ang++) {
+      for (let ang = 0; ang < views; ang++) {
         _pivot.rotation.y = ang * step;
-        const gx = (blk * angles + ang) * lay.cellW;
+        const gx = (blk * views + ang) * lay.cellW;
         renderer.setViewport(gx, gy, lay.cellW, lay.cellH);
         renderer.setScissor(gx, gy, lay.cellW, lay.cellH);
         renderer.clear(true, true, false);
@@ -331,7 +365,7 @@ export function bakeSheet(renderer, builderFn, opts = {}) {
   const img = g.createImageData(lay.atlasW, lay.atlasH);
   flipAndCut(buf, img.data, lay.atlasW, lay.atlasH);
   if (outline) rimOutline(img.data, lay);
-  if (palette) ditherImageData(img, dither);
+  if (palette) palettise(img, dither);
   g.putImageData(img, 0, 0);
 
   const texture = new THREE.CanvasTexture(canvas);
@@ -350,33 +384,91 @@ export function bakeSheet(renderer, builderFn, opts = {}) {
     cellW: lay.cellW, cellH: lay.cellH,
     cols: lay.cols, rows: lay.rows, blocks: lay.blocks,
     atlasW: lay.atlasW, atlasH: lay.atlasH,
-    angles, actions: actionMap, frames: total,
+    angles: ANGLES, views, actions: actionMap, frames: total,
     worldW, worldH,
     height: model.height,
-    // ground offset: how far below the sprite's centre the model's feet sit
+    // Billboards are bottom-anchored (the sprite's bottom edge sits at the
+    // object's Z). `groundOffset` is how far above that bottom edge the model's
+    // own y=0 plane falls, so a caller can place the quad exactly.
+    groundOffset: (0 - cy) * ce - (-halfH),
     footOffset: (m.minY - cy) * ce,
 
-    /** Pixel rect of a cell, origin top-left. Handy for debug contact sheets. */
+    /**
+     * Pixel rect of a cell, origin top-left. `angle` is an octant 0..7; octants
+     * 5..7 resolve to the mirrored source view and set `mirror`.
+     */
     rect(action, frame, angle) {
       const info = this.actions[action] || this.actions[firstAction];
       const f = Math.max(0, Math.min(info.frames - 1, frame | 0));
       const idx = info.row0 + f;
       const row = Math.floor(idx / this.blocks);
       const blk = idx % this.blocks;
-      const col = blk * this.angles + (((angle | 0) % this.angles) + this.angles) % this.angles;
-      return { x: col * this.cellW, y: row * this.cellH, w: this.cellW, h: this.cellH };
+      const oct = (((angle | 0) % ANGLES) + ANGLES) % ANGLES;
+      const view = this.views >= ANGLES ? oct : OCTANT_VIEW[oct];
+      const col = blk * this.views + view;
+      return {
+        x: col * this.cellW, y: row * this.cellH, w: this.cellW, h: this.cellH,
+        mirror: this.views >= ANGLES ? 0 : OCTANT_MIRROR[oct],
+      };
     },
 
-    /** [u0, v0, u1, v1] with v0 at the bottom edge, ready for a plane's UVs. */
+    /**
+     * [u0, v0, u1, v1] with v0 at the bottom edge, ready for a plane's UVs.
+     * Mirrored octants come back with u0 > u1, which flips the quad for free.
+     */
     uv(action, frame, angle) {
       const r = this.rect(action, frame, angle);
-      const u0 = r.x / this.atlasW, u1 = (r.x + r.w) / this.atlasW;
+      let u0 = r.x / this.atlasW, u1 = (r.x + r.w) / this.atlasW;
+      if (r.mirror) { const t2 = u0; u0 = u1; u1 = t2; }
       const v1 = 1 - r.y / this.atlasH, v0 = 1 - (r.y + r.h) / this.atlasH;
       return [u0, v0, u1, v1];
     },
 
+    /** Frame index within an action for a wall-clock time, honouring fps. */
+    frameAt(action, seconds) {
+      const info = this.actions[action] || this.actions[firstAction];
+      const n = Math.floor(seconds * info.fps);
+      return info.loop ? ((n % info.frames) + info.frames) % info.frames
+        : Math.min(info.frames - 1, Math.max(0, n));
+    },
+
     dispose() { this.texture.dispose(); },
   };
+}
+
+// --- palettisation ---------------------------------------------------------
+// Same ordered dither as palette.js `ditherImageData`, but memoised on the
+// exact 24-bit colour. A baked sheet only contains a few thousand distinct
+// shades across a million pixels, so the 256-entry nearest-colour search runs
+// a couple of thousand times instead of a million and the whole pass costs
+// almost nothing. The 16 MB memo is shared across every sheet in the session.
+const BAYER4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+let _memo = null;
+
+function palettise(img, amount) {
+  if (!_memo) _memo = new Uint8Array(1 << 24);
+  const memo = _memo;
+  const { data, width, height } = img;
+  for (let y = 0; y < height; y++) {
+    const brow = (y & 3) * 4;
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      if (data[i + 3] === 0) continue;
+      const t = (BAYER4[brow + (x & 3)] / 16 - 0.46875) * amount;
+      let r = data[i] + t, g = data[i + 1] + t, b = data[i + 2] + t;
+      r = r < 0 ? 0 : r > 255 ? 255 : r | 0;
+      g = g < 0 ? 0 : g > 255 ? 255 : g | 0;
+      b = b < 0 ? 0 : b > 255 ? 255 : b | 0;
+      const key = (r << 16) | (g << 8) | b;
+      // 0 means "not cached yet"; palette index 255 wraps to 0 and simply
+      // gets recomputed, which is correct and vanishingly rare.
+      let idx = memo[key];
+      if (idx === 0) { idx = nearestIndex(r, g, b) + 1; memo[key] = idx; }
+      const p = PALETTE[idx - 1];
+      data[i] = p[0]; data[i + 1] = p[1]; data[i + 2] = p[2];
+    }
+  }
+  return img;
 }
 
 /** Bottom-up RGBA -> top-down RGBA with a hard 1-bit alpha cut. */
@@ -429,26 +521,27 @@ function rimOutline(d, lay) {
 
 const STATIC_ACTIONS = { stand: { frames: 1, loop: false, fps: 1 } };
 
+/** `kind` is a monster id ('GoblinB') or a bare family id ('Goblin'). */
 export function bakeCreatureSheet(renderer, kind, seed = 1, opts = {}) {
-  const def = CREATURE_DEFS[kind];
+  const def = CREATURE_DEFS[kind] || CREATURE_FAMILIES[kind];
   return bakeSheet(renderer, (s) => buildCreature(kind, s), {
-    kind, seed, actions: ACTIONS, maxCellH: 64, maxAtlas: 1024,
-    aspect: def ? def.aspect : 0, outline: true, ...opts,
+    kind, seed, actions: ACTIONS, maxCellH: 96, maxAtlas: 1024,
+    aspect: def ? def.aspect : 0, ...opts,
   });
 }
 
 export function bakeNPCSheet(renderer, archetype, seed = 1, opts = {}) {
   return bakeSheet(renderer, (s) => buildNPC(archetype, s), {
-    kind: archetype, seed, actions: ACTIONS, maxCellH: 64, maxAtlas: 1024,
-    aspect: 0.80, outline: true, ...opts,
+    kind: archetype, seed, actions: ACTIONS, maxCellH: 96, maxAtlas: 1024,
+    aspect: 0.66, ...opts,
   });
 }
 
 export function bakeFloraSheet(renderer, kind, seed = 1, opts = {}) {
   const def = FLORA_DEFS[kind];
   return bakeSheet(renderer, (s) => buildFlora(kind, s), {
-    kind, seed, actions: STATIC_ACTIONS, maxCellH: 176, maxAtlas: 1024,
-    aspect: def ? def.aspect : 0, outline: true, margin: 1.06, ...opts,
+    kind, seed, actions: STATIC_ACTIONS, maxCellH: 224, maxAtlas: 1024,
+    aspect: def ? def.aspect : 0, margin: 1.04, ...opts,
   });
 }
 
@@ -456,8 +549,8 @@ export function bakePropSheet(renderer, kind, seed = 1, opts = {}) {
   const def = PROP_DEFS[kind];
   return bakeSheet(renderer, (s) => buildProp(kind, s), {
     kind, seed, actions: STATIC_ACTIONS,
-    maxCellH: def && def.item ? 56 : 120, maxAtlas: 1024,
-    aspect: def ? def.aspect : 0, outline: true, margin: 1.08, ...opts,
+    maxCellH: def && def.item ? 48 : 96, maxAtlas: 1024,
+    aspect: def ? def.aspect : 0, margin: 1.06, ...opts,
   });
 }
 
@@ -506,10 +599,14 @@ export function* bakeAllSheets(renderer, list) {
   }
 }
 
-/** Everything the world needs, in one list - handy default for the loader. */
+/**
+ * A sensible default load list: one sheet per monster *family* rather than per
+ * tier. Tiers only differ by palette, and 173 atlases would be several hundred
+ * megabytes, so a region should bake only the tiers it actually spawns.
+ */
 export function defaultSheetList(seed = 1) {
   const out = [];
-  for (const k of Object.keys(CREATURE_DEFS)) out.push({ category: 'creature', kind: k, seed });
+  for (const k of Object.keys(CREATURE_FAMILIES)) out.push({ category: 'creature', kind: k, seed });
   for (const k of Object.keys(FLORA_DEFS)) out.push({ category: 'flora', kind: k, seed });
   for (const k of Object.keys(PROP_DEFS)) out.push({ category: 'prop', kind: k, seed });
   return out;

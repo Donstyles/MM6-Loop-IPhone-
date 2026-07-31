@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>MM6 Loop - audio preview</title>
+<link rel="icon" href="data:,">
+
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -123,6 +125,49 @@ window.__sfxStats = async (id) => statsOf(await audio.renderToBuffer(id));
 window.__trackStats = async (id, bars = 16, sr = 22050, intensity = 0.35) =>
   statsOf(await renderTrackOffline(id, bars, sr, intensity));
 
+// A looping bed is only usable if the wrap-around sample step is no bigger
+// than a typical sample-to-sample step inside the buffer - otherwise it ticks.
+window.__loopSeam = async (id) => {
+  const buf = await audio.renderToBuffer(id);
+  const d = buf.getChannelData(0);
+  const n = d.length;
+  let sum = 0;
+  for (let i = 1; i < n; i++) sum += Math.abs(d[i] - d[i - 1]);
+  const avgStep = sum / Math.max(1, n - 1);
+  const seam = Math.abs(d[0] - d[n - 1]);
+  return { avgStep: +avgStep.toFixed(7), seam: +seam.toFixed(7), ratio: +(seam / Math.max(1e-9, avgStep)).toFixed(2) };
+};
+
+// Hammer the one-shot path and watch the voice cap hold.
+window.__stress = async (count = 80) => {
+  const ids = ['step_stone', 'swing_light', 'hit_flesh', 'click', 'coin', 'arrow_hit'];
+  let peakVoices = 0;
+  for (let i = 0; i < count; i++) {
+    audio.play(ids[i % ids.length]);
+    if (audio.voiceCount > peakVoices) peakVoices = audio.voiceCount;
+    if (i % 8 === 7) await new Promise((r) => setTimeout(r, 12));
+  }
+  // The longest thing in the burst is ~0.7 s; give it two seconds to drain.
+  for (let i = 0; i < 80; i++) { await new Promise((r) => setTimeout(r, 25)); if (audio.voiceCount > peakVoices) peakVoices = audio.voiceCount; }
+  return { peakVoices, settled: audio.voiceCount };
+};
+
+// Live scheduler check: does the lookahead hold, and does the voice cap bite?
+window.__runTrack = async (id, ms = 3000, intensity = 1) => {
+  if (!music) return { error: 'no music' };
+  music.setIntensity(intensity);
+  music.play(id, { fadeMs: 60 });
+  let peakVoices = 0, samples = 0, schedSum = 0;
+  const t0 = performance.now();
+  while (performance.now() - t0 < ms) {
+    await new Promise((r) => setTimeout(r, 25));
+    if (music.voiceCount > peakVoices) peakVoices = music.voiceCount;
+    schedSum += music.schedMs; samples++;
+  }
+  music.stop(60);
+  return { peakVoices, avgSchedMs: +(schedSum / Math.max(1, samples)).toFixed(3), current: id };
+};
+
 // ---------------------------------------------------------------------------
 // UI
 // ---------------------------------------------------------------------------
@@ -177,6 +222,7 @@ $('start').addEventListener('click', async () => {
   const okay = await audio.init();
   if (!okay) { log('!! Web Audio unavailable - the game will run silently'); return; }
   music = new Music(audio.ctx, audio.musicBus);
+  audio.attachMusic(music);
   window.__music = music;
   await music.ready();
   audio.setVolume(+$('vmaster').value / 100, +$('vsfx').value / 100, +$('vmusic').value / 100);

@@ -142,6 +142,75 @@ function grit(pix, count, seed, lo = 0.82, hi = 1.16) {
   return pix;
 }
 
+/**
+ * Squeeze a finished tile into a narrow value band and pull a little saturation
+ * out of it.
+ *
+ * MM6's art is deliberately low contrast - roughly a quarter of the 0-255
+ * range - because the runtime lighting is a greyscale multiply quantised to 32
+ * steps, and a wide-range texture has no headroom left to darken with. A tile
+ * that looks punchy in isolation reads as camouflage once it tiles across a
+ * hillside, so every terrain texture goes through here.
+ *
+ * Percentiles rather than min/max, so one stray speck cannot flatten the tile.
+ */
+function toneBand(pix, lo, hi, sat = 0.15, warm = 0.06) {
+  const d = pix.data;
+  const hist = new Int32Array(256);
+  let n = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i + 3] === 0) continue;
+    hist[(0.30 * d[i] + 0.59 * d[i + 1] + 0.11 * d[i + 2]) | 0]++;
+    n++;
+  }
+  if (!n) return pix;
+  const pct = (f) => {
+    let acc = 0, want = n * f;
+    for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= want) return v; }
+    return 255;
+  };
+  const mn = pct(0.02), mx = pct(0.98);
+  const scale = (hi - lo) / Math.max(1, mx - mn);
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i + 3] === 0) continue;
+    const l = 0.30 * d[i] + 0.59 * d[i + 1] + 0.11 * d[i + 2];
+    const nl = clamp(lo + (l - mn) * scale, 0, 255);
+    const k = nl / Math.max(1, l);
+    let r = d[i] * k, g = d[i + 1] * k, b = d[i + 2] * k;
+    // Desaturate towards a *warm* grey. The MM6 palette has no neutral greys -
+    // its two grey families are a cool blue `stone` and a green-cyan `grey` -
+    // so pulling straight towards L turns every weathered stone surface blue.
+    if (sat > 0) {
+      const gr = nl * (1 + warm), gg = nl, gb = nl * (1 - warm * 1.8);
+      r += (gr - r) * sat; g += (gg - g) * sat; b += (gb - b) * sat;
+    }
+    d[i] = r; d[i + 1] = g; d[i + 2] = b;
+  }
+  return pix;
+}
+
+/**
+ * Positions on a jittered grid. Scattering features with pure random placement
+ * leaves clusters and holes, and once the tile repeats those clusters read as a
+ * lattice; a jittered grid keeps the spacing even and the eye quiet.
+ */
+function scatter(count, seed, size = 64) {
+  const cols = Math.max(1, Math.round(Math.sqrt(count)));
+  const rows = Math.ceil(count / cols);
+  const cw = size / cols, ch = size / rows;
+  const rnd = new Rand(seed);
+  const out = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols && out.length < count; c++) {
+      out.push([
+        Math.round(wrapI(c * cw + rnd.float(0.05, 0.95) * cw, size)),
+        Math.round(wrapI(r * ch + rnd.float(0.05, 0.95) * ch, size)),
+      ]);
+    }
+  }
+  return rnd.shuffle(out);
+}
+
 /** Tiny hand-drawn bitmaps - emblems, glyphs, studs. */
 function stamp(pix, x0, y0, rows, map) {
   for (let j = 0; j < rows.length; j++) {
@@ -331,9 +400,8 @@ function grassTex(o) {
     return mixC(p.get(x, y), d, t * dirtAmt);
   });
   const rnd = new Rand(seed + 7);
-  for (let i = 0; i < clumps; i++) {
-    const cx = rnd.int(64), cy = rnd.int(64);
-    const rx = rnd.float(2.2, 4.0), ry = rx * rnd.float(0.5, 0.8);
+  for (const [cx, cy] of scatter(clumps, seed + 7)) {
+    const rx = rnd.float(2.2, 3.6), ry = rx * rnd.float(0.5, 0.8);
     const c = scaleC(mixC(md, hi, rnd.float(0.45, 1)), rnd.float(0.92, 1.06));
     // shadow pooled at the base of the clump, blades catching light on top
     blob(p, cx, cy + 1, rx * 1.05, ry, (x, y, d) => {
@@ -354,9 +422,8 @@ function grassTex(o) {
     }
   }
   // the little 2-3px dark marks that sell hand painting
-  for (let i = 0; i < tufts; i++) {
-    const cx = rnd.int(64), cy = rnd.int(64);
-    const c = mixC(p.get(cx, cy), dk, 0.75);
+  for (const [cx, cy] of scatter(tufts, seed + 11)) {
+    const c = mixC(p.get(cx, cy), dk, 0.6);
     vstroke(p, cx, cy, rnd.int(2, 3), c, rnd.bool(0.5) ? 0.4 : -0.4);
   }
   grit(p, 60, seed + 909);
@@ -364,32 +431,32 @@ function grassTex(o) {
 }
 
 const tGrass = () => grassTex({
-  dk: [58, 70, 36], md: [92, 108, 56], lt: [122, 138, 72], hi: [152, 166, 94],
-  soil: [110, 82, 46], seed: 101,
+  dk: [62, 90, 40], md: [90, 116, 52], lt: [110, 140, 60], hi: [135, 160, 80],
+  soil: [106, 88, 60], seed: 101,
 });
 const tGrassDry = () => grassTex({
-  dk: [92, 88, 46], md: [126, 118, 62], lt: [152, 142, 82], hi: [180, 166, 106],
-  soil: [126, 94, 54], seed: 131, dirtLo: 0.50, dirtHi: 0.74, dirtAmt: 0.8,
+  dk: [96, 96, 56], md: [124, 118, 68], lt: [146, 136, 84], hi: [166, 156, 100],
+  soil: [138, 112, 80], seed: 131, dirtLo: 0.50, dirtHi: 0.74, dirtAmt: 0.8,
   clumps: 34, tufts: 70,
 });
 const tGrassLush = () => grassTex({
-  dk: [52, 68, 32], md: [80, 100, 46], lt: [104, 124, 60], hi: [136, 154, 82],
-  soil: [82, 66, 38], seed: 167, dirtLo: 0.76, dirtHi: 0.92, dirtAmt: 0.55,
+  dk: [54, 82, 34], md: [78, 108, 44], lt: [98, 130, 54], hi: [124, 152, 72],
+  soil: [90, 76, 52], seed: 167, dirtLo: 0.76, dirtHi: 0.92, dirtAmt: 0.55,
   clumps: 62, tufts: 50,
 });
 
 function tDirt() {
   const p = P();
-  groundBase(p, [72, 48, 24], [140, 100, 58], { per: 8, seed: 211, contrast: 1.5, patchCol: [92, 66, 36], patchAmt: 0.45 });
+  groundBase(p, [90, 74, 50], [138, 112, 80], { per: 8, seed: 211, contrast: 1.3, patchCol: [104, 86, 58], patchAmt: 0.4 });
   // clods: little raised lumps of soil, lit upper-left
   const rnd = new Rand(217);
-  for (let i = 0; i < 120; i++) {
-    const cx = rnd.int(64), cy = rnd.int(64), r = rnd.float(1.4, 3.2);
+  for (const [cx, cy] of scatter(110, 217)) {
+    const r = rnd.float(1.6, 3.4);
     const base = rnd.float(0.82, 1.2);
     blob(p, cx, cy, r, r * rnd.float(0.6, 0.95), (x, y, d, dx, dy) => {
       if (d > 0.85 + nz1(x, y, 32, 219) * 0.3) return null;
       const k = base * (1 - (dx + dy) * 0.10);
-      return scaleC(p.get(x, y), clamp(k, 0.55, 1.45));
+      return scaleC(p.get(x, y), clamp(k, 0.72, 1.28));
     });
   }
   cracks(p, { period: 6, seed: 223, width: 0.05, darkness: 0.35 });
@@ -399,11 +466,11 @@ function tDirt() {
 
 function tMud() {
   const p = P();
-  groundBase(p, [52, 38, 24], [116, 90, 56], { per: 7, seed: 233, contrast: 1.5, patchCol: [74, 62, 42], patchAmt: 0.45 });
+  groundBase(p, [62, 50, 34], [110, 90, 62], { per: 7, seed: 233, contrast: 1.25, patchCol: [78, 64, 44], patchAmt: 0.4 });
   // churned ridges: mud holds the shape of whatever trod through it
   const rnd = new Rand(243);
-  for (let i = 0; i < 46; i++) {
-    const cx = rnd.int(64), cy = rnd.int(64), r = rnd.float(2, 4.5);
+  for (const [cx, cy] of scatter(44, 243)) {
+    const r = rnd.float(2, 4.2);
     blob(p, cx, cy, r, r * rnd.float(0.4, 0.8), (x, y, d, dx, dy) => {
       if (d > 0.85 + nz1(x, y, 24, 245) * 0.3) return null;
       return scaleC(p.get(x, y), clamp(1 - (dx + dy) * 0.13, 0.6, 1.4));
@@ -414,12 +481,12 @@ function tMud() {
     const n = nz(x, y, 4, 239, 4, 0.6);
     const t = smoothstep(0.54, 0.62, n);
     if (t <= 0) return null;
-    let c = mixC(p.get(x, y), [34, 32, 28], t * 0.8);
+    // standing water over mud is dark warm brown, never grey-blue
+    let c = mixC(p.get(x, y), [44, 34, 24], t * 0.7);
     const sh = smoothstep(0.6, 0.72, n) * smoothstep(0.4, 0.65, nzXY(x, y, 6, 14, 241));
-    c = mixC(c, [104, 118, 122], sh * 0.6);
-    // bright lip where the puddle edge catches light
+    c = mixC(c, [96, 84, 62], sh * 0.45);
     const rim = smoothstep(0.53, 0.545, n) * (1 - smoothstep(0.555, 0.575, n));
-    return mixC(c, [138, 112, 76], rim * 0.5);
+    return mixC(c, [124, 104, 76], rim * 0.4);
   });
   grit(p, 110, 247);
   return p;
@@ -451,8 +518,8 @@ function tRoadDirt() {
 function tRoadCobble() {
   const p = P();
   cobbleFill(p, {
-    per: 8, seed: 271, colDark: [64, 60, 54], colLite: [154, 146, 132],
-    mortar: [40, 36, 30], jitter: 1.0, gap: 0.18, dome: 0.5, warp: 0.4, rim: 0.35,
+    per: 8, seed: 271, colDark: [98, 90, 78], colLite: [164, 154, 136],
+    mortar: [78, 72, 60], jitter: 1.0, gap: 0.18, dome: 0.34, warp: 0.4, rim: 0.28,
   });
   // grit and moss settled in the joints
   paint(p, (x, y) => {
@@ -464,34 +531,43 @@ function tRoadCobble() {
   return p;
 }
 
+/**
+ * Wind-rippled sand. The ripple phase is heavily warped by low-frequency noise
+ * so the crests wander and the wavelength varies across the tile - a clean sine
+ * train reads as corduroy the moment the tile repeats.
+ */
 function sandTex(o) {
-  const { colA, colB, colHi, seed, ripplePer = 7, rippleAmp = 0.16, gritN = 200, warp = 5 } = o;
+  const { colA, colB, colHi, colShadow, seed, kx = 1, ky = 5, rippleAmp = 0.1, gritN = 220 } = o;
   const p = P();
   paint(p, (x, y) => {
-    // wind ripples: a warped sine train, lit on the windward face
-    const wx = x + (nz(x, y, 3, seed + 1, 3, 0.55) - 0.5) * warp * 2;
-    const wy = y + (nz(x, y, 3, seed + 2, 3, 0.55) - 0.5) * warp;
-    const s = Math.sin(TAU * (wx * 1 + wy * ripplePer) / 64);
-    const n = fbmXY(x, y, 14, 14, seed + 3, 4, 0.55);
+    const warp = (nz(x, y, 3, seed + 1, 3, 0.6) - 0.5) * 9 + (nz(x, y, 6, seed + 2, 2, 0.5) - 0.5) * 3;
+    const s = Math.sin(TAU * (x * kx + y * ky) / 64 + warp);
+    const n = fbmXY(x, y, 16, 16, seed + 3, 4, 0.55);
     let c = mixC(colA, colB, clamp01(0.35 + n * 0.7));
-    c = scaleC(c, 1 + s * rippleAmp * 0.5 + (s > 0.5 ? 0.06 : 0));
-    return mixC(c, colHi, clamp01(s * 0.5) * 0.25);
+    // the ripple is barely there - a stipple, not a corrugation
+    c = scaleC(c, 1 + s * rippleAmp);
+    c = mixC(c, colHi, clamp01(s - 0.75) * 0.35);
+    // occasional shadow streak in the lee of a crest
+    const streak = clamp01(-s - 0.7) * smoothstep(0.45, 0.75, nz(x, y, 4, seed + 5, 3, 0.6));
+    return mixC(c, colShadow, streak * 0.45);
   });
-  grit(p, gritN, seed + 9);
+  grit(p, gritN, seed + 9, 0.93, 1.07);
   return p;
 }
 
 const tSand = () => sandTex({
-  colA: [176, 146, 88], colB: [222, 196, 138], colHi: [240, 222, 172], seed: 311, ripplePer: 6, rippleAmp: 0.12,
+  colA: [180, 154, 106], colB: [216, 192, 140], colHi: [226, 206, 158], colShadow: [142, 122, 82],
+  seed: 311, kx: 1, ky: 5, rippleAmp: 0.055,
 });
 function tSandDune() {
   const p = sandTex({
-    colA: [160, 126, 66], colB: [216, 184, 116], colHi: [242, 220, 160], seed: 317, ripplePer: 9, rippleAmp: 0.2, warp: 7,
+    colA: [172, 144, 96], colB: [212, 186, 132], colHi: [224, 202, 152], colShadow: [136, 116, 78],
+    seed: 317, kx: 2, ky: 7, rippleAmp: 0.075,
   });
-  // secondary crossing ripple set, the giveaway of a real dune field
+  // a second, coarser ripple set crossing the first
   paint(p, (x, y) => {
-    const s = Math.sin(TAU * (x * 3 - y * 2) / 64 + nz(x, y, 4, 319, 2, 0.5) * 3);
-    return scaleC(p.get(x, y), 1 + s * 0.06);
+    const s = Math.sin(TAU * (x * 3 - y * 2) / 64 + nz(x, y, 3, 319, 3, 0.6) * 8);
+    return scaleC(p.get(x, y), 1 + s * 0.035);
   });
   return p;
 }
@@ -501,10 +577,10 @@ function tSnow() {
   paint(p, (x, y) => {
     const n = fbmXY(x, y, 10, 10, 331, 4, 0.55);
     const drift = Math.sin(TAU * (x * 1 + y * 3) / 64 + nz(x, y, 3, 333, 2, 0.5) * 4);
-    let c = mixC([170, 182, 200], [244, 248, 252], clamp01(0.35 + n * 0.75));
+    let c = mixC([200, 206, 218], [240, 244, 250], clamp01(0.3 + n * 0.8));
     c = scaleC(c, 1 + drift * 0.05);
     // blue shadow in the hollows
-    return mixC(c, [138, 156, 186], clamp01(-drift * 0.4) * 0.5);
+    return mixC(c, [154, 166, 186], clamp01(-drift * 0.5) * 0.55);
   });
   const rnd = new Rand(337);
   for (let i = 0; i < 70; i++) {
@@ -521,8 +597,8 @@ function tSnow() {
 function tSnowRock() {
   const p = P();
   cobbleFill(p, {
-    per: 5, seed: 347, colDark: [52, 56, 62], colLite: [130, 136, 144],
-    mortar: [34, 36, 42], jitter: 1.0, gap: 0.14, dome: 0.55, warp: 0.5, rim: 0.35,
+    per: 5, seed: 347, colDark: [66, 64, 62], colLite: [140, 138, 132],
+    mortar: [46, 44, 42], jitter: 1.0, gap: 0.14, dome: 0.55, warp: 0.5, rim: 0.35,
   });
   // snow lies on the upward faces and fills the cracks
   paint(p, (x, y) => {
@@ -540,8 +616,8 @@ function tGravel() {
   const p = P();
   p.fill(44, 40, 34);
   cobbleFill(p, {
-    per: 14, seed: 359, colDark: [70, 66, 58], colLite: [168, 160, 144],
-    mortar: [40, 36, 30], jitter: 1.0, gap: 0.26, dome: 0.7, warp: 0.3, rim: 0.5, grain: 0.1,
+    per: 14, seed: 359, colDark: [80, 72, 58], colLite: [172, 160, 136],
+    mortar: [56, 50, 40], jitter: 1.0, gap: 0.26, dome: 0.7, warp: 0.3, rim: 0.5, grain: 0.1,
   });
   grit(p, 300, 367);
   return p;
@@ -550,18 +626,18 @@ function tGravel() {
 function tMossRock() {
   const p = P();
   cobbleFill(p, {
-    per: 5, seed: 373, colDark: [56, 58, 50], colLite: [138, 138, 122],
-    mortar: [34, 36, 28], jitter: 1.0, gap: 0.16, dome: 0.55, warp: 0.5, rim: 0.35,
+    per: 6, seed: 373, colDark: [72, 74, 64], colLite: [140, 140, 126],
+    mortar: [52, 54, 44], jitter: 1.0, gap: 0.16, dome: 0.4, warp: 0.5, rim: 0.28,
   });
   // moss grows out of the joints, not in random blobs
   paint(p, (x, y) => {
-    const wx = (x / 64) * 5, wy = (y / 64) * 5;
-    const c = worley(wx, wy, 5, 373, 1.0);
+    const wx = (x / 64) * 6, wy = (y / 64) * 6;
+    const c = worley(wx, wy, 6, 373, 1.0);
     const joint = 1 - smoothstep(0.05, 0.35, c.f2 - c.f1);
     const n = nz(x, y, 4, 379, 3, 0.6);
     const t = clamp01(joint * 0.8 + (n - 0.5) * 1.2) * smoothstep(0.35, 0.6, n);
     if (t <= 0) return null;
-    const moss = mixC([44, 66, 30], [96, 122, 52], nz1(x, y, 24, 383));
+    const moss = mixC([62, 84, 42], [104, 124, 60], nz1(x, y, 24, 383));
     return mixC(p.get(x, y), moss, clamp01(t) * 0.9);
   });
   grit(p, 120, 389);
@@ -570,21 +646,21 @@ function tMossRock() {
 
 function tSwampMuck() {
   const p = P();
-  groundBase(p, [34, 38, 22], [82, 84, 46], { per: 7, seed: 397, contrast: 1.5, patchCol: [52, 44, 28], patchAmt: 0.5 });
+  groundBase(p, [58, 68, 40], [92, 98, 56], { per: 4, seed: 397, contrast: 1.0, patchCol: [66, 66, 40], patchAmt: 0.7, patchPer: 4 });
   // algae film in sheets, with a few gas bubbles pushing through
   paint(p, (x, y) => {
     const n = nz(x, y, 4, 401, 4, 0.6);
     const t = smoothstep(0.5, 0.66, n);
     if (t <= 0) return null;
-    return mixC(p.get(x, y), mixC([58, 84, 38], [110, 132, 52], nz1(x, y, 18, 403)), t * 0.8);
+    return mixC(p.get(x, y), mixC([70, 84, 46], [118, 128, 74], nz1(x, y, 18, 403)), t * 0.6);
   });
   const rnd = new Rand(409);
-  for (let i = 0; i < 34; i++) {
-    const cx = rnd.int(64), cy = rnd.int(64), r = rnd.float(1.2, 2.6);
+  for (const [cx, cy] of scatter(32, 409)) {
+    const r = rnd.float(1.2, 2.6);
     blob(p, cx, cy, r, r, (x, y, d, dx, dy) => {
       if (d > 1) return null;
-      const k = d > 0.75 ? 0.6 : 1 - (dx + dy) * 0.16;
-      return scaleC(p.get(x, y), clamp(k, 0.5, 1.5));
+      const k = d > 0.8 ? 0.86 : 1 - (dx + dy) * 0.1;
+      return scaleC(p.get(x, y), clamp(k, 0.75, 1.25));
     });
   }
   // dead reed fragments
@@ -598,23 +674,26 @@ function tSwampMuck() {
 
 function tFarmland() {
   const p = P();
-  const dk = [58, 38, 20], md = [116, 82, 46], lt = [166, 128, 82];
+  const dk = [72, 58, 40], md = [118, 96, 66], lt = [150, 126, 92];
   paint(p, (x, y) => {
-    // eight ploughed furrows, wobbling so the rows are not machine-straight
-    const yy = y + (fbmXY(x, y, 5, 2, 421, 3, 0.6) - 0.5) * 6;
-    const t = wrapI(yy, 8) / 8;
-    const k = 1 - Math.cos(t * TAU) * 0.42;
-    const n = fbmXY(x, y, 18, 8, 423, 3, 0.55);
-    let c = mixC(dk, md, clamp01(0.3 + n * 0.8));
-    c = scaleC(c, clamp(k, 0.5, 1.5));
-    return mixC(c, lt, clamp01((k - 1.15) * 2) * 0.5);
+    // four ploughed furrows; the ridge line wanders and its height varies, so
+    // it reads as turned earth rather than a sine grating
+    const wob = (fbmXY(x, y, 4, 2, 421, 3, 0.6) - 0.5) * 9 + (nzXY(x, y, 9, 2, 425) - 0.5) * 3;
+    const t = wrapI(y + wob, 16) / 16;
+    const depth = 0.26 + nzXY(x, y, 5, 2, 427) * 0.22;
+    const k = 1 - Math.cos(t * TAU) * depth;
+    const n = fbmXY(x, y, 18, 10, 423, 4, 0.55);
+    let c = mixC(dk, md, clamp01(0.25 + n * 0.85));
+    c = scaleC(c, clamp(k, 0.6, 1.4));
+    return mixC(c, lt, clamp01((k - 1.12) * 2.4) * 0.45);
   });
+  // clods turned up by the plough, evenly spread so they do not clump
   const rnd = new Rand(431);
-  for (let i = 0; i < 90; i++) {
-    const cx = rnd.int(64), cy = rnd.int(64), r = rnd.float(1.1, 2.4);
+  for (const [cx, cy] of scatter(80, 431)) {
+    const r = rnd.float(1.2, 2.6);
     blob(p, cx, cy, r, r * 0.8, (x, y, d, dx, dy) => {
       if (d > 0.9) return null;
-      return scaleC(p.get(x, y), clamp(1 - (dx + dy) * 0.16, 0.6, 1.4));
+      return scaleC(p.get(x, y), clamp(1 - (dx + dy) * 0.12, 0.7, 1.3));
     });
   }
   grit(p, 150, 433);
@@ -690,12 +769,12 @@ function tBeachWet() {
 
 function tTundra() {
   const p = P();
-  groundBase(p, [62, 56, 40], [116, 106, 76], { per: 8, seed: 509, contrast: 1.3, patchCol: [88, 74, 50], patchAmt: 0.4 });
+  groundBase(p, [72, 68, 50], [112, 106, 80], { per: 5, seed: 509, contrast: 1.0, patchCol: [92, 80, 58], patchAmt: 0.35 });
   // lichen crust: drawn as discrete pale rosettes rather than a noise wash
   const lich = new Rand(521);
-  for (let i = 0; i < 34; i++) {
-    const cx = lich.int(64), cy = lich.int(64), r = lich.float(2.5, 6);
-    const c = mixC([124, 132, 96], [166, 172, 132], lich.float());
+  for (const [cx, cy] of scatter(30, 521)) {
+    const r = lich.float(3, 6.5);
+    const c = mixC([118, 124, 96], [152, 156, 122], lich.float());
     blob(p, cx, cy, r, r * lich.float(0.6, 1), (x, y, d) => {
       const wob = nz1(x, y, 26, 523) * 0.5;
       if (d > 0.55 + wob) return null;
@@ -703,8 +782,8 @@ function tTundra() {
     });
   }
   const rnd = new Rand(541);
-  for (let i = 0; i < 50; i++) {
-    const cx = rnd.int(64), cy = rnd.int(64), r = rnd.float(1, 2.2);
+  for (const [cx, cy] of scatter(44, 541)) {
+    const r = rnd.float(1, 2.2);
     blob(p, cx, cy, r, r * 0.8, (x, y, d, dx, dy) => {
       if (d > 1) return null;
       return scaleC(mixC([86, 80, 68], [142, 134, 116], rnd.float()), clamp(1 - (dx + dy) * 0.16, 0.6, 1.4));
@@ -838,8 +917,8 @@ const tCliffSand = () => cliffTex({
   tint: [170, 124, 70], tintAmt: 0.35, rough: 0.3,
 });
 const tCliffSnow = () => cliffTex({
-  colDark: [54, 58, 66], colLite: [126, 134, 146], seed: 613, beds: 4, slabs: 3,
-  snowAmt: 0.95,
+  colDark: [66, 66, 64], colLite: [138, 136, 130], seed: 613, beds: 4, slabs: 3,
+  snowAmt: 0.8,
 });
 const tCliffVolcanic = () => cliffTex({
   colDark: [26, 24, 26], colLite: [92, 84, 80], seed: 617, beds: 5, slabs: 4,
@@ -863,35 +942,21 @@ function plasterBase(p, o = {}) {
   return p;
 }
 
+/**
+ * Lime stucco: an even cream wash. Deliberately featureless - the spec range is
+ * #C0B49A-#E0D8C0 and anything with a hero feature baked in turns into a
+ * lattice the moment the wall is more than one tile wide.
+ */
 function tWallPlaster() {
   const p = P();
-  plasterBase(p, { seed: 701 });
-  // hairline cracks and grime settling in them
-  cracks(p, { period: 4, seed: 703, width: 0.035, darkness: 0.35 });
-  const rnd = new Rand(709);
-  // two patches where the render has fallen away to the brick beneath
-  for (let i = 0; i < 2; i++) {
-    const cx = rnd.int(64), cy = rnd.int(64), r = rnd.float(13, 18);
-    blob(p, cx, cy, r, r * rnd.float(0.55, 0.85), (x, y, d) => {
-      const w = nz1(x, y, 12, 711 + i) * 0.55;
-      if (d > 0.7 + w) return null;
-      const brickY = Math.floor(y / 6), brickX = Math.floor((x + (brickY % 2) * 7) / 14);
-      const mortarLine = (wrapI(y, 6) < 1) || (wrapI(x + (brickY % 2) * 7, 14) < 1);
-      const base = mortarLine
-        ? [154, 144, 126]
-        : mixC([112, 66, 48], [162, 100, 68], hash2(brickX, brickY, 713));
-      // shadowed lip where the render broke away
-      return scaleC(base, d > 0.6 + w ? 0.62 : 0.92);
-    });
-    // lit crumbling edge on the upper left of the hole
-    blob(p, cx - 1, cy - 1, r, r * 0.75, (x, y, d) => {
-      const w = nz1(x, y, 12, 711 + i) * 0.55;
-      if (d < 0.7 + w || d > 0.82 + w) return null;
-      return scaleC(p.get(x, y), 1.18);
-    });
-  }
-  blotch(p, { period: 3, seed: 717, amount: 0.22 });
-  grit(p, 90, 719);
+  plasterBase(p, { seed: 701, colA: [186, 176, 150], colB: [226, 218, 194] });
+  // trowel sweeps, then hairline cracks with a little grime in them
+  paint(p, (x, y) => {
+    const sweep = fbmXY(x, y, 4, 7, 705, 3, 0.5);
+    return scaleC(p.get(x, y), 0.97 + sweep * 0.07);
+  });
+  cracks(p, { period: 5, seed: 703, width: 0.022, darkness: 0.22 });
+  grit(p, 70, 719, 0.96, 1.04);
   return p;
 }
 
@@ -962,7 +1027,7 @@ function tWallBrick() {
   const p = P();
   courseWall(p, {
     rows: 5, cols: 2, seed: 751, mortarW: 2, off: 0.5,
-    colA: [104, 54, 38], colB: [168, 92, 60], mortar: [186, 176, 156],
+    colA: [110, 58, 46], colB: [160, 90, 68], mortar: [176, 168, 150],
     bevel: 0.24, chip: 0.5, grain: 0.2,
   });
   // soot / weathering, warmer at the top of each brick
@@ -979,7 +1044,7 @@ function tWallStoneBlock() {
   const p = P();
   const seed = 769;
   const rows = 4, bh = 64 / rows;
-  const colDk = [74, 68, 58], colLt = [190, 182, 160], mortar = [96, 90, 76];
+  const colDk = [80, 72, 58], colLt = [188, 178, 152], mortar = [100, 92, 74];
   paint(p, (x, y) => {
     const yy = wrapI(y + (fbmXY(x, y, 6, 2, seed + 1, 3, 0.6) - 0.5) * 3, 64);
     const row = Math.floor(yy / bh);
@@ -1051,12 +1116,12 @@ function ashlarWall(o) {
 }
 
 const tWallCastle = () => ashlarWall({
-  rows: 3, cols: 2, seed: 787, colA: [96, 100, 106], colB: [172, 176, 180],
-  mortar: [76, 78, 80], streak: 0.34,
+  rows: 3, cols: 2, seed: 787, colA: [114, 108, 92], colB: [178, 170, 148],
+  mortar: [92, 86, 72], streak: 0.3,
 });
 const tWallCastleDark = () => ashlarWall({
-  rows: 3, cols: 2, seed: 797, colA: [52, 56, 62], colB: [110, 116, 122],
-  mortar: [40, 42, 46], streak: 0.42, mossAmt: 0.3,
+  rows: 3, cols: 2, seed: 797, colA: [72, 68, 58], colB: [126, 120, 104],
+  mortar: [56, 54, 46], streak: 0.36, mossAmt: 0.28,
 });
 const tWallSandstone = () => ashlarWall({
   rows: 4, cols: 2, seed: 809, colA: [148, 116, 70], colB: [220, 190, 140],
@@ -1140,14 +1205,14 @@ function tWallMarble() {
   const p = P();
   paint(p, (x, y) => {
     const n = fbmXY(x, y, 6, 6, 839, 4, 0.5);
-    return mixC([186, 188, 192], [238, 238, 240], clamp01(0.3 + n * 0.9));
+    return mixC([208, 204, 192], [240, 238, 230], clamp01(0.3 + n * 0.8));
   });
   // veins: wandering hairlines with a soft halo, the way real marble reads
   const rnd = new Rand(841);
   for (let i = 0; i < 5; i++) {
     let x = rnd.float(64), y = rnd.float(64);
     let a = rnd.bool() ? rnd.float(-0.5, 0.5) : rnd.float(-0.5, 0.5) + Math.PI / 2;
-    const dark = rnd.bool(0.35) ? [128, 128, 140] : [162, 158, 152];
+    const dark = rnd.bool(0.35) ? [168, 164, 152] : [188, 184, 174];
     const len = rnd.int(50, 90);
     for (let s = 0; s < len; s++) {
       a += rnd.float(-0.3, 0.3);
@@ -1219,33 +1284,47 @@ function tWallTemple() {
   return p;
 }
 
+/**
+ * Shop frontage: a plaster panel over a boarded stall front with a moulded
+ * rail, all in the wood/plaster families - a saturated painted colour would sit
+ * outside the palette the rest of the town is built from.
+ */
 function tWallShopFront() {
-  const p = plankWall({ seed: 863, count: 5, colDk: [30, 44, 32], colLt: [78, 104, 70], horizontal: true, nails: false, knots: 3 });
-  // painted panelling: a moulded rail and a lighter panel field
-  const railDk = [26, 36, 26], railLt = [112, 138, 96], trim = [150, 120, 52];
-  for (let x = 0; x < 64; x++) {
-    for (const y0 of [4, 40]) {
-      p.setArr(x, y0, railLt); p.setArr(x, y0 + 1, scaleC(railLt, 0.9));
-      p.setArr(x, y0 + 2, railDk); p.setArr(x, y0 + 3, scaleC(railDk, 1.2));
+  const p = plankWall({
+    seed: 863, count: 5, colDk: [78, 54, 32], colLt: [140, 106, 68],
+    horizontal: true, nails: false, knots: 3,
+  });
+  // upper half is rendered plaster, the way a stall front is finished
+  for (let y = 0; y < 30; y++) {
+    for (let x = 0; x < 64; x++) {
+      const n = fbmXY(x, y, 9, 9, 867, 4, 0.55);
+      p.setArr(x, y, mixC([182, 172, 148], [222, 214, 190], clamp01(0.34 + n * 0.55)));
     }
   }
-  // recessed panels: darker field, shadowed top-left, bright bead around
+  // moulded rail dividing plaster from boards
+  const railDk = [70, 48, 28], railMd = [118, 88, 54], railLt = [162, 128, 84];
+  for (let x = 0; x < 64; x++) {
+    p.setArr(x, 30, railLt); p.setArr(x, 31, railMd);
+    p.setArr(x, 32, railMd); p.setArr(x, 33, railDk);
+    p.setArr(x, 34, scaleC(railDk, 0.7));
+  }
+  // recessed boarded panels below the rail
   for (const bx of [4, 36]) {
-    for (let y = 12; y < 36; y++) {
+    for (let y = 38; y < 60; y++) {
       for (let x = bx; x < bx + 24; x++) {
-        const u = (x - bx) / 24, v = (y - 12) / 24;
+        const u = (x - bx) / 24, v = (y - 38) / 22;
         const edge = Math.min(u, v, 1 - u, 1 - v);
         const g = fbmXY(x, y, 3, 22, 871, 3, 0.55);
-        let c = mixC([30, 44, 30], [62, 84, 56], 0.3 + g * 0.7);
-        if (edge < 0.045) c = scaleC(c, u < 0.5 && v < 0.5 ? 0.5 : 1.35);
-        else if (edge < 0.12) c = scaleC(c, 0.82);
+        let c = mixC([62, 42, 24], [116, 86, 54], 0.3 + g * 0.7);
+        if (edge < 0.05) c = scaleC(c, u < 0.5 && v < 0.5 ? 0.55 : 1.3);
+        else if (edge < 0.13) c = scaleC(c, 0.85);
         p.setArr(x, y, c);
       }
     }
-    frameRect(p, bx - 1, 11, 26, 26, trim);
-    frameRect(p, bx - 2, 10, 28, 28, scaleC(trim, 0.55));
+    frameRect(p, bx - 1, 37, 26, 24, railLt);
+    frameRect(p, bx - 2, 36, 28, 26, scaleC(railDk, 0.8));
   }
-  grit(p, 60, 869);
+  grit(p, 70, 869);
   return p;
 }
 
@@ -1341,37 +1420,43 @@ const tRoofSlate = () => {
   return p;
 };
 
+/**
+ * Glazed pantiles. Same overlapping-course structure as the shingles - rows
+ * laid bottom-up so each course laps the one below - but every tile in the row
+ * carries a barrel profile across its width.
+ */
 function tRoofTileBlue() {
   const p = P();
-  const cols = 8, cw = 64 / cols, rows = 4, rh = 64 / rows;
-  const dk = [26, 42, 60], md = [52, 82, 108], lt = [98, 134, 162], hi = [146, 176, 196];
-  paint(p, (x, y) => {
-    const col = Math.floor(x / cw);
-    const u = (x - col * cw) / cw;
-    const row = Math.floor(y / rh);
-    const v = (y - row * rh) / rh;
-    const tone = 0.88 + hash2(col, row, 931) * 0.24;
-    // barrel profile: crest lit at the upper left, deep valley at the seam
-    const prof = Math.sin(u * Math.PI);
-    let k = 0.5 + prof * 0.85;
-    if (u < 0.10) k *= 0.55;
-    // each course laps the one below: shadow at the top of the tile
-    k *= 0.78 + smoothstep(0, 0.35, v) * 0.32;
-    let c = mixC(dk, mixC(md, lt, prof), 0.35 + prof * 0.55);
-    c = scaleC(c, k * tone);
-    if (prof > 0.93 && v > 0.3) c = mixC(c, hi, 0.4);
-    const g = fbmXY(x, y, 22, 22, 933, 3, 0.55);
-    return scaleC(c, 0.92 + g * 0.16);
-  });
-  // the lip of each course laps the one below: hard shadow, lit nose above
-  for (let r = 0; r < rows; r++) {
-    const y = Math.round(r * rh);
-    for (let x = 0; x < 64; x++) {
-      blend(p, x, y, [8, 16, 26], 0.8);
-      blend(p, x, y + 1, [10, 20, 32], 0.55);
-      blend(p, x, y + 2, [12, 24, 38], 0.25);
-      blend(p, x, y - 1, [156, 186, 206], 0.4);
-      blend(p, x, y - 2, [120, 150, 172], 0.2);
+  const rows = 5, cols = 6, rh = 64 / rows, tw = 64 / cols, overlap = 3;
+  const dk = [42, 58, 72], md = [66, 92, 112], lt = [110, 142, 164], hi = [150, 178, 196];
+  p.fill(30, 42, 54);
+  for (let r = rows - 1; r >= 0; r--) {
+    const rowOff = ((r % 2) * 0.5) * tw;
+    for (let c = -1; c < cols; c++) {
+      const tone = 0.9 + hash2(wrapI(c, cols), r, 931) * 0.2;
+      const x0 = c * tw + rowOff, y0 = r * rh - overlap;
+      for (let yy = 0; yy < rh + overlap; yy++) {
+        for (let xx = 0; xx < tw; xx++) {
+          const u = xx / tw;
+          const e = clamp01((yy - overlap) / rh);
+          // barrel across the tile: valley at the joint, crest in the middle
+          const prof = Math.sin(u * Math.PI);
+          let k = (0.52 + prof * 0.8) * (0.74 + e * 0.42);
+          if (u < 0.09) k *= 0.6;
+          if (e > 0.9) k *= 0.82;
+          const gx = wrapI(Math.round(x0 + xx), 64), gy = wrapI(Math.round(y0 + yy), 64);
+          let col = mixC(dk, mixC(md, lt, prof), 0.35 + prof * 0.5);
+          col = scaleC(col, k * tone * (0.94 + fbmXY(gx, gy, 22, 22, 933, 3, 0.55) * 0.12));
+          // glaze catches the sky along the crest
+          if (prof > 0.9 && e > 0.35) col = mixC(col, hi, 0.35);
+          p.setArr(gx, gy, col);
+        }
+      }
+      // the nose of the tile drops a shadow on the course below
+      for (let xx = 0; xx < tw; xx++) {
+        blend(p, Math.round(x0 + xx), Math.round(y0 + rh + overlap), [12, 20, 28], 0.6);
+        blend(p, Math.round(x0 + xx), Math.round(y0 + rh + overlap + 1), [12, 20, 28], 0.3);
+      }
     }
   }
   grit(p, 70, 937);
@@ -2003,7 +2088,7 @@ function tDunIce() {
     const n = fbmXY(x, y, 7, 7, 1213, 4, 0.55);
     const deep = fbmXY(x, y, 3, 3, 1217, 3, 0.6);
     // deep glacial blue where the ice is thick, near-white where it is thin
-    return mixC([40, 96, 122], [186, 224, 236], clamp01((n * 0.4 + deep * 0.6 - 0.3) * 1.5));
+    return mixC([64, 124, 148], [178, 216, 230], clamp01((n * 0.4 + deep * 0.6 - 0.32) * 1.15));
   });
   // internal fracture planes: straight bright shards
   const rnd = new Rand(1223);
@@ -2228,15 +2313,32 @@ function tDunCeilingCave() {
 // LIQUIDS (animated)
 // ===========================================================================
 
+/**
+ * MM6's water is a 7-frame animation group (`wtrtyl`) on a 1.000 s loop with an
+ * uneven frame table - the first and last frames are half as long as the middle
+ * five. The motion is a slow rolling ripple, and the palette is desaturated
+ * blue-green rather than the bright blue people remember.
+ */
+export const WATER_FRAME_TIMES = [1 / 12, 1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 12];
+const WATER_FRAMES = WATER_FRAME_TIMES.length;
+
 function waterFrames(o) {
   const {
-    frames = 12, seed, colDeep, colMid, colLite, colSpec,
+    frames = WATER_FRAMES, seed, colDeep, colMid, colLite, colSpec,
     waves = [[1, 2, 1, 1], [-2, 1, -1, 0.7], [3, 1, 2, 0.45], [1, -3, 1, 0.4]],
     spec = 0.55, warp = 6, foam = 0,
   } = o;
   const out = [];
+  // Phase advances with the frame's start time, not its index, so the uneven
+  // frame table still plays as constant-speed motion.
+  const times = [];
+  let acc = 0;
   for (let f = 0; f < frames; f++) {
-    const ph = (f / frames) * TAU;
+    times.push(acc);
+    acc += frames === WATER_FRAMES ? WATER_FRAME_TIMES[f] : 1 / frames;
+  }
+  for (let f = 0; f < frames; f++) {
+    const ph = (times[f] / acc) * TAU;
     const p = P();
     paint(p, (x, y) => {
       // static domain warp so the wave train is not a regular grid
@@ -2256,7 +2358,7 @@ function waterFrames(o) {
       c = mixC(c, colSpec, cr2);
       if (foam > 0) {
         const fm = smoothstep(0.62, 0.8, nz(x, y, 5, seed + 31, 3, 0.6)) * cr;
-        c = mixC(c, [206, 224, 226], fm * foam);
+        c = mixC(c, [168, 190, 196], fm * foam);
       }
       return c;
     });
@@ -2265,34 +2367,37 @@ function waterFrames(o) {
   return out;
 }
 
+// Spec range: #1E3A50 - #3C6E8C, crest #5A96B4.
 const fWater = () => waterFrames({
-  frames: 10, seed: 1361, colDeep: [12, 52, 92], colMid: [30, 96, 148],
-  colLite: [96, 168, 208], colSpec: [188, 226, 240], spec: 0.5, foam: 0.35,
+  seed: 1361, colDeep: [30, 58, 80], colMid: [60, 110, 140],
+  colLite: [90, 150, 180], colSpec: [130, 176, 198], spec: 0.5, foam: 0.3,
 });
 const fWaterDeep = () => waterFrames({
-  frames: 10, seed: 1367, colDeep: [4, 22, 46], colMid: [10, 54, 92],
-  colLite: [40, 104, 148], colSpec: [126, 180, 210], spec: 0.62, warp: 5,
+  seed: 1367, colDeep: [20, 42, 60], colMid: [40, 82, 108],
+  colLite: [66, 118, 146], colSpec: [104, 152, 176], spec: 0.62, warp: 5,
   waves: [[1, 1, 1, 1], [-1, 2, -1, 0.6], [2, -1, 1, 0.35]],
 });
 
 function fSwampWater() {
-  const frames = 8, out = [];
+  // same 7-frame table as open water so one global phase drives every fluid
+  const frames = WATER_FRAMES, out = [];
+  let acc = 0;
   for (let f = 0; f < frames; f++) {
-    const ph = (f / frames) * TAU;
+    const ph = acc * TAU; acc += WATER_FRAME_TIMES[f];
     const p = P();
     paint(p, (x, y) => {
       const wx = x + (nz(x, y, 4, 1373, 3, 0.55) - 0.5) * 8;
       const wy = y + (nz(x, y, 4, 1379, 3, 0.55) - 0.5) * 8;
       const h = 0.6 * Math.sin(TAU * (wx + 2 * wy) / 64 + ph)
         + 0.4 * Math.sin(TAU * (2 * wx - wy) / 64 - ph);
-      let c = mixC([20, 32, 22], [58, 78, 42], clamp01(h * 0.5 + 0.5));
-      c = mixC(c, [104, 126, 56], smoothstep(0.5, 0.8, h) * 0.7);
+      let c = mixC([44, 56, 38], [78, 92, 56], clamp01(h * 0.5 + 0.5));
+      c = mixC(c, [118, 128, 74], smoothstep(0.5, 0.8, h) * 0.6);
       // scum mats: hard-edged sheets of weed with a dark rim, drifting slowly
       const sn = nz(x + Math.cos(ph) * 4, y + Math.sin(ph) * 4, 4, 1381, 3, 0.6);
       const sc = smoothstep(0.55, 0.60, sn);
       const rim = smoothstep(0.53, 0.55, sn) * (1 - smoothstep(0.575, 0.6, sn));
-      c = mixC(c, mixC([62, 86, 30], [134, 152, 66], nz1(x, y, 18, 1387)), sc * 0.85);
-      c = mixC(c, [16, 24, 12], rim * 0.6);
+      c = mixC(c, mixC([62, 78, 42], [116, 128, 74], nz1(x, y, 18, 1387)), sc * 0.8);
+      c = mixC(c, [34, 42, 26], rim * 0.55);
       return c;
     });
     // bubbles that rise over the loop
@@ -2303,7 +2408,7 @@ function fSwampWater() {
       const r = rnd.float(0.9, 1.8);
       blob(p, bx, by, r, r, (x, y, d) => {
         if (d > 1) return null;
-        return d < 0.5 ? [128, 148, 78] : [40, 56, 30];
+        return d < 0.5 ? [118, 130, 78] : [50, 62, 38];
       });
     }
     out.push(p);
@@ -2311,17 +2416,29 @@ function fSwampWater() {
   return out;
 }
 
-function fLava() {
-  const frames = 8, per = 5, out = [];
-  for (let f = 0; f < frames; f++) {
-    const t = f / frames;
+/**
+ * Lava is a single still texture. MM6 never frame-animated it: lava faces carry
+ * FACE_IsLava and are animated by UV distortion in the rasteriser, which is why
+ * the crust appears to swim rather than flicker. `getAnimated('lava')` hands the
+ * world code the distortion terms instead of a frame list.
+ */
+export const LAVA_UV_DISTORT = {
+  uvDistort: true,
+  terms: [
+    { period: 8000, amp: 0.01 },              // slow in/out "pong"
+    { period: 5000, amp: 0.01 },              // swirl
+    { period: 2000, amp: 0.005, cycles: 24 }, // fine ripple across the face
+  ],
+};
+
+function tLava() {
+  const per = 5;
+  {
     const p = P();
-    const pulse = 0.5 + 0.5 * Math.sin(t * TAU);
+    const pulse = 0.6;
     paint(p, (x, y) => {
-      // crust plates drift exactly one full cell period over the loop, so the
-      // animation closes seamlessly
-      const fx = (x / 64) * per + t * per;
-      const fy = (y / 64) * per + t * per * 0.4;
+      const fx = (x / 64) * per;
+      const fy = (y / 64) * per;
       const c = worley(fx, fy, per, 1399, 1.0);
       const edge = c.f2 - c.f1;
       const n = nz(x, y, 12, 1409, 4, 0.55);
@@ -2341,9 +2458,8 @@ function fLava() {
       col = mixC(col, [126, 42, 8], clamp01(bleed));
       return col;
     });
-    out.push(p);
+    return p;
   }
-  return out;
 }
 
 // ===========================================================================
@@ -2532,10 +2648,10 @@ const DEFS = [
   ['dun_ceiling_stone', 'ceiling', 64, 256, 8, tDunCeilingStone],
   ['dun_ceiling_cave', 'ceiling', 64, 256, 10, tDunCeilingCave],
   // --- liquids (animated) --------------------------------------------------
-  ['water', 'liquid', 64, 512, 10, fWater, 10],
-  ['water_deep', 'liquid', 64, 512, 10, fWaterDeep, 8],
-  ['lava', 'liquid', 64, 512, 10, fLava, 8],
-  ['swamp_water', 'liquid', 64, 512, 10, fSwampWater, 8],
+  ['water', 'liquid', 64, 512, 10, fWater],
+  ['water_deep', 'liquid', 64, 512, 10, fWaterDeep],
+  ['lava', 'liquid', 64, 512, 10, tLava],
+  ['swamp_water', 'liquid', 64, 512, 10, fSwampWater],
   // --- special -------------------------------------------------------------
   ['sky_gradient', 'special', 128, 4096, 18, tSkyGradient],
   ['cloud_layer', 'special', 128, 8192, 10, tCloudLayer],
@@ -2544,6 +2660,76 @@ const DEFS = [
   ['magic_field', 'special', 64, 256, 8, tMagicField],
 ];
 
+/**
+ * Target luminance band per texture: [lo, hi, desaturation].
+ *
+ * MM6 terrain lives in roughly a quarter of the 0-255 range so the runtime grey
+ * multiply has room to darken it 32 steps. Man-made surfaces are allowed a
+ * wider band - brick against pale mortar genuinely is higher contrast - but not
+ * much. Values come from the hex ranges in the visual spec, §11 and §12.
+ */
+const TONE = {
+  // terrain: #3E5A28-#6E8C3C grass, #5A4A32-#8A7050 dirt, and so on
+  grass: [78, 128, 0.10, 0.02],
+  grass_dry: [92, 140, 0.12, 0.05],
+  grass_lush: [70, 120, 0.10, 0.02],
+  dirt: [70, 124, 0.06, 0.14],
+  mud: [58, 106, 0.08, 0.12],
+  road_dirt: [76, 130, 0.06, 0.13],
+  road_cobble: [70, 162, 0.12, 0.09],
+  sand: [156, 200, 0.08, 0.06],
+  sand_dune: [150, 196, 0.08, 0.06],
+  snow: [198, 244, 0.06, -0.02],
+  snow_rock: [96, 212, 0.08, 0.05],
+  gravel: [64, 158, 0.10, 0.09],
+  moss_rock: [58, 134, 0.10, 0.05],
+  swamp_muck: [56, 106, 0.10, 0.02],
+  farmland: [70, 132, 0.06, 0.12],
+  ash: [82, 136, 0.22, 0.0],
+  volcanic_rock: [34, 104, 0.12, 0.05],
+  beach_wet: [64, 116, 0.08, 0.03],
+  tundra: [74, 124, 0.12, 0.04],
+  forest_floor: [46, 114, 0.08, 0.08],
+  cliff_rock: [62, 148, 0.10, 0.08],
+  cliff_sand: [100, 190, 0.08, 0.07],
+  cliff_snow: [96, 202, 0.06, 0.03],
+  cliff_volcanic: [32, 102, 0.10, 0.05],
+  // man-made: a little more range, still not punchy
+  wall_plaster: [168, 224, 0.08, 0.05],
+  wall_timber: [58, 216, 0.06, 0.05],
+  wall_brick: [72, 168, 0.06, 0.05],
+  wall_stone_block: [78, 168, 0.10, 0.10],
+  wall_castle: [98, 172, 0.14, 0.11],
+  wall_castle_dark: [66, 132, 0.14, 0.11],
+  wall_wood_plank: [46, 138, 0.06, 0.05],
+  wall_log: [44, 148, 0.06, 0.05],
+  wall_marble: [190, 240, 0.10, 0.03],
+  wall_sandstone: [110, 200, 0.08, 0.07],
+  wall_temple: [120, 216, 0.08, 0.05],
+  wall_shop_front: [66, 214, 0.08, 0.05],
+  roof_shingle_red: [56, 148, 0.06, 0.03],
+  roof_shingle_grey: [58, 148, 0.12, 0.06],
+  roof_thatch: [70, 180, 0.10, 0.06],
+  roof_tile_blue: [50, 158, 0.10, -0.02],
+  roof_slate: [46, 130, 0.12, 0.0],
+  dun_brick: [62, 134, 0.12, 0.05],
+  dun_brick_mossy: [52, 118, 0.12, 0.04],
+  dun_cave: [46, 122, 0.10, 0.09],
+  dun_cave_dark: [32, 92, 0.10, 0.05],
+  dun_metal: [56, 148, 0.12, 0.0],
+  dun_sewer: [54, 112, 0.12, 0.03],
+  dun_tomb: [86, 148, 0.10, 0.08],
+  dun_ice: [136, 208, 0.08, -0.03],
+  dun_lava_rock: [28, 92, 0.04, 0.06],
+  dun_temple: [40, 130, 0.08, 0.0],
+  dun_wood: [30, 118, 0.06, 0.05],
+  dun_floor_stone: [64, 140, 0.12, 0.08],
+  dun_floor_dirt: [56, 116, 0.12, 0.09],
+  dun_floor_tile: [54, 148, 0.12, 0.04],
+  dun_ceiling_stone: [42, 112, 0.12, 0.06],
+  dun_ceiling_cave: [30, 96, 0.10, 0.07],
+};
+
 /** @type {string[]} every texture id in the library. */
 export const TEXTURE_IDS = DEFS.map((d) => d[0]);
 
@@ -2551,9 +2737,9 @@ export const TEXTURE_IDS = DEFS.map((d) => d[0]);
 export const TEXTURE_META = {};
 const _def = new Map();
 for (const d of DEFS) {
-  const [id, kind, size, tileWorld, dither, build, fps] = d;
+  const [id, kind, size, tileWorld, dither, build] = d;
   TEXTURE_META[id] = { size, tileWorld, kind };
-  _def.set(id, { id, kind, size, tileWorld, dither, build, fps: fps || 10, animated: kind === 'liquid' });
+  _def.set(id, { id, kind, size, tileWorld, dither, build, tone: TONE[id] || null });
 }
 
 const _texCache = new Map();
@@ -2561,32 +2747,40 @@ const _pixCache = new Map();
 const _animCache = new Map();
 
 function texOpts(d) {
-  return {
-    dither: d.dither,
-    // Alpha textures must not be mip-blurred into their transparent border.
-    mips: true,
-    anisotropy: 4,
-  };
+  return { dither: d.dither, mips: true, anisotropy: 4 };
+}
+
+function finish(pix, d) {
+  if (d.tone) toneBand(pix, d.tone[0], d.tone[1], d.tone[2], d.tone[3]);
+  return pix;
 }
 
 function build(id) {
   const d = _def.get(id);
   if (!d) throw new Error(`unknown texture id: ${id}`);
-  if (d.animated) {
-    const frames = d.build();
+  const made = d.build();
+  if (Array.isArray(made)) {
+    // frame-animated fluid: water and its relatives, on the vanilla 7-frame,
+    // 1.000 s table
+    const frames = made.map((f) => finish(f, d));
     _pixCache.set(id, frames[0]);
     const texes = frames.map((f) => toTexture(f, texOpts(d)));
-    _animCache.set(id, { frames: texes, fps: d.fps });
+    _animCache.set(id, {
+      frames: texes,
+      frameTimes: frames.length === WATER_FRAMES ? WATER_FRAME_TIMES.slice() : frames.map(() => 1 / frames.length),
+      duration: 1,
+      fps: frames.length,
+    });
     _texCache.set(id, texes[0]);
   } else {
-    const pix = d.build();
+    const pix = finish(made, d);
     _pixCache.set(id, pix);
     _texCache.set(id, toTexture(pix, texOpts(d)));
-    _animCache.set(id, null);
+    _animCache.set(id, id === 'lava' ? LAVA_UV_DISTORT : null);
   }
 }
 
-/** Get (and lazily build) the THREE.Texture for an id. Frame 0 for liquids. */
+/** Get (and lazily build) the THREE.Texture for an id. Frame 0 for fluids. */
 export function getTex(id) {
   if (!_texCache.has(id)) build(id);
   return _texCache.get(id);
@@ -2598,7 +2792,14 @@ export function getPix(id) {
   return _pixCache.get(id);
 }
 
-/** Animated liquids: { frames: THREE.Texture[], fps }. null for still textures. */
+/**
+ * Animation description for an id, or null.
+ * - water / water_deep / swamp_water:
+ *   `{ frames: THREE.Texture[], frameTimes: number[], duration: 1, fps }`
+ *   Frame times are the vanilla table (1/12, 1/6 x5, 1/12), not a flat rate.
+ * - lava: `{ uvDistort: true, terms: [...] }` - MM6 never swapped lava frames,
+ *   it distorted the UVs, so the world code warps a single texture in-shader.
+ */
 export function getAnimated(id) {
   if (!_animCache.has(id)) build(id);
   return _animCache.get(id) || null;
@@ -2612,4 +2813,160 @@ export function* buildAll() {
     if (!_texCache.has(id)) build(id);
     yield { id, index: i + 1, total };
   }
+}
+
+// ===========================================================================
+// TRANSITION TILES
+//
+// MM6 does not blend terrain in the shader: the artists drew transition
+// tilesets (46 variants per pair) and the map stores which variant sits on
+// which tile. Roads are the same mechanism with 24 variants, which is why a
+// road always looks painted onto the ground rather than sunk into it.
+//
+// We reproduce that with a mask set: `transitionTile(base, over, mask)`
+// composites two finished terrain tiles through a hand-shaped, noise-ragged
+// coverage mask, and the result is one more 64x64 palettised tile.
+// ===========================================================================
+
+/** Edge masks (the `over` terrain covers that side of the tile). */
+export const EDGE_MASKS = ['n', 'e', 's', 'w', 'ne', 'se', 'sw', 'nw'];
+/** Inner-corner masks: `over` covers everything except that corner. */
+export const CORNER_MASKS = ['in_ne', 'in_se', 'in_sw', 'in_nw'];
+/** Road variants, laid over a base terrain the same way MM6 lays its roads. */
+export const ROAD_MASKS = [
+  'road_ns', 'road_ew',
+  'road_turn_ne', 'road_turn_se', 'road_turn_sw', 'road_turn_nw',
+  'road_t_n', 'road_t_e', 'road_t_s', 'road_t_w',
+  'road_y', 'road_cross', 'road_end_n', 'road_end_e', 'road_end_s', 'road_end_w',
+];
+/** Every mask id `transitionTile` accepts, plus 'full'. */
+export const TRANSITION_MASKS = ['full', ...EDGE_MASKS, ...CORNER_MASKS, ...ROAD_MASKS];
+
+const ROAD_HALF = 13;      // half width of a road band, in texels
+const ROAD_FEATHER = 3;    // how far the ragged edge reaches
+
+/** Coverage of a road arm running from the tile edge to the centre. */
+function roadArm(x, y, dir) {
+  // distance from the arm's centre line, and how far along the arm we are
+  let across, along;
+  if (dir === 'n') { across = x - 32; along = y; }
+  else if (dir === 's') { across = x - 32; along = 63 - y; }
+  else if (dir === 'w') { across = y - 32; along = x; }
+  else { across = y - 32; along = 63 - x; }
+  if (along > 32) return -999;
+  return ROAD_HALF - Math.abs(across);
+}
+
+/**
+ * Signed coverage for a mask, in texels: > 0 inside the `over` terrain.
+ * Everything is expressed as a distance so the caller can feather and rag the
+ * boundary uniformly.
+ */
+function maskDistance(id, x, y) {
+  const n = 32 - y, s = y - 31, w = 32 - x, e = x - 31;
+  switch (id) {
+    case 'full': return 999;
+    case 'n': return n;
+    case 's': return s;
+    case 'w': return w;
+    case 'e': return e;
+    // outer corners: the over terrain fills one quadrant
+    case 'ne': return Math.min(n, e);
+    case 'se': return Math.min(s, e);
+    case 'sw': return Math.min(s, w);
+    case 'nw': return Math.min(n, w);
+    // inner corners: everything except one quadrant
+    case 'in_ne': return -Math.min(n, e);
+    case 'in_se': return -Math.min(s, e);
+    case 'in_sw': return -Math.min(s, w);
+    case 'in_nw': return -Math.min(n, w);
+    default: break;
+  }
+  if (id.startsWith('road')) {
+    const arms = {
+      road_ns: ['n', 's'], road_ew: ['e', 'w'],
+      road_turn_ne: ['n', 'e'], road_turn_se: ['s', 'e'],
+      road_turn_sw: ['s', 'w'], road_turn_nw: ['n', 'w'],
+      road_t_n: ['e', 'w', 's'], road_t_e: ['n', 's', 'w'],
+      road_t_s: ['e', 'w', 'n'], road_t_w: ['n', 's', 'e'],
+      road_y: ['s', 'n', 'e'], road_cross: ['n', 'e', 's', 'w'],
+      road_end_n: ['n'], road_end_e: ['e'], road_end_s: ['s'], road_end_w: ['w'],
+    }[id];
+    if (!arms) return -999;
+    let d = -999;
+    for (const a of arms) d = Math.max(d, roadArm(x, y, a));
+    // the junction itself is a rounded patch so arms meet cleanly
+    if (arms.length > 1) {
+      d = Math.max(d, ROAD_HALF + 1 - Math.hypot(x - 31.5, y - 31.5) * 0.9);
+    }
+    return d;
+  }
+  return -999;
+}
+
+const _maskCache = new Map();
+
+/**
+ * The 0-255 coverage mask for a transition id, as a Uint8Array of size*size.
+ * The boundary is broken up with tiling noise so it reads as painted rather
+ * than cut, and it is deliberately hard-edged: MM6 has no alpha blending.
+ */
+export function getMask(id, size = 64) {
+  const key = `${id}@${size}`;
+  if (_maskCache.has(key)) return _maskCache.get(key);
+  const out = new Uint8Array(size * size);
+  const road = id.startsWith('road');
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const sx = (x * 64) / size, sy = (y * 64) / size;
+      // ragged boundary: two octaves of tiling noise pushing the edge around
+      const rag = (nz(sx, sy, road ? 8 : 5, road ? 313 : 907, 3, 0.55) - 0.5) * (road ? 5 : 7);
+      const d = maskDistance(id, sx, sy) + rag;
+      out[y * size + x] = d > 0 ? 255 : d > -ROAD_FEATHER ? 96 : 0;
+    }
+  }
+  _maskCache.set(key, out);
+  return out;
+}
+
+const _transCache = new Map();
+const _transPix = new Map();
+
+/**
+ * Composite `overId` onto `baseId` through a transition mask and return the
+ * finished THREE.Texture. Cached, so the world generator can ask for the same
+ * combination on every tile that needs it.
+ *
+ * The half-coverage band of the mask is resolved with an ordered dither
+ * between the two tiles, which is exactly the trick the original art uses to
+ * soften a transition edge inside an 8-bit palette.
+ */
+export function transitionTile(baseId, overId, maskId) {
+  const key = `${baseId}|${overId}|${maskId}`;
+  if (_transCache.has(key)) return _transCache.get(key);
+  const base = getPix(baseId), over = getPix(overId);
+  const size = Math.min(base.w, over.w);
+  const mask = getMask(maskId, size);
+  const out = P(size);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const m = mask[y * size + x];
+      const useOver = m === 255 ? true : m === 0 ? false : ((x + y * 2) & 3) < 2;
+      const src = useOver ? over : base;
+      const sx = Math.round((x * src.w) / size), sy = Math.round((y * src.h) / size);
+      out.setArr(x, y, src.get(sx, sy));
+    }
+  }
+  _transPix.set(key, out);
+  // already palettised on both sides, so no further dithering is wanted
+  const tex = toTexture(out, { dither: 0, mips: true, anisotropy: 4 });
+  _transCache.set(key, tex);
+  return tex;
+}
+
+/** The raw Pix for a transition tile, for the minimap and atlas packing. */
+export function transitionPix(baseId, overId, maskId) {
+  const key = `${baseId}|${overId}|${maskId}`;
+  if (!_transPix.has(key)) transitionTile(baseId, overId, maskId);
+  return _transPix.get(key);
 }

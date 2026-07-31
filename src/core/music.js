@@ -15,6 +15,7 @@
 // ---------------------------------------------------------------------------
 
 import { Rand, hashStr, clamp } from './rng.js';
+import { renderOffline } from './audio.js';
 
 const A4 = 69;
 export const mtof = (m) => 440 * Math.pow(2, (m - A4) / 12);
@@ -182,11 +183,11 @@ track('dungeon', {
   progA: [i_, i_, i_, i_, VI, VI, i_, i_],
   progB: [i_, i_, bII, bII, i_, i_, v_, v_],
   parts: {
-    pad: { v: 'bowed', center: 45, gain: 0.55, drone: true },
-    bass: { v: 'bass', pattern: 'pedal', center: 31, gain: 0.75 },
+    pad: { v: 'bowed', center: 45, gain: 0.4, drone: true },
+    bass: { v: 'bass', pattern: 'pedal', center: 31, gain: 0.58 },
     melody: { v: 'choir', center: 62, lo: 55, hi: 72, density: 'vsparse', gain: 0.24 },
     arp: null,
-    perc: { kit: 'sparse', gain: 0.7 },
+    perc: { kit: 'sparse', gain: 0.6 },
     accent: { v: 'bell', mode: 'toll', center: 55, gain: 0.3 },
   },
 });
@@ -255,11 +256,11 @@ track('shop', {
   progB: [IV, I_, ii, V5, IV, V5, I_, I_],
   parts: {
     pad: null,
-    bass: { v: 'pluck', pattern: 'root5', center: 45, gain: 0.5 },
-    melody: { v: 'pluck', center: 79, lo: 69, hi: 91, density: 'med', gain: 0.5, bright: true },
-    arp: { v: 'pluck', pattern: [0, 1, 2, 3, 2, 1], rate: 2, center: 67, gain: 0.42, bright: true },
+    bass: { v: 'pluck', pattern: 'root5', center: 45, gain: 0.66 },
+    melody: { v: 'pluck', center: 79, lo: 69, hi: 91, density: 'med', gain: 0.62, bright: true },
+    arp: { v: 'pluck', pattern: [0, 1, 2, 3, 2, 1], rate: 2, center: 67, gain: 0.56, bright: true },
     perc: { kit: 'none', gain: 0.2 },
-    accent: { v: 'pluck', mode: 'stabs', center: 60, gain: 0.3, bright: true },
+    accent: { v: 'pluck', mode: 'stabs', center: 60, gain: 0.42, bright: true },
   },
 });
 
@@ -487,6 +488,11 @@ export function buildSong(def) {
   for (const letter of def.form) {
     const prog = (letter === 'B' && def.progB) ? def.progB : def.progA;
     const sec = sections[letter];
+    // Anchor the melody to where the previous bar left off so the line joins up
+    // instead of jumping an octave every time the chord root moves. Reset at
+    // each section boundary, which is what keeps the two A phrases identical.
+    let anchor = P.melody ? P.melody.center : 60;
+    let cellRoot = anchor;
     for (let b = 0; b < def.bars; b++) {
       const chord = prog[b % prog.length];
       const pcs = chordPcs(def.key, chord);
@@ -537,8 +543,13 @@ export function buildSong(def) {
       if (P.melody) {
         const cell = sec.order[Math.floor(b / 2) % sec.order.length];
         const half = b % 2;                      // which bar of the two-bar cell
-        const rootIdx = nearestIn(notes, [rootPc], P.melody.center);
+        // The two bars of a cell share one frame of reference, otherwise the
+        // motif's own contour and a re-anchor land on top of each other and the
+        // line leaps an octave in the middle of its own phrase.
+        const rootIdx = nearestIn(notes, [rootPc], half === 0 ? anchor : cellRoot);
+        if (half === 0 && rootIdx >= 0) cellRoot = notes[rootIdx];
         if (rootIdx >= 0) {
+          let last = null;
           for (const n of cell) {
             if (Math.floor(n.s / spb) !== half) continue;
             let idx = clamp(rootIdx + n.deg, 0, notes.length - 1);
@@ -549,7 +560,14 @@ export function buildSong(def) {
             let m = notes[idx];
             while (m < P.melody.lo) m += 12;
             while (m > P.melody.hi) m -= 12;
+            last = m;
             ev.push({ s: n.s - half * spb, len: Math.min(n.len, spb - (n.s - half * spb)), m, v: P.melody.v, layer: 'melody', vel: P.melody.gain * (n.strong ? 1 : 0.78) });
+          }
+          // Carry the line forward only at cell boundaries, and pull it back
+          // towards the register the part lives in - left alone, "nearest chord
+          // root to the last note" ratchets the whole phrase down an octave.
+          if (half === 1 && last != null) {
+            anchor = clamp(Math.round(last * 0.6 + P.melody.center * 0.4), P.melody.center - 7, P.melody.center + 7);
           }
         }
       }
@@ -731,7 +749,7 @@ function buildKit(sampleRate) {
     bus.gain.value = 1;
     bus.connect(off.destination);
     spec.build(off, bus, new Rand(hashStr('mm6drum:' + id)));
-    const buf = await off.startRendering();
+    const buf = await renderOffline(off);
     const d = buf.getChannelData(0);
     // DC block then normalise, same discipline as the SFX bakery.
     const rc = 1 - 2 * Math.PI * 15 / sampleRate;
@@ -758,7 +776,23 @@ const LAYERS = ['pad', 'bass', 'arp', 'melody', 'accent', 'perc'];
 const SEND = { pad: 0.55, bass: 0.06, arp: 0.22, melody: 0.3, accent: 0.28, perc: 0.16 };
 const LOOKAHEAD = 0.25;   // seconds of events queued ahead of the clock
 const TICK_MS = 50;
-const MAX_MUSIC_VOICES = 18;
+// Two caps: melody/pad/arp stop being added first, but the rhythm section is
+// allowed past that line so a dropped voice never punches a hole in the beat.
+// Nothing gets past the hard cap, which leaves headroom under the ~24 total.
+const MUSIC_SOFT_CAP = 14;
+const MUSIC_HARD_CAP = 20;
+
+/** Soft-knee limiter curve: linear to 0.7, then tanh into a 0.93 ceiling. */
+const LIMIT_CURVE = (() => {
+  const n = 2048, c = new Float32Array(n), knee = 0.7;
+  for (let k = 0; k < n; k++) {
+    const x = (k / (n - 1)) * 2 - 1;
+    const a = Math.abs(x);
+    const y = a <= knee ? a : knee + (1 - knee) * Math.tanh((a - knee) / (1 - knee));
+    c[k] = x < 0 ? -y : y;
+  }
+  return c;
+})();
 
 function defaultMix(i) {
   return {
@@ -784,7 +818,14 @@ export class Music {
     const ctx = this.ctx;
     this.out = ctx.createGain();
     this.out.gain.value = 1;
-    this.out.connect(masterGain || ctx.destination);
+    // A soft knee above 0.7 catches the moments when a tutti chord, a timpani
+    // roll and the melody all land on beat one. Unity below the knee, so the
+    // quiet tracks are untouched.
+    this.limiter = ctx.createWaveShaper();
+    this.limiter.curve = LIMIT_CURVE;
+    this.limiter.oversample = '2x';
+    this.out.connect(this.limiter);
+    this.limiter.connect(masterGain || ctx.destination);
 
     // One shared plate for the whole score; layers feed it at fixed amounts so
     // a voice costs no extra nodes to make it sound like a hall.
@@ -919,7 +960,8 @@ export class Music {
   }
 
   _note(deck, e, time) {
-    if (this.voices >= MAX_MUSIC_VOICES && e.layer !== 'perc' && e.layer !== 'bass') return;
+    if (this.voices >= MUSIC_HARD_CAP) return;
+    if (this.voices >= MUSIC_SOFT_CAP && e.layer !== 'perc' && e.layer !== 'bass') return;
     const bus = deck.buses[e.layer] || deck.gain;
     const dur = (e.len || 1) * deck.song.stepSec;
     if (e.drum) {
@@ -1137,5 +1179,5 @@ export async function renderTrackOffline(trackId, bars = 16, sampleRate = 22050,
       m._scheduleStep(deck, barIdx, s, 0.05 + b * song.barSec + s * song.stepSec);
     }
   }
-  return off.startRendering();
+  return renderOffline(off);
 }
