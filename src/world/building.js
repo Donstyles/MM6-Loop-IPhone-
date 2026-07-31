@@ -552,7 +552,7 @@ export function buildWall(spec = {}, rand) {
     if (gate) {
       const gx = a.x + dx * gate.t, gz = a.z + dz * gate.t;
       const sub = new MeshBuilder();
-      const gw = gate.w, gh = spec.gateHeight || 430;
+      const gw = gate.w, gh = spec.gateHeight || 560;
       // Lintel over the opening plus two flanking towers.
       sub.box(tex, -gw / 2, gh, -th / 2, gw / 2, h + 130, th / 2, { sides: 'nsewt', vv: 0.8 });
       for (const sx of [-1, 1]) {

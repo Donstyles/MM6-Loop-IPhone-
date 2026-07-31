@@ -116,8 +116,102 @@ export async function startGame(shell) {
     }
   }
 
+  // Generate a first batch of quests so the log is not empty on arrival.
+  if (questMod && questMod.generateQuestsForRegion) {
+    try {
+      session.quests = questMod.generateQuestsForRegion('new_sorpigal', seed, 6) || [];
+      if (session.party) session.party.quests = session.quests;
+    } catch (e) { console.warn('quest generation failed', e); }
+  }
+
+  // MM6 opens on its title illustration, not in the world.
+  installMenuFlow(shell, session, seed);
+
   window.__loadRegion = (id) => loadRegion(session, id, seed);
   return session;
+}
+
+/**
+ * Title -> party creation -> play. The world is already generated behind the
+ * menu, so "New Game" drops straight in with no second load.
+ */
+function installMenuFlow(shell, session, seed) {
+  const { openScreen, screens } = shell;
+
+  const startPlay = () => { screens.clear(); };
+
+  const showTitle = () => {
+    openScreen('title', {
+      onPick: (id) => {
+        if (id === 'new') showChargen();
+        else if (id === 'options') openScreen('options', { onBack: showTitle });
+        else if (id === 'load') {
+          const ok = loadGame(session);
+          if (ok) startPlay(); else showTitle();
+        } else if (id === 'quit') startPlay();
+      },
+    });
+    if (screens.top) screens.top.fullFrame = true;
+  };
+
+  const showChargen = () => {
+    openScreen('chargen', {
+      seed,
+      onDone: (slots) => {
+        applyRoster(session, slots, seed);
+        startPlay();
+      },
+      onCancel: showTitle,
+    });
+    if (screens.top) screens.top.fullFrame = true;
+  };
+
+  window.__mm6_showTitle = showTitle;
+  window.__mm6_newGame = startPlay;
+  showTitle();
+}
+
+/** Rebuild the party from the character-creation slots. */
+function applyRoster(session, slots, seed) {
+  const partyMod = session.modules?.partyMod;
+  if (!partyMod || !partyMod.createParty || !slots || !slots.length) return;
+  try {
+    const roster = slots.map((s) => ({
+      class: s.class, name: s.name, sex: s.sex,
+      stats: s.stats, portraitSeed: s.portraitSeed ?? s.face,
+    }));
+    const party = partyMod.createParty(seed, roster);
+    session.party = party;
+    if (session.hud) session.hud.session = session;
+  } catch (e) {
+    console.warn('could not apply the created roster', e);
+  }
+}
+
+function loadGame(session) {
+  try {
+    const raw = localStorage.getItem('mm6-save');
+    if (!raw) return false;
+    const data = JSON.parse(raw);
+    const partyMod = session.modules?.partyMod;
+    if (partyMod && partyMod.deserialize) session.party = partyMod.deserialize(data.party);
+    if (data.clock) session.clock.minutes = data.clock;
+    return true;
+  } catch (e) { console.warn('load failed', e); return false; }
+}
+
+export function saveGame(session) {
+  try {
+    const partyMod = session.modules?.partyMod;
+    localStorage.setItem('mm6-save', JSON.stringify({
+      party: partyMod && partyMod.serialize ? partyMod.serialize(session.party) : null,
+      clock: session.clock.minutes,
+      map: session.mapId,
+      pos: session.player.pos.toArray(),
+      yaw: session.player.yaw,
+    }));
+    return true;
+  } catch (e) { console.warn('save failed', e); return false; }
 }
 
 /** Generate and enter an outdoor region. */

@@ -81,6 +81,24 @@ export class Spawner {
     // Towns are part of the outdoor map in MM6 - you walk up to a shop's door
     // and the establishment opens over the world view.
     for (const town of region.towns || []) this.populateTown(town, ground, rnd);
+
+    // Dungeon mouths: an invisible marker in the doorway the party activates.
+    for (const d of region.dungeons || []) {
+      const x = d.entrance?.x ?? d.x, z = d.entrance?.z ?? d.z;
+      if (x === undefined || z === undefined) continue;
+      S.entities.add(new Entity({
+        category: CATEGORY.PROP, kind: 'dungeon_entrance', sheet: null, static: true,
+        x, y: d.entrance?.y ?? ground(x, z), z,
+        radius: 200, solid: false,
+        interact: {
+          kind: 'transition',
+          toDungeon: { id: d.id, name: d.name, theme: d.theme, rooms: d.rooms, levels: d.levels },
+          seed: d.seed || 1,
+          back: { region: region.id, x, y: ground(x, z), z, yaw: d.yaw || 0 },
+        },
+        label: `Enter ${d.name || 'the dungeon'}`,
+      }));
+    }
   }
 
   populateTown(town, ground, rnd) {

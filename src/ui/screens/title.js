@@ -41,20 +41,23 @@ export function paintTitleArt(g, w, h) {
     const d = Math.hypot((u - sunX) / (w * 0.55), (v - sunY) / (horizon * 0.9));
     const heat = clamp(1.15 - d, 0, 1);
     const streak = (n - 0.5) * 3.2;
-    if (heat > 0.42) {
-      // Fire ramp near the sun: bright core, deep ember at the edge.
-      const s = clamp(3 + (heat - 0.42) * 20 + streak, 1, 15);
-      return ramp('fire', Math.round(s));
-    }
-    // Cold sky elsewhere, darkest at the top of the frame.
-    const s = clamp(1.5 + t * 5.5 + heat * 5 + streak, 0, 12);
-    return ramp('sky', Math.round(s));
+    // Cross-fade sky into fire rather than switching ramps, or the transition
+    // shows up as a hard arc across the sky.
+    const cold = ramp('sky', Math.round(clamp(1.5 + t * 5.5 + streak, 0, 12)));
+    if (heat <= 0.02) return cold;
+    const hot = ramp('fire', Math.round(clamp(2 + heat * 11 + streak, 1, 15)));
+    const k = clamp(heat * 1.25, 0, 1);
+    return [cold[0] + (hot[0] - cold[0]) * k,
+      cold[1] + (hot[1] - cold[1]) * k,
+      cold[2] + (hot[2] - cold[2]) * k];
   }, 11);
 
-  // The sun's disc sits low behind the towers.
-  g.fillStyle = rampCss('fire', 14);
-  g.beginPath(); g.arc(sunX | 0, sunY | 0, 34, 0, Math.PI * 2); g.fill();
-  glow(g, sunX, sunY, 170, '#ff9820', 0.75);
+  // The sun's disc sits low behind the towers - small and hot, not a dome.
+  glow(g, sunX, sunY, 96, '#ff8018', 0.5);
+  g.fillStyle = rampCss('fire', 13);
+  g.beginPath(); g.arc(sunX | 0, sunY | 0, 19, 0, Math.PI * 2); g.fill();
+  g.fillStyle = rampCss('fire', 15);
+  g.beginPath(); g.arc(sunX | 0, sunY | 0, 13, 0, Math.PI * 2); g.fill();
 
   // Far hills, each nearer layer darker: aerial perspective in reverse, the
   // way a backlit dusk landscape actually reads.

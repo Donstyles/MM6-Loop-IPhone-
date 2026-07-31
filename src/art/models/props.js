@@ -475,7 +475,8 @@ function lootTilt(fill, H) {
   g.rotation.x = -0.55;
   outer.add(g);
   fill(g);
-  outer.add(sph(H * 0.55, rampHex('grey', 2), { y: H * 0.02, sy: 0.06 }));
+  // No contact shadow: MM6 draws none under any sprite, and a baked-in one
+  // would read as a black smear the moment the item sits on grass.
   return outer;
 }
 

@@ -155,11 +155,11 @@ async function boot() {
       camera.rotation.set(-0.72, 0, 0);
     } else if (mode === 'town' && town) {
       if (shot === 'street') {
-        // Standing in the plaza, looking down the main street.
+        // On the main street, looking up it toward the plaza and its well.
         const p = town.plaza;
-        camera.position.set(p.x - p.radius * 0.8, town.y + 160, p.z + p.radius * 0.5);
-        camera.rotation.y = Math.atan2(-1, -0.55);
-        camera.rotation.x = -0.02;
+        camera.position.set(p.x - p.radius * 2.6, town.y + 160, p.z);
+        camera.rotation.y = -Math.PI / 2;
+        camera.rotation.x = -0.03;
       } else {
         // Approach along the main street, aimed at a gate (the gates sit at the
         // midpoint of each wall, the corners are towers - don't frame a tower).

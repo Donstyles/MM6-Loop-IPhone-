@@ -97,7 +97,6 @@ class Slot {
     this.id = '';
     this.sheet = null;
     this.seq = 0;
-    this.gen = 0;
 
     this.x = 0; this.y = 0; this.z = 0;
     this.vx = 0; this.vy = 0; this.vz = 0;
@@ -211,7 +210,6 @@ export class VFXSystem {
   _reset(s) {
     s.active = true;
     s.seq = this._seq++;
-    s.gen++;
     s.kind = KIND_BURST;
     s.sheet = null;
     s.x = s.y = s.z = 0;
@@ -580,7 +578,6 @@ export class VFXSystem {
     if (!sr) return 0;
     const cx = camera ? camera.position.x : 0;
     const cz = camera ? camera.position.z : 0;
-    const cy = camera ? camera.position.y : 0;
     const far = (ctx && ctx.drawDistance) || 9000;
     const far2 = far * far;
     let drawn = 0;
@@ -617,8 +614,6 @@ export class VFXSystem {
       drawn++;
     }
     this._drawn = drawn;
-    // cy is unused beyond keeping the signature honest for future 3D culling.
-    void cy;
     return drawn;
   }
 

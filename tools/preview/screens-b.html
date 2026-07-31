@@ -251,7 +251,7 @@
 
     panel('dialogue.js - quest accepted, mid-reveal',
       (s, ui) => new DialogueScreen(s, ui, {}, { npc: JSON.parse(JSON.stringify(NPC)) }),
-      { steps: 0, before: (sc) => { sc.choose('quest'); sc.update(0.55); }, mx: 500, my: 250 });
+      { steps: 0, before: (sc) => { sc.shown = sc.body.length; sc.choose('quest'); sc.update(0.6); }, mx: 500, my: 250 });
 
     panel('dialogue.js - Learn Skill list',
       (s, ui) => new DialogueScreen(s, ui, {}, { npc: JSON.parse(JSON.stringify(NPC)) }),

@@ -236,6 +236,9 @@ window.__mm6 = {
   ready: () => !!session && !!hud,
   open: (id, opts) => openScreen(id, opts),
   close: () => screens.clear(),
+  /** Skip the title and drop straight into the world (used by capture runs). */
+  newGame: () => { screens.clear(); },
+  title: () => window.__mm6_showTitle && window.__mm6_showTitle(),
   screen: () => (screens.top ? screens.top.id : null),
   teleport(x, y, z, yaw) {
     if (!session) return;

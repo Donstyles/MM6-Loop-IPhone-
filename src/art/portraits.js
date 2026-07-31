@@ -131,7 +131,7 @@ const SKIN_TONES = {
 function skinRamp(tone) {
   const s = SKIN_TONES[tone];
   const f = rs('flesh', s.t);
-  const base = desat([f[0] * s.tint[0], f[1] * s.tint[1], f[2] * s.tint[2]], 0.18);
+  const base = desat([f[0] * s.tint[0], f[1] * s.tint[1], f[2] * s.tint[2]], 0.26);
   return {
     ramp: [
       mixC(scl(base, 0.17), rs('blood', 0.14), s.ruddy * 0.7),
@@ -287,6 +287,10 @@ function buildHairColours(name) {
     dark: scl(base, light ? 0.34 : 0.26),
     lite: mixC(scl(base, light ? 1.30 : 1.75), rs('sand', 0.85), light ? 0.26 : 0.14),
     sheen: light ? 0.80 : 0.55,
+    // Facial hair reads darker than head hair - it sits in the shadow of the
+    // jaw and is coarser. Pale beards otherwise turn into a bright bib.
+    beard: scl(base, light ? 0.62 : 0.80),
+    beardDark: scl(base, light ? 0.26 : 0.20),
   };
 }
 
@@ -684,7 +688,7 @@ function paint(face, ex, W, H) {
       ao -= blob(Math.abs(dxf) - rx * 0.52, Y - (noseY + ry * 0.07), rx * 0.30, ry * 0.13)
         * (0.32 * g.hollow + 0.45 * ex.hollow);
       ao -= smoothstep(chinY - ry * 0.10, chinY + 1.5, Y) * 0.50;                   // jaw underside
-      ao -= hairShadowAt(hairP, X, Y) * 0.60;
+      ao -= hairShadowAt(hairP, X, Y) * 0.38;
       // headgear throws its own edge across the face
       if (gearShadow) ao -= gearShadow(X, Y) * 0.55;
       // the far cheek turns away from the light and the viewer at once
@@ -770,8 +774,8 @@ function paint(face, ex, W, H) {
               * smoothstep(g.eyeW * 1.25, g.eyeW * 0.85, Math.abs(ox)) * 0.6;
           }
         }
-        if (dk > 0) col = mixC(col, scl(col, 0.56), Math.min(1, dk) * wr * 0.80);
-        if (lt > 0) col = mixC(col, scl(col, 1.24), Math.min(1, lt) * wr * 0.5);
+        if (dk > 0) col = mixC(col, scl(col, 0.62), Math.min(1, dk) * wr * 0.55);
+        if (lt > 0) col = mixC(col, scl(col, 1.20), Math.min(1, lt) * wr * 0.38);
       }
 
       if (face.marks.scar) {
@@ -835,8 +839,8 @@ function paint(face, ex, W, H) {
         // has to stay darker than the hair on the skull or it reads as a bib.
         const lit = 0.16 + 0.48 * clamp(1 - ell(X - (fx - rx * 0.45), Y - (mouthY - 1), rx * 1.5, ry * 1.1), 0, 1);
         const strand = fb(X * 1.5 + Y * 0.3, Y * 3.2, 3, sd + 61);
-        let c = mixC(HC.dark, HC.base, clamp(lit * 1.35, 0, 1));
-        c = mixC(c, HC.lite, clamp((strand - 0.62) * 1.6, 0, 1) * 0.35 * lit);
+        let c = mixC(HC.beardDark, HC.beard, clamp(lit * 1.35, 0, 1));
+        c = mixC(c, HC.lite, clamp((strand - 0.62) * 1.6, 0, 1) * 0.30 * lit);
         if (face.age === 'old') c = mixC(c, greyBeard, 0.32);
         c = scl(c, 0.82 + strand * 0.26);
         bl(buf, ii * 3, c, a);
@@ -966,7 +970,7 @@ function drawFeatures(buf, i3, X, Y, hc, P) {
         const fibre = nz(Math.cos(a2) * 4 + 9, Math.sin(a2) * 4 + 9, sd + 17);
         let c2 = mixC(scl(iCol, 0.55), scl(iCol, 1.30), clamp(0.35 + fibre * 0.7, 0, 1));
         // light enters from the upper left, so the lower iris glows
-        c2 = mixC(c2, scl(iCol, 1.75), clamp(((Y - gy) / ir) * 0.6 + 0.15, 0, 1) * 0.60);
+        c2 = mixC(c2, scl(iCol, 1.45), clamp(((Y - gy) / ir) * 0.6 + 0.15, 0, 1) * 0.42);
         c2 = mixC(c2, scl(iCol, 0.20), smoothstep(0.70, 1.0, idm));      // limbal ring
         c2 = scl(c2, lidShadow);
         bl(buf, i3, c2, cov(idm * idm, 0.28) * ea * hc);
@@ -1012,7 +1016,7 @@ function drawFeatures(buf, i3, X, Y, hc, P) {
       const outer = browY - ry * 0.050 + ex.browOut - ex.browTilt * 0.55;
       const arch = g.browArch * (1 + ex.browTilt * 0.2);
       const yb = mix(inner, outer, t * t * (3 - 2 * t)) - Math.sin(t * Math.PI) * arch * 0.9;
-      const th = (0.95 + 0.65 * g.browHeavy) * thick * (1 - t * 0.5) + 0.3;
+      const th = (0.62 + 0.48 * g.browHeavy) * thick * (1 - t * 0.45) + 0.25;
       // Hair-by-hair edge: noise on the boundary, softer at the ends.
       const edge = (fb(X * 2.4, Y * 2.4, 2, sd + 41) - 0.5) * 0.9;
       const d = Math.abs(Y - yb) + edge * 0.55;
@@ -1067,13 +1071,15 @@ function drawFeatures(buf, i3, X, Y, hc, P) {
         const c = mixC(C.lipDn, skinLite, Math.max(0, 1 - Math.abs((Y - (yc + ry * 0.028)) / 0.7)) * 0.40);
         bl(buf, i3, c, dnA * 0.8 * hc);
       }
+      // The line between the lips is the darkest mark on the lower face; at
+      // 63px it is most of what makes a mouth read at all.
       if (open < 0.35) {
-        const a = Math.max(0, 1 - Math.abs(Y - yc) / 0.62)
-          * smoothstep(1.06, 0.84, Math.abs(ux)) * (1 - open * 2.4);
-        bl(buf, i3, C.lipLine, a * 0.92 * hc);
+        const a = Math.max(0, 1 - Math.abs(Y - yc) / 0.85)
+          * smoothstep(1.10, 0.80, Math.abs(ux)) * (1 - open * 2.4);
+        bl(buf, i3, C.lipLine, a * 1.0 * hc);
       }
-      const shl = Math.max(0, 1 - Math.abs(Y - (lipBot + 0.75)) / 0.9) * smoothstep(0.95, 0.6, Math.abs(ux));
-      bl(buf, i3, scl(skinDeep, 1.05), shl * 0.32 * hc);
+      const shl = Math.max(0, 1 - Math.abs(Y - (lipBot + 0.85)) / 1.0) * smoothstep(0.98, 0.55, Math.abs(ux));
+      bl(buf, i3, scl(skinDeep, 1.02), shl * 0.42 * hc);
     }
   }
 
@@ -1251,11 +1257,14 @@ function beardCov(p, X, Y, sd, headCov) {
   let a = 0;
 
   const moustache = () => {
-    const w = p.noseW * 1.9;
-    const yb = p.mouthY - p.ry * 0.050;
-    return smoothstep(w + 1.0, w - 0.8, Math.abs(dx))
-      * smoothstep(p.noseY + 0.25, p.noseY + 0.9, Y)
-      * (1 - smoothstep(yb - 0.4, yb + 0.9, Y));
+    // Sits under the nose and stops well short of the lip line, with the ends
+    // dropping past the mouth corners - a solid rectangle reads as a smudge.
+    const w = p.noseW * 1.55;
+    const droop = 1 + sq(dx / (w + 0.001)) * 0.55;
+    const yb = p.mouthY - p.ry * 0.055 + (droop - 1) * p.ry * 0.06;
+    return smoothstep(w + 1.2, w - 0.5, Math.abs(dx))
+      * smoothstep(p.noseY + 0.30, p.noseY + 1.1, Y)
+      * (1 - smoothstep(yb - 0.5, yb + 0.7, Y));
   };
   const jaw = (top, spread) => {
     const inX = smoothstep(p.rx * (0.98 * spread), p.rx * (0.72 * spread), Math.abs(dx));
@@ -1419,9 +1428,14 @@ function drawGear(buf, subj, face, ex, P) {
           const zc = Math.sqrt(Math.max(0, 1 - ux * ux - uy * uy));
           const nl = 1 / Math.sqrt(ux * ux + uy * uy + zc * zc + 1e-6);
           let sh = 0.10 + Math.max(0, (ux * LX + uy * LY + zc * 0.78) * nl) * 0.95;
-          // Steel has a much tighter falloff than skin: one hard reflection.
-          sh += Math.exp(-Math.pow((ux + 0.42) / 0.17, 2)) * Math.exp(-Math.pow((uy + 0.28) / 0.50, 2)) * 0.55;
-          sh *= 0.92 + (fb(X * 1.2, Y * 1.2, 2, sd + 411) - 0.5) * 0.18;
+          // Steel has a much tighter falloff than skin: one hard reflection,
+          // a dark horizon just below it, and hammer-planished tone variation.
+          sh += Math.exp(-sq((ux + 0.42) / 0.17)) * Math.exp(-sq((uy + 0.28) / 0.50)) * 0.55;
+          sh -= Math.exp(-sq((ux - 0.34) / 0.30)) * Math.exp(-sq((uy - 0.10) / 0.55)) * 0.22;
+          // raised centre seam running over the crown
+          const seam = Math.exp(-sq((X - hcx + rx * 0.10) / 0.85));
+          sh += seam * (0.30 - 0.55 * smoothstep(0.0, 0.7, ux + 0.10));
+          sh *= 0.90 + (fb(X * 1.6, Y * 1.6, 2, sd + 411) - 0.5) * 0.26;
           if (band > 0.5) sh = sh * 0.75 + 0.22;
           if (nasal > 0.5) sh = 0.24 + Math.max(0, 1 - Math.abs(X - fx + 0.4) / 1.3) * 0.70;
           sh *= ex.key;

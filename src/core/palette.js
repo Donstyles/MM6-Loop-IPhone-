@@ -16,7 +16,7 @@
 
 const RAMPS = [
   // name              dark      light     hueShift  sat curve
-  ['grey', 0x08080a, 0xf0f0ee, 0.00, 1.00],
+  ['grey', 0x080808, 0xf0f0f0, 0.00, 1.00],
   // Warm-neutral, not blue: MM6's castle and dungeon stone sits around
   // #6A6A60..#A8A89C, and a blue-tinted ramp pulls every wall in the game cold.
   ['stone', 0x1a1a16, 0xb8b8ac, 0.00, 0.85],
@@ -80,6 +80,11 @@ function buildRamp(darkHex, lightHex, steps, hueShift = 0, satCurve = 1) {
   const [ha, sa] = rgbToHsl(a[0], a[1], a[2]);
   const [hb, sb] = rgbToHsl(b[0], b[1], b[2]);
   const al = a.map(srgbToLin), bl = b.map(srgbToLin);
+  // A ramp with no colour in either end must stay genuinely neutral. Running it
+  // through the HSL round-trip below invents a hue out of rounding noise, which
+  // is how the "neutral" grey ended up faintly green and pulled every stone
+  // surface off-colour.
+  const neutral = sa < 0.02 && sb < 0.02;
   const out = [];
   for (let i = 0; i < steps; i++) {
     const t = steps === 1 ? 0 : i / (steps - 1);
@@ -87,11 +92,13 @@ function buildRamp(darkHex, lightHex, steps, hueShift = 0, satCurve = 1) {
     const te = Math.pow(t, 1.12);
     const lin = [0, 1, 2].map((c) => al[c] + (bl[c] - al[c]) * te);
     let [r, g, bb] = lin.map(linToSrgb);
-    // Rotate hue and bend saturation across the ramp.
-    let [h, s, l] = rgbToHsl(r, g, bb);
-    let hueTarget = ha + (hb - ha) * te + hueShift * (1 - te);
-    let satTarget = (sa + (sb - sa) * te) * (1 + (satCurve - 1) * (1 - te));
-    [r, g, bb] = hslToRgb(hueTarget, Math.min(1, Math.max(0, satTarget)), l);
+    if (!neutral) {
+      // Rotate hue and bend saturation across the ramp.
+      const l = rgbToHsl(r, g, bb)[2];
+      const hueTarget = ha + (hb - ha) * te + hueShift * (1 - te);
+      const satTarget = (sa + (sb - sa) * te) * (1 + (satCurve - 1) * (1 - te));
+      [r, g, bb] = hslToRgb(hueTarget, Math.min(1, Math.max(0, satTarget)), l);
+    }
     out.push([
       Math.round(Math.min(255, Math.max(0, r * 255))),
       Math.round(Math.min(255, Math.max(0, g * 255))),

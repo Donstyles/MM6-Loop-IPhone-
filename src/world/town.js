@@ -256,7 +256,7 @@ export function generateTown(spec = {}, seed = 1) {
       { x: cx + W, z: cz + W }, { x: cx - W, z: cz + W }, { x: cx - W, z: cz - W },
     ];
     // A gate in the middle of each side, where the two main streets cross out.
-    const gates = [0, 1, 2, 3].map((i) => ({ seg: i, t: 0.5, w: 700 }));
+    const gates = [0, 1, 2, 3].map((i) => ({ seg: i, t: 0.5, w: 900 }));
     wall = buildWall({
       points: pts, gates, y: baseY, height: size === 'city' ? 760 : 620,
       tex: spec.wallTex || 'wall_castle',

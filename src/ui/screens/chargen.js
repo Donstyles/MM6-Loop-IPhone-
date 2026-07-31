@@ -217,7 +217,9 @@ export class ChargenScreen extends Screen {
     const s = this.slot;
     const x = 14, y = 36;
     const pw = PORTRAIT_W * 2, ph = PORTRAIT_H * 2;
-    plate(ctx, x, y, pw + 12, ph + 84, 0.6);
+    // The plate has to cover the portrait, the face arrows, the name field and
+    // the sex row - 118px of furniture below the painting.
+    plate(ctx, x, y, pw + 12, ph + 118, 0.6);
     const px = x + 6, py = y + 6;
     A.inset(ctx, px - 3, py - 3, pw + 6, ph + 6);
     const p = portraitOf(this.asCharacter(s), 'normal');
