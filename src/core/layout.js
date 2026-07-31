@@ -15,12 +15,13 @@
 export const BASE_W = 640;
 export const BASE_H = 480;
 
-// Authentic 4:3 metrics.
-export const HUD_H = 128;         // bottom party bar height
-export const SIDE_W = 174;        // right panel width (automap + buttons)
+// Authentic 4:3 metrics. The 3D window sits at (8,8) and is 460x352; the right
+// panel carries the automap and buttons; the party bar fills the last 120 rows.
+export const HUD_H = 120;         // bottom party bar height
+export const SIDE_W = 172;        // right panel width (automap + buttons)
 export const VIEW_X = 8;
 export const VIEW_Y = 8;
-export const VIEW_W = 468 - 8;    // 3D window width in 4:3 mode
+export const VIEW_W = 460;        // 3D window width in 4:3 mode
 export const VIEW_H = 352;        // 3D window height
 
 export const layout = {
@@ -74,7 +75,7 @@ export function computeLayout(cw, ch, allowWide = true) {
 
   layout.view.x = VIEW_X;
   layout.view.y = VIEW_Y;
-  layout.view.w = logicalW - SIDE_W - VIEW_X - 4;
+  layout.view.w = logicalW - SIDE_W - VIEW_X * 2;
   layout.view.h = VIEW_H;
 
   layout.screen.w = Math.round(logicalW * scale);

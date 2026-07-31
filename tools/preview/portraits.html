@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>MM6 portraits preview</title>
+<style>
+  body { margin: 0; background: #0b0b0d; color: #c8b98a; font: 11px/1.35 monospace; padding: 12px; }
+  h2 { color: #e0c878; font-size: 13px; margin: 18px 0 8px; border-bottom: 1px solid #3a3324; padding-bottom: 3px; }
+  canvas { image-rendering: pixelated; display: block; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; }
+  .cell { border: 1px solid #2a2620; padding: 3px; background: #141210; }
+  .cell .lbl { text-align: center; color: #8d8266; font-size: 9px; margin-top: 2px; white-space: pre; }
+  .pair { display: flex; gap: 4px; align-items: flex-start; }
+  .bar { background: #2b241a; border: 2px solid #6b5a3a; padding: 6px; display: inline-flex; gap: 4px; }
+</style>
+</head>
+<body>
+<h2>A. 24 faces &mdash; 1:1 and 4&times;</h2>
+<div class="row" id="faces"></div>
+
+<h2>B. every expression, 3&times;</h2>
+<div class="row" id="exprs"></div>
+
+<h2>B2. second face, every expression, 3&times;</h2>
+<div class="row" id="exprs2"></div>
+
+<h2>C. mock party bar, 1:1</h2>
+<div class="bar" id="bar"></div>
+<div class="bar" id="bar2" style="margin-left:10px"></div>
+
+<script type="module">
+import { makeFace, renderPortrait, PORTRAIT_W, PORTRAIT_H, EXPRESSIONS, portraitSheet } from '/src/art/portraits.js';
+
+function show(canvas, zoom) {
+  const c = document.createElement('canvas');
+  c.width = canvas.width * zoom; c.height = canvas.height * zoom;
+  const g = c.getContext('2d');
+  g.imageSmoothingEnabled = false;
+  g.drawImage(canvas, 0, 0, c.width, c.height);
+  return c;
+}
+function cell(canvases, label) {
+  const d = document.createElement('div'); d.className = 'cell';
+  const p = document.createElement('div'); p.className = 'pair';
+  for (const c of canvases) p.appendChild(c);
+  d.appendChild(p);
+  if (label) { const l = document.createElement('div'); l.className = 'lbl'; l.textContent = label; d.appendChild(l); }
+  return d;
+}
+
+const KL = ['knight', 'paladin', 'archer', 'cleric', 'sorcerer', 'druid'];
+const facesEl = document.getElementById('faces');
+const roster = [];
+let t0 = performance.now();
+for (let i = 0; i < 24; i++) {
+  const klass = KL[i % 6];
+  const sex = i % 12 < 6 ? 'm' : 'f';
+  const age = ['young', 'middle', 'old'][(i * 5) % 3];
+  const f = makeFace(1000 + i * 37, { klass, sex, age });
+  roster.push(f);
+  const c = renderPortrait(f, 'normal');
+  facesEl.appendChild(cell([show(c, 1), show(c, 4)],
+    `${klass.slice(0, 5)} ${sex}/${age.slice(0, 3)}\n${f.hairStyle}/${f.hairName}\n${f.shape} ${f.beard}`));
+}
+const tFaces = performance.now() - t0;
+
+function exprRow(el, f) {
+  for (const e of EXPRESSIONS) {
+    const c = renderPortrait(f, e);
+    el.appendChild(cell([show(c, 3)], e));
+  }
+}
+t0 = performance.now();
+exprRow(document.getElementById('exprs'), roster[0]);
+exprRow(document.getElementById('exprs2'), roster[16]);
+const tExpr = performance.now() - t0;
+
+const bar = document.getElementById('bar');
+[['knight', 'm'], ['cleric', 'f'], ['sorcerer', 'm'], ['archer', 'f']].forEach(([k, s], i) => {
+  bar.appendChild(show(renderPortrait(makeFace(4000 + i * 91, { klass: k, sex: s }), 'normal'), 1));
+});
+const bar2 = document.getElementById('bar2');
+[['paladin', 'f'], ['druid', 'm'], ['knight', 'f'], ['sorcerer', 'f']].forEach(([k, s], i) => {
+  bar2.appendChild(show(renderPortrait(makeFace(7100 + i * 53, { klass: k, sex: s }), 'hurt'), 1));
+});
+
+// sanity: the atlas path works
+t0 = performance.now();
+const sheet = portraitSheet(roster[3]);
+const tSheet = performance.now() - t0;
+console.log('faces ms', tFaces.toFixed(0), 'expr ms', tExpr.toFixed(0), 'sheet ms', tSheet.toFixed(0),
+  'sheet', sheet.canvas.width + 'x' + sheet.canvas.height, 'idx(dead)', sheet.index('dead'));
+
+window.__ready = true;
+</script>
+</body>
+</html>
