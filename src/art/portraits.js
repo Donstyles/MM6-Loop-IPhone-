@@ -1435,13 +1435,6 @@ function hairCov(p, X, Y, sd) {
     a = Math.max(a, sb * 0.92);
   }
 
-  if (p.backW > 0) {
-    const w = p.rx * 1.00 + p.backW * (0.4 + 0.9 * smoothstep(p.hcy - p.ry * 0.3, p.backEndY, Y));
-    const inX = smoothstep(w + 1.0, w - 0.6, Math.abs(X - p.hcx) - rough * 1.4);
-    const inY = smoothstep(p.hcy - p.ry * 0.90, p.hcy - p.ry * 0.60, Y)
-      * (1 - smoothstep(p.backEndY - 5, p.backEndY, Y));
-    a = Math.max(a, inX * inY * outside);
-  }
   if (p.tail) {
     const s = p.tail.side;
     const tx = p.hcx + s * (p.rx * 0.92), ty = p.hcy - p.ry * 0.20;

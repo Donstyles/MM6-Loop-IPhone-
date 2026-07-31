@@ -307,10 +307,11 @@ const _v = new THREE.Vector3();
 // eight; letting it set the cell width costs every other frame more than half
 // its horizontal resolution, which is precisely how a goblin ends up 21 texels
 // wide inside a 48-texel cell.
+// [action, t, weightUp, weightDown, weightRadial]
 const POSE_WEIGHT = [
-  ['stand', 0, 1, 1], ['walk', 0.25, 1, 1], ['bored', 0.25, 1, 0.55],
-  ['attack_melee', 0.55, 0.55, 0.22], ['attack_ranged', 0.5, 0.5, 0.20],
-  ['dying', 1, 0.9, 0.18],
+  ['stand', 0, 1, 1, 1], ['walk', 0.25, 1, 1, 1], ['bored', 0.25, 1, 0.6, 0.55],
+  ['attack_melee', 0.55, 0.55, 0.25, 0.22], ['attack_ranged', 0.5, 0.5, 0.20, 0.20],
+  ['dying', 1, 0.25, 0.30, 0.18],
 ];
 
 function measure(model, actionList) {
@@ -330,13 +331,16 @@ function measure(model, actionList) {
     return { minY: 0, maxY: h, R: h * 0.3 };
   }
   let minY = base.minY, maxY = base.maxY, R = base.R;
-  for (const [action, t, wy, wr] of POSE_WEIGHT) {
+  for (const [action, t, wUp, wDown, wR] of POSE_WEIGHT) {
     if (!actionList.includes(action)) continue;
     const s = grab(action, t);
     if (!s) continue;
-    minY = Math.min(minY, base.minY + (s.minY - base.minY) * wy);
-    maxY = Math.max(maxY, base.maxY + (s.maxY - base.maxY) * wy);
-    R = Math.max(R, base.R + (s.R - base.R) * wr);
+    // Downward allowance is kept small on purpose: the shell anchors the quad's
+    // bottom edge to the entity's ground point, so every texel of clear space
+    // under the feet is a texel the creature visibly floats by.
+    minY = Math.min(minY, base.minY + (s.minY - base.minY) * wDown);
+    maxY = Math.max(maxY, base.maxY + (s.maxY - base.maxY) * wUp);
+    R = Math.max(R, base.R + (s.R - base.R) * wR);
   }
   if (model.pose) model.pose('stand', 0);
   minY = Math.min(minY, 0);

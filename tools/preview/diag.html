@@ -51,7 +51,18 @@ function cellStats(sheet, action, frame, view) {
   }
   const top = [...hist.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
     .map(([k, c]) => '#' + k.toString(16).padStart(6, '0') + '×' + c);
+  // Percentile lit/shadow ratio: the absolute min is always an eye or a nostril
+  // and says nothing about how the body is shaded.
+  const ls = [];
+  for (let y = 0; y < r.h; y++) for (let x = 0; x < r.w; x++) {
+    const i = (y * r.w + x) * 4;
+    if (d[i + 3] < 128) continue;
+    ls.push(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
+  }
+  ls.sort((a, b) => a - b);
+  const pct = (p) => ls.length ? ls[Math.min(ls.length - 1, Math.floor(p * ls.length))] : 0;
   return {
+    p05: pct(0.05), p50: pct(0.5), p95: pct(0.95),
     n, mean: n ? [sr / n | 0, sg / n | 0, sb / n | 0] : [0, 0, 0],
     meanL: n ? (0.299 * sr + 0.587 * sg + 0.114 * sb) / n : 0,
     minL: mnL, maxL: mxL, mn, mx, magenta, pure0, top,
@@ -71,7 +82,8 @@ for (const k of KINDS) {
   P(`${k}: atlas ${sh.atlasW}x${sh.atlasH} cell ${sh.cellW}x${sh.cellH} worldW ${sh.worldW.toFixed(1)} worldH ${sh.worldH.toFixed(1)} modelH ${sh.height.toFixed(1)} groundOffset ${sh.groundOffset.toFixed(1)}`);
   P(`    opaque ${s.n}/${s.cell[0] * s.cell[1]} (${(100 * s.n / (s.cell[0] * s.cell[1])).toFixed(1)}%)  bbox ${JSON.stringify(s.bbox)}`);
   P(`    mean ${hex(s.mean)} L=${s.meanL.toFixed(1)}   darkest ${hex(s.mn)} L=${s.minL.toFixed(1)}   brightest ${hex(s.mx)} L=${s.maxL.toFixed(1)}`);
-  P(`    lit/shadow ratio ${(s.maxL / Math.max(1, s.minL)).toFixed(2)}:1   pure-black texels ${s.pure0}  magenta-ish ${s.magenta}`);
+  P(`    L p05/p50/p95 = ${s.p05.toFixed(0)}/${s.p50.toFixed(0)}/${s.p95.toFixed(0)}  lit:shadow (p95:p05) ${(s.p95 / Math.max(1, s.p05)).toFixed(2)}:1   pure-black ${s.pure0}  magenta ${s.magenta}`);
+  P(`    fill: ${(100 * s.bbox[5] / sh.cellH).toFixed(0)}% of cell height, ${(100 * s.bbox[4] / sh.cellW).toFixed(0)}% of width; padding under feet ${sh.cellH - s.bbox[3] - 1} texels; worldH/modelH ${(sh.worldH / sh.height).toFixed(3)}`);
   P(`    top colours ${s.top.join(' ')}`);
 }
 
