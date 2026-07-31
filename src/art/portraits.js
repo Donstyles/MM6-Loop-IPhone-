@@ -160,16 +160,19 @@ function skinRamp(tone) {
   };
 }
 
+// Hair has to survive being one value darker than the background vignette and
+// still show its colour: these are the *lit* mid-tones, not the local colour of
+// a hair in shadow, which is why they read brighter than you would expect.
 const HAIR_COLOURS = {
-  black: () => mixC(rs('grey', 0.09), rs('wood', 0.14), 0.45),
-  darkbrown: () => rs('wood', 0.26),
-  brown: () => rs('wood', 0.40),
-  auburn: () => mixC(rs('wood', 0.38), rs('blood', 0.40), 0.42),
-  red: () => mixC(rs('fire', 0.36), rs('wood', 0.38), 0.45),
-  blonde: () => desat(mixC(rs('sand', 0.66), rs('gold', 0.52), 0.30), 0.08),
-  sandy: () => desat(mixC(rs('sand', 0.46), rs('wood', 0.42), 0.42), 0.14),
-  grey: () => rs('grey', 0.40),
-  white: () => rs('grey', 0.70),
+  black: () => mixC(rs('grey', 0.17), rs('wood', 0.22), 0.45),
+  darkbrown: () => rs('wood', 0.38),
+  brown: () => rs('wood', 0.54),
+  auburn: () => mixC(rs('wood', 0.48), rs('blood', 0.46), 0.42),
+  red: () => mixC(rs('fire', 0.46), rs('wood', 0.42), 0.42),
+  blonde: () => desat(mixC(rs('sand', 0.72), rs('gold', 0.56), 0.30), 0.08),
+  sandy: () => desat(mixC(rs('sand', 0.56), rs('wood', 0.48), 0.42), 0.14),
+  grey: () => rs('grey', 0.44),
+  white: () => rs('grey', 0.76),
 };
 
 const EYE_COLOURS = {
@@ -350,8 +353,8 @@ function buildHairColours(name) {
   const light = name === 'white' || name === 'grey' || name === 'blonde' || name === 'sandy';
   return {
     base,
-    dark: scl(base, light ? 0.34 : 0.26),
-    lite: mixC(scl(base, light ? 1.30 : 1.75), rs('sand', 0.85), light ? 0.26 : 0.14),
+    dark: scl(base, light ? 0.40 : 0.32),
+    lite: mixC(scl(base, light ? 1.28 : 1.62), rs('sand', 0.85), light ? 0.26 : 0.16),
     sheen: light ? 0.80 : 0.55,
     // Facial hair reads darker than head hair - it sits in the shadow of the
     // jaw and is coarser. Pale beards otherwise turn into a bright bib.
@@ -1285,9 +1288,11 @@ function hairParams(face, g, hairlineY, hcx, hcy, rx, ry, fx, near) {
     peak: hl.peak,
     slant: cut.slant,
     part: cut.part, partGap: cut.part === 0 ? 0 : cut.partGap,
-    sideEndY: hcy + ry * 0.45,
-    backEndY: hcy + ry * 0.5,
-    backW: 0,
+    // The falling mass, described as a silhouette rather than a rectangle:
+    // how far it hangs, how wide it flares over the ear and how it tapers to
+    // the ends - and it is deliberately different on the two sides.
+    hangLen: 0.45, hangW: rx * 0.05, flare: 2.0, taper: 2.4,
+    asymL: 1, asymR: 1,
     rough: 0.35,
     showEars: st === 'crop' || st === 'short' || st === 'bald'
       || st === 'receding' || st === 'ponytail',
@@ -1297,54 +1302,85 @@ function hairParams(face, g, hairlineY, hcx, hcy, rx, ry, fx, near) {
   };
   switch (st) {
     case 'crop':
-      p.capRX = rx * 1.04 * V; p.capRY = ry * 1.05 * V; p.sideEndY = hcy + ry * 0.22;
-      p.backW = 0; p.backEndY = hcy + ry * 0.30; p.rough = 0.22;
+      p.capRX = rx * 1.04 * V; p.capRY = ry * 1.05 * V;
+      p.hangLen = 0.26; p.hangW = rx * 0.01; p.taper = 3.2; p.rough = 0.22;
       break;
     case 'short':
-      p.capRX = rx * 1.09 * V; p.capRY = ry * 1.11 * V; p.sideEndY = hcy + ry * 0.34;
-      p.backW = rx * 0.08; p.backEndY = hcy + ry * 0.48; p.rough = 0.30;
+      p.capRX = rx * 1.09 * V; p.capRY = ry * 1.11 * V;
+      p.hangLen = 0.44 + 0.14 * L; p.hangW = rx * 0.05; p.taper = 2.6; p.rough = 0.30;
       break;
     case 'medium':
       // Jaw-length: stops short of the shoulders, which is a different
       // silhouette from both a crop and a full mane.
       p.capRX = rx * 1.13 * V; p.capRY = ry * 1.13 * V;
-      p.sideEndY = hcy + ry * (0.85 + 0.35 * L);
-      p.backW = rx * 0.24; p.backEndY = hcy + ry * (0.95 + 0.35 * L); p.rough = 0.40;
+      p.hangLen = 0.80 + 0.55 * L; p.hangW = rx * 0.20; p.taper = 1.4;
+      p.flare = 2.4; p.rough = 0.40;
       break;
     case 'long':
-      p.capRX = rx * 1.15 * V; p.capRY = ry * 1.15 * V; p.sideEndY = DH + 4;
-      p.backW = rx * 0.40; p.backEndY = DH + 4; p.rough = 0.45;
+      p.capRX = rx * 1.15 * V; p.capRY = ry * 1.15 * V;
+      p.hangLen = 1.55 + 0.75 * L; p.hangW = rx * 0.30; p.taper = 0.85;
+      p.flare = 1.7; p.rough = 0.45;
       break;
     case 'ponytail':
-      p.capRX = rx * 1.05 * V; p.capRY = ry * 1.08 * V; p.sideEndY = hcy + ry * 0.18;
-      p.backW = rx * 0.11; p.backEndY = hcy + ry * 0.35;
+      p.capRX = rx * 1.05 * V; p.capRY = ry * 1.08 * V;
+      p.hangLen = 0.24; p.hangW = rx * 0.04; p.taper = 2.8;
       p.tail = { side: r.bool() ? 1 : -1, len: r.float(0.8, 1.2) * L };
       break;
     case 'bald':
-      p.bald = true; p.sideEndY = hcy + ry * 0.30; p.backW = 0;
+      p.bald = true; p.hangLen = 0.30; p.hangW = 0;
       break;
     case 'receding':
       p.hairlineY = hairlineY - ry * 0.12; p.templeA = -3.2; p.peak = 1.2;
-      p.capRX = rx * 1.06 * V; p.capRY = ry * 1.08 * V; p.sideEndY = hcy + ry * 0.34;
+      p.capRX = rx * 1.06 * V; p.capRY = ry * 1.08 * V;
+      p.hangLen = 0.40; p.hangW = rx * 0.04; p.taper = 2.6;
       break;
     case 'braided':
-      p.capRX = rx * 1.11 * V; p.capRY = ry * 1.11 * V; p.sideEndY = DH + 4;
-      p.backW = rx * 0.28; p.backEndY = DH + 4;
+      p.capRX = rx * 1.11 * V; p.capRY = ry * 1.11 * V;
+      p.hangLen = 0.85 + 0.35 * L; p.hangW = rx * 0.16; p.taper = 1.8;
       p.braid = { side: r.bool() ? 1 : -1 };
       break;
     case 'wild':
-      p.capRX = rx * 1.26 * V; p.capRY = ry * 1.30 * V; p.sideEndY = hcy + ry * (0.70 + 0.30 * L);
-      p.backW = rx * 0.36; p.backEndY = hcy + ry * (0.80 + 0.40 * L); p.rough = 1.05;
+      p.capRX = rx * 1.26 * V; p.capRY = ry * 1.30 * V;
+      p.hangLen = 0.70 + 0.55 * L; p.hangW = rx * 0.40; p.taper = 0.55;
+      p.flare = 3.2; p.rough = 1.05;
       break;
   }
+  // No two sides of a real head of hair match. This is cheap and it is one of
+  // the few cues that survives the box filter down to 63 px.
+  p.asymL = r.float(0.84, 1.20); p.asymR = r.float(0.84, 1.20);
   // Hair in front of the shoulders is a separate pass over the collar; the
   // mass behind the head stops at the shoulder line as usual.
   p.front = !!cut.front && !p.bald && st !== 'crop' && st !== 'short'
     && st !== 'receding' && st !== 'ponytail';
   p.frontLen = L;
   if (face.age === 'old' && (st === 'short' || st === 'long' || st === 'medium')) p.templeA -= 1.0;
-  p.bottomY = Math.max(p.sideEndY, p.backEndY, p.tail || p.braid ? DH + 4 : 0) + 4;
+  p.bottomY = hcy + ry * p.hangLen * Math.max(p.asymL, p.asymR)
+    + (p.tail || p.braid ? DH : 0) + 5;
+  if (p.bottomY > DH + 4) p.bottomY = DH + 4;
   return p;
+}
+
+/**
+ * Coverage of the mass of hair falling beside and behind the head. A plain
+ * vertical band with a horizontal cut - which is what this used to be - makes
+ * every long-haired character wear the same paper bob.
+ */
+function hangCov(p, X, Y, rough) {
+  if (p.hangW <= 0) return 0;
+  const s = X >= p.hcx ? 1 : -1;
+  const asym = s > 0 ? p.asymR : p.asymL;
+  const yTop = p.hcy - p.ry * 0.80;
+  const yEnd = p.hcy + p.ry * p.hangLen * asym;
+  if (Y > yEnd + 3) return 0;
+  const t = clamp((Y - yTop) / Math.max(2, yEnd - yTop), 0, 1);
+  // Flares out over the ear, then narrows towards the ends.
+  const flare = Math.sin(clamp(t * p.flare, 0, 1) * Math.PI * 0.5);
+  const taper = Math.pow(1 - t, p.taper);
+  const w = p.rx * 0.92 + p.hangW * asym * (0.25 + 1.15 * flare) * (0.30 + 0.70 * taper);
+  const inX = smoothstep(w + 1.0, w - 0.7, Math.abs(X - p.hcx) - rough * 1.7);
+  const inY = smoothstep(yTop, yTop + p.ry * 0.20, Y)
+    * (1 - smoothstep(yEnd - 3.5, yEnd, Y + rough * 2.0));
+  return inX * inY;
 }
 
 /** Hairline y at a given x (larger y = hair reaches further down the forehead). */
@@ -1375,7 +1411,7 @@ function hairCov(p, X, Y, sd) {
     const ring = ell(X - p.hcx, Y - p.hcy, p.rx * 1.08, p.ry * 1.06);
     return cov(ring, 0.12) * outside
       * smoothstep(p.hcy - p.ry * 0.12, p.hcy + p.ry * 0.08, Y)
-      * (1 - smoothstep(p.sideEndY, p.sideEndY + 2.5, Y));
+      * (1 - smoothstep(p.hcy + p.ry * p.hangLen, p.hcy + p.ry * p.hangLen + 2.5, Y));
   }
   const rough = (fb(X * 0.55, Y * 0.55, 3, sd + 200) - 0.5) * p.rough
     + (fb(X * 1.6, Y * 1.6, 2, sd + 201) - 0.5) * p.rough * 0.6;
@@ -1383,7 +1419,10 @@ function hairCov(p, X, Y, sd) {
   const capE = cov(ell(X - p.hcx, Y - p.capCY, p.capRX, p.capRY) + rough * 0.20, 0.16);
   const hl = hairlineAt(p, X);
   let a = capE * smoothstep(hl + 0.9, hl - 0.9, Y);            // fringe, over the face
-  a = Math.max(a, capE * outside * (1 - smoothstep(p.sideEndY - 3, p.sideEndY + 1.5, Y)));
+  // The cap itself only reaches the ear line; below that the hanging profile
+  // takes over, so the two never combine into a straight-sided slab.
+  a = Math.max(a, capE * outside * (1 - smoothstep(p.hcy, p.hcy + p.ry * 0.30, Y)));
+  a = Math.max(a, hangCov(p, X, Y, rough) * outside);
 
   // Sideburns: a tongue of hair in front of the ear, over the skin. Length
   // here separates otherwise identical crops.

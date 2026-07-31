@@ -575,14 +575,10 @@ export function paintedFigure(ctx, cx, baseY, hgt, o = {}) {
  * with anatomical anchors so equipment can be painted straight onto it. MM6
  * draws no slot chrome at all, so neither do we.
  */
-export function paperdollBody(ctx, r, o = {}) {
-  const skin = o.skin || SKIN.mid;
-  const tunic = o.tunic || [92, 74, 52];
-  const trews = o.trews || [70, 56, 38];
+export function paperdollAnchors(r) {
   const cx = Math.round(r.x + r.w / 2);
   const top = Math.round(r.y + 8);
   const H = r.h - 20;
-
   const headH = Math.round(H * 0.13);
   const headW = Math.round(H * 0.098);
   const shoulderY = top + headH + 3;
@@ -591,6 +587,34 @@ export function paperdollBody(ctx, r, o = {}) {
   const bodyW = Math.round(H * 0.115);
   const legH = Math.round(H * 0.42);
   const footY = hipY + legH;
+  const armLen = Math.round(H * 0.34);
+  const aw = Math.max(3, Math.round(bodyW * 0.42));
+  const hands = {};
+  for (const s of [-1, 1]) {
+    hands[s < 0 ? 'left' : 'right'] = {
+      x: cx + s * Math.round(bodyW * 1.06 + armLen * 0.16),
+      y: shoulderY + 3 + armLen,
+    };
+  }
+  return {
+    cx, top, H, headH, headW, shoulderY, torsoH, hipY, bodyW, legH, footY, armLen, aw,
+    head: { cx, cy: top + Math.round(headH * 0.5), w: headW * 2, h: headH },
+    torso: { cx, cy: shoulderY + Math.round(torsoH * 0.45), w: bodyW * 2, h: torsoH },
+    shoulders: { cx, y: shoulderY, w: bodyW * 2.2 },
+    neck: { cx, y: shoulderY - 2 },
+    waist: { cx, y: hipY - 2, w: bodyW * 2 },
+    legs: { cx, y: hipY, h: legH, w: bodyW * 2 },
+    feet: { cx, y: footY - 3, w: bodyW * 2.2 },
+    hands,
+  };
+}
+
+export function paperdollBody(ctx, r, o = {}) {
+  const skin = o.skin || SKIN.mid;
+  const tunic = o.tunic || [92, 74, 52];
+  const trews = o.trews || [70, 56, 38];
+  const A = paperdollAnchors(r);
+  const { cx, top, H, headH, headW, shoulderY, torsoH, hipY, bodyW, legH, footY } = A;
 
   // Legs.
   for (const s of [-1, 1]) {
@@ -624,10 +648,9 @@ export function paperdollBody(ctx, r, o = {}) {
   rct(ctx, cx - bodyW, hipY - 4, bodyW * 2, 1, [116, 90, 54]);
 
   // Arms held slightly away from the body so a weapon can sit in the hand.
-  const armLen = Math.round(H * 0.34);
-  const hands = {};
+  const armLen = A.armLen;
   for (const s of [-1, 1]) {
-    const aw = Math.max(3, Math.round(bodyW * 0.42));
+    const aw = A.aw;
     for (let i = 0; i < armLen; i++) {
       const t = i / armLen;
       const ax = cx + s * Math.round(bodyW * 1.06 + i * 0.16);
@@ -636,27 +659,16 @@ export function paperdollBody(ctx, r, o = {}) {
       rct(ctx, ax - (aw >> 1), shoulderY + 2 + i, 1, 1, mix(c, [255, 244, 214], 0.28));
       rct(ctx, ax + (aw >> 1) - 1, shoulderY + 2 + i, 1, 1, shade(c, 0.6));
     }
-    const hx = cx + s * Math.round(bodyW * 1.06 + armLen * 0.16);
+    const hx = A.hands[s < 0 ? 'left' : 'right'].x;
     rct(ctx, hx - (aw >> 1) - 1, shoulderY + 2 + armLen, aw + 2, aw + 1, skin);
     rct(ctx, hx - (aw >> 1) - 1, shoulderY + 2 + armLen, aw + 2, 1, mix(skin, [255, 244, 214], 0.3));
-    hands[s < 0 ? 'left' : 'right'] = { x: hx, y: shoulderY + 3 + armLen };
   }
 
   // Neck, head.
   rct(ctx, cx - 3, shoulderY - 4, 7, 5, shade(skin, 0.72));
   paintedHead(ctx, cx, top, headW, headH, { skin, hair: o.hair, eye: o.eye });
 
-  return {
-    head: { cx, cy: top + Math.round(headH * 0.5), w: headW * 2, h: headH },
-    torso: { cx, cy: shoulderY + Math.round(torsoH * 0.45), w: bodyW * 2, h: torsoH },
-    shoulders: { cx, y: shoulderY, w: bodyW * 2.2 },
-    neck: { cx, y: shoulderY - 2 },
-    waist: { cx, y: hipY - 2, w: bodyW * 2 },
-    legs: { cx, y: hipY, h: legH, w: bodyW * 2 },
-    feet: { cx, y: footY - 3, w: bodyW * 2.2 },
-    hands,
-    armLen,
-  };
+  return A;
 }
 
 // --- painted spell sigils ---------------------------------------------------

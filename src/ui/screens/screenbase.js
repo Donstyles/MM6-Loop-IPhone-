@@ -383,9 +383,12 @@ export function drawTabs(ctx, ui, idPrefix, xs, yRel, w, h, labels, selected) {
     const on = i === selected;
     const hit = ui.region(`${idPrefix}:tab${i}`, x, y, w, h);
     if (hit.click) clicked = i;
-    A.button(ctx, x, y, w, h, null, on || hit.down ? 'down' : 'up');
-    if (on) { ctx.fillStyle = CANARY; ctx.fillRect(x + 3, y + h - 3, w - 6, 1); }
-    F.drawText(ctx, labels[i], (x + w / 2) | 0, (y + (h - 10) / 2) | 0, {
+    const down = on || hit.down;
+    // Painted wooden tab; the open one is pressed into the sheet.
+    const d = M.carvedPlate(ctx, x, y, w, h, {
+      state: down ? 'down' : hit.hover ? 'hot' : 'up', material: 'wood', seed: 13 + i,
+    });
+    F.drawText(ctx, labels[i], (x + w / 2 + d) | 0, (y + (h - 10) / 2 + d) | 0, {
       align: 'center', color: on ? CANARY : (hit.hover ? HILITE : WHITE),
     });
   }

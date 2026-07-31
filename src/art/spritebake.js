@@ -45,18 +45,27 @@ export function octantFor(actorYaw, angleToCam) {
 
 // Light rig, in view space. A single baked key from the camera's upper-front-
 // left, exactly as the original turntable renders were lit - which is why an
-// MM6 sprite stays lit from the left no matter where the sun is. The fill is
-// only strong enough to keep the shadow side from going flat black; there is
+// MM6 sprite stays lit from the left no matter where the sun is. There is
 // deliberately no rim, no outline and no cel banding, because the 256-colour
 // palettisation is what does the banding.
+//
+// The numbers matter more than they look. A sprite is 40-80 px tall in play and
+// is seen against grass at luminance 72-118, so the *shadow* side is what
+// decides whether the creature reads as a creature or as a hole in the ground.
+// MM6's turntable renders sit at roughly 3:1 lit-to-shadow with the shadow side
+// still carrying its hue; a deeper falloff turns every figure into a
+// silhouette. Hence: a large ambient term, a key that only just clips at the
+// highlight, and a wide wrap so the whole front of a cylindrical limb stays
+// above half. lit = ambient + key = 1.04 (clips to flat albedo, which is where
+// the palettised "flat highlight" look comes from); shadow = ambient = 0.34.
 const LIGHT_D = {
-  keyDir: [-0.58, 0.66, 0.48],
-  fillDir: [0.62, -0.28, 0.24],
-  fillCol: [0.28, 0.36, 0.56],
-  ambient: 0.22,
-  key: 1.05,
-  fill: 0.14,
-  wrap: 0.15,   // how much of the key wraps past the terminator
+  keyDir: [-0.52, 0.60, 0.61],
+  fillDir: [0.66, -0.16, 0.34],
+  fillCol: [0.34, 0.40, 0.52],
+  ambient: 0.34,
+  key: 0.70,
+  fill: 0.17,
+  wrap: 0.45,   // how much of the key wraps past the terminator
   bands: 0,
 };
 
@@ -98,9 +107,10 @@ varying float vE;
 void main() {
   vec3 N = normalize(vN);
   float nd = dot(N, uKeyDir);
-  // Mostly hard lambert with a sliver of wrap: the shadow side has to drop to
-  // roughly a third of the lit side or a low-poly figure reads as a paper
-  // cut-out at 64 px.
+  // Lambert blended with a wide wrap term. The wrap is what keeps a low-poly
+  // limb from banding straight from lit to black across two facets: it pushes
+  // the terminator round the side of a cylinder so the figure still has volume
+  // when it is 30 px wide.
   float k = max(nd, 0.0) * (1.0 - uWrap) + (nd * 0.5 + 0.5) * uWrap;
   float f = max(dot(N, uFillDir), 0.0);
   float s = uAmbient + uKey * k;
@@ -222,6 +232,13 @@ function unflatten(flat) {
 
 // --- atlas layout ----------------------------------------------------------
 
+// Transparent texels kept clear on every side of every cell. MM6's sprites are
+// individually cropped bitmaps with nothing next to them; ours are neighbours
+// in one atlas, and a nearest-filtered quad whose UVs land exactly on a cell
+// boundary can pick up the texel across the seam. One clear texel makes that
+// impossible without needing a half-texel UV fudge that would resample the art.
+const GUARD = 1;
+
 /**
  * Choose a cell size and a block layout that packs `frames * angles` cells
  * into at most `maxAtlas` square. Columns come in blocks of `views`, so a row
@@ -278,14 +295,22 @@ const _cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 4000);
 const _box = new THREE.Box3();
 const _v = new THREE.Vector3();
 
-// How much of each pose's extra reach the frame has to accommodate. MM6 crops
-// every frame to its own bounding box; we are stuck with one cell for the whole
-// sheet, so the idle and walk poses get the frame to themselves and the extreme
-// poses (a raised staff, a corpse lying full-length) are allowed to run over the
-// edge a little rather than shrinking the sprite you look at 95% of the time.
+// How much of each pose's extra reach the frame has to accommodate, as
+// [action, t, verticalWeight, radialWeight]. MM6 crops every frame to its own
+// bounding box; we are stuck with one cell for the whole sheet, so the idle and
+// walk poses get the frame to themselves and the extreme poses (a swung club, a
+// raised staff, a corpse lying full-length) are allowed to run over the edge
+// rather than shrinking the sprite you look at 95% of the time.
+//
+// The radial weights are deliberately much smaller than the vertical ones. A
+// club swing triples the silhouette's radius for three frames out of twenty-
+// eight; letting it set the cell width costs every other frame more than half
+// its horizontal resolution, which is precisely how a goblin ends up 21 texels
+// wide inside a 48-texel cell.
 const POSE_WEIGHT = [
-  ['stand', 0, 1], ['walk', 0.25, 1], ['bored', 0.25, 1],
-  ['attack_melee', 0.55, 0.60], ['attack_ranged', 0.5, 0.55], ['dying', 1, 0.35],
+  ['stand', 0, 1, 1], ['walk', 0.25, 1, 1], ['bored', 0.25, 1, 0.55],
+  ['attack_melee', 0.55, 0.55, 0.22], ['attack_ranged', 0.5, 0.5, 0.20],
+  ['dying', 1, 0.9, 0.18],
 ];
 
 function measure(model, actionList) {
@@ -305,13 +330,13 @@ function measure(model, actionList) {
     return { minY: 0, maxY: h, R: h * 0.3 };
   }
   let minY = base.minY, maxY = base.maxY, R = base.R;
-  for (const [action, t, w] of POSE_WEIGHT) {
+  for (const [action, t, wy, wr] of POSE_WEIGHT) {
     if (!actionList.includes(action)) continue;
     const s = grab(action, t);
     if (!s) continue;
-    minY = Math.min(minY, base.minY + (s.minY - base.minY) * w);
-    maxY = Math.max(maxY, base.maxY + (s.maxY - base.maxY) * w);
-    R = Math.max(R, base.R + (s.R - base.R) * w);
+    minY = Math.min(minY, base.minY + (s.minY - base.minY) * wy);
+    maxY = Math.max(maxY, base.maxY + (s.maxY - base.maxY) * wy);
+    R = Math.max(R, base.R + (s.R - base.R) * wr);
   }
   if (model.pose) model.pose('stand', 0);
   minY = Math.min(minY, 0);
@@ -366,8 +391,10 @@ export function bakeSheet(renderer, builderFn, opts = {}) {
   const aspect = Math.min(2.8, Math.max(0.35, aspectHint || measured));
 
   const lay = fitAtlas(total, views, aspect, maxAtlas, maxCellH);
-  // Re-fit the camera box to the cell's exact aspect so nothing is squashed.
-  const cellAspect = lay.cellW / lay.cellH;
+  // Re-fit the camera box to the *drawable* part of the cell (the guard band is
+  // not drawn into) so nothing is squashed.
+  const drawW = lay.cellW - GUARD * 2, drawH = lay.cellH - GUARD * 2;
+  const cellAspect = drawW / drawH;
   if (halfW / halfH > cellAspect) halfH = halfW / cellAspect; else halfW = halfH * cellAspect;
 
   const dist = Math.max(halfH, halfW) * 8 + 100;
@@ -416,9 +443,15 @@ export function bakeSheet(renderer, builderFn, opts = {}) {
       for (let ang = 0; ang < views; ang++) {
         _pivot.rotation.y = ang * step;
         const gx = (blk * views + ang) * lay.cellW;
-        renderer.setViewport(gx, gy, lay.cellW, lay.cellH);
+        // Draw into the cell inset by GUARD texels on every side, and scissor
+        // to the same rect. That leaves a transparent frame around each cell,
+        // so a swung club that overruns its frame is clipped inside its own
+        // cell instead of bleeding a stray texel into the neighbouring octant
+        // when the quad samples right on a cell boundary.
+        renderer.setViewport(gx + GUARD, gy + GUARD, lay.cellW - GUARD * 2, lay.cellH - GUARD * 2);
         renderer.setScissor(gx, gy, lay.cellW, lay.cellH);
         renderer.clear(true, true, false);
+        renderer.setScissor(gx + GUARD, gy + GUARD, lay.cellW - GUARD * 2, lay.cellH - GUARD * 2);
         renderer.render(_scene, _cam);
       }
     }
@@ -455,7 +488,10 @@ export function bakeSheet(renderer, builderFn, opts = {}) {
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.needsUpdate = true;
 
-  const worldH = halfH * 2, worldW = halfW * 2;
+  // The camera box spans the drawable rect, but the quad spans the whole cell,
+  // so the world size of a cell is the camera box grown by the guard band.
+  const unitsPerTexel = (halfH * 2) / drawH;
+  const worldH = unitsPerTexel * lay.cellH, worldW = (halfW * 2 / drawW) * lay.cellW;
   const firstAction = actionNames[0];
 
   return {
@@ -469,8 +505,16 @@ export function bakeSheet(renderer, builderFn, opts = {}) {
     // Billboards are bottom-anchored (the sprite's bottom edge sits at the
     // object's Z). `groundOffset` is how far above that bottom edge the model's
     // own y=0 plane falls, so a caller can place the quad exactly.
-    groundOffset: (0 - cy) * ce - (-halfH),
+    groundOffset: (0 - cy) * ce + halfH + GUARD * unitsPerTexel,
     footOffset: (m.minY - cy) * ce,
+
+    /**
+     * Instance scale that puts the *model* (not the padded cell) at
+     * `worldHeight` units tall. `worldH` is the quad, which is always a little
+     * larger than the creature because of the framing margin and the guard
+     * band, so scaling by `size / worldH` silently shrinks every monster.
+     */
+    scaleFor(worldHeight) { return worldHeight / (this.height || this.worldH); },
 
     /**
      * Pixel rect of a cell, origin top-left. `angle` is an octant 0..7; octants
@@ -610,20 +654,27 @@ function cellBudget(height, lo, hi, k) {
   return Math.max(lo, Math.min(hi, Math.round(height * k / 4) * 4));
 }
 
+// Spec 15: an MM6 humanoid ships at roughly 80 x 128 source pixels and is
+// magnified ~1.5x at melee range. `fitAtlas` will cut this down to whatever a
+// 1024 atlas can actually hold for a 28-frame x 5-view sheet (~92 for a
+// humanoid), but asking for the full figure is what makes it saturate instead
+// of settling for half the resolution the atlas could carry.
+const CREATURE_CELL_K = 0.66;
+
 /** `kind` is a monster id ('GoblinB') or a bare family id ('Goblin'). */
 export function bakeCreatureSheet(renderer, kind, seed = 1, opts = {}) {
   const def = CREATURE_DEFS[kind] || CREATURE_FAMILIES[kind];
   const h = def ? def.height : 192;
   return bakeSheet(renderer, (s) => buildCreature(kind, s), {
-    kind, seed, actions: ACTIONS, maxCellH: cellBudget(h, 48, 96, 0.42), maxAtlas: 1024,
-    aspect: def ? def.aspect : 0, ...opts,
+    kind, seed, actions: ACTIONS, maxCellH: cellBudget(h, 56, 128, CREATURE_CELL_K), maxAtlas: 1024,
+    margin: 1.03, aspect: def ? def.aspect : 0, ...opts,
   });
 }
 
 export function bakeNPCSheet(renderer, archetype, seed = 1, opts = {}) {
   return bakeSheet(renderer, (s) => buildNPC(archetype, s), {
-    kind: archetype, seed, actions: ACTIONS, maxCellH: 96, maxAtlas: 1024,
-    aspect: 0.66, ...opts,
+    kind: archetype, seed, actions: ACTIONS, maxCellH: 128, maxAtlas: 1024,
+    margin: 1.03, aspect: 0.60, ...opts,
   });
 }
 

@@ -189,6 +189,11 @@ export class Engine {
     r.setRenderTarget(this.rt);
     r.clear(true, true, true);
     r.render(this.scene, this.camera);
+    // Snapshot the world's cost before the post pass overwrites the counters -
+    // renderer.info resets on every render() call, so reading it afterwards
+    // only ever reports the single fullscreen quad.
+    this.sceneCalls = r.info.render.calls;
+    this.sceneTris = r.info.render.triangles;
     r.setRenderTarget(null);
     r.render(this.postScene, this.postCamera);
   }

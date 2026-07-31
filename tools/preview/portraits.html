@@ -50,42 +50,67 @@ function label(g, x, y, lines, col = '#8d8266') {
 // character - so these are the faces a real party actually gets.
 const KL = ['knight', 'paladin', 'archer', 'cleric', 'sorcerer', 'druid'];
 if (want('p')) {
-  const ROWS = 10, Z = 3;
+  const ROWS = 10;
   // Deterministic 32-bit LCG standing in for the party generator's rand.int.
   let s = 0x13579bdf;
   const rnd = () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296);
   const rint = (n) => Math.floor(rnd() * n);
 
-  const GAP = 5, PAD = 10;
-  const barW = 4 * (PW + GAP) + PAD, barH = PH + PAD;
-  const bigW = 4 * (PW * Z + GAP) + PAD, bigH = PH * Z + PAD;
-  const ROWH = Math.max(barH, bigH) + 30;
-  const { c, g } = sheetOf(barW + bigW + 40, ROWS * ROWH + 8);
+  const party = [];
   const t0 = performance.now();
   for (let ri = 0; ri < ROWS; ri++) {
-    const y = 6 + ri * ROWH;
-    g.fillStyle = '#241d14'; g.fillRect(4, y, barW, barH);
-    g.fillStyle = '#1a1610'; g.fillRect(4 + barW + 16, y, bigW, bigH);
-    const names = [];
+    const row = [];
     for (let i = 0; i < 4; i++) {
       const klass = KL[rint(6)];
       const sex = rnd() < 0.5 ? 'm' : 'f';
-      const seed = rint(0x7fffffff);
-      const f = makeFace(seed, { klass, sex });
-      const p = renderPortrait(f, 'normal');
-      g.drawImage(p, 4 + PAD / 2 + i * (PW + GAP), y + PAD / 2);
-      g.drawImage(p, 4 + barW + 16 + PAD / 2 + i * (PW * Z + GAP), y + PAD / 2, PW * Z, PH * Z);
-      names.push(`${klass[0].toUpperCase()}${sex} ${f.age.slice(0, 3)} ${f.toneName.slice(0, 4)} `
-        + `${f.hairStyle}/${f.hairName.slice(0, 5)} ${f.cut.hairline.slice(0, 4)}`
-        + `${f.cut.front ? '+fr' : ''} ${f.shape.slice(0, 4)} ${f.beard.slice(0, 5)}`
-        + `${f.gear.hood ? ' HOOD' : ''}${f.gear.coif ? ' COIF' : ''}`
-        + `${f.gear.helm ? ' HELM' : ''}${f.gear.hat ? ' HAT' : ''}`);
+      const f = makeFace(rint(0x7fffffff), { klass, sex });
+      row.push({ f, klass, sex, img: renderPortrait(f, 'normal') });
     }
-    names.forEach((t, i) => label(g, 4 + barW + 16 + PAD / 2 + i * (PW * Z + GAP),
-      y + bigH + 2, [t.slice(0, 34), t.slice(34)], '#9a8d6c'));
+    party.push(row);
   }
   console.log('P ms', (performance.now() - t0).toFixed(0));
-  document.getElementById('p').appendChild(c);
+
+  // P1: every row at 1:1 and at 2x, stacked tight. This is the view that
+  // decides the question - two faces in a row must never swap.
+  const GAP = 5, PAD = 8;
+  const barW = 4 * (PW + GAP) + PAD, barH = PH + PAD;
+  const bar2W = 4 * (PW * 2 + GAP) + PAD, bar2H = PH * 2 + PAD;
+  {
+    const { c, g } = sheetOf(barW + bar2W + 24, ROWS * (bar2H + 6) + 8);
+    party.forEach((row, ri) => {
+      const y = 4 + ri * (bar2H + 6);
+      g.fillStyle = '#241d14'; g.fillRect(4, y, barW, barH);
+      g.fillStyle = '#241d14'; g.fillRect(4 + barW + 12, y, bar2W, bar2H);
+      row.forEach((e, i) => {
+        g.drawImage(e.img, 4 + PAD / 2 + i * (PW + GAP), y + PAD / 2);
+        g.drawImage(e.img, 4 + barW + 12 + PAD / 2 + i * (PW * 2 + GAP), y + PAD / 2, PW * 2, PH * 2);
+      });
+      label(g, 6, y + barH + 4, [`row ${ri}`], '#6d6350');
+    });
+    document.getElementById('p').appendChild(c);
+  }
+
+  // P2: the same rows at 3x with the descriptor of each face.
+  {
+    const Z = 3, bigW = 4 * (PW * Z + GAP) + PAD, bigH = PH * Z + PAD;
+    const { c, g } = sheetOf(bigW + 8, ROWS * (bigH + 26) + 8);
+    party.forEach((row, ri) => {
+      const y = 4 + ri * (bigH + 26);
+      g.fillStyle = '#1a1610'; g.fillRect(4, y, bigW, bigH);
+      row.forEach((e, i) => {
+        const { f } = e;
+        g.drawImage(e.img, 4 + PAD / 2 + i * (PW * Z + GAP), y + PAD / 2, PW * Z, PH * Z);
+        const t = `${e.klass[0].toUpperCase()}${e.sex} ${f.age.slice(0, 3)} ${f.toneName.slice(0, 5)} `
+          + `${f.hairStyle}/${f.hairName.slice(0, 5)} ${f.cut.hairline.slice(0, 4)}`
+          + `${f.cut.front ? '+fr' : ''} ${f.shape.slice(0, 4)} ${f.beard.slice(0, 5)}`
+          + `${f.gear.hood ? ' HOOD' : ''}${f.gear.coif ? ' COIF' : ''}`
+          + `${f.gear.helm ? ' HELM' : ''}${f.gear.hat ? ' HAT' : ''}`;
+        label(g, 4 + PAD / 2 + i * (PW * Z + GAP), y + bigH + 2,
+          [`${ri}.${i} ` + t.slice(0, 30), t.slice(30)], '#9a8d6c');
+      });
+    });
+    document.getElementById('p').appendChild(c);
+  }
 }
 
 // --- A: 24 faces, 1:1 next to 4x ------------------------------------------

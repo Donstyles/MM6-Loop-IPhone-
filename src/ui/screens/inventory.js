@@ -20,6 +20,7 @@ import {
   Screen, A, PANEL, SIDE, TAB_X, TAB_Y, TAB_W, TAB_H, px, py,
   WHITE, CANARY, HILITE, drawTabs, drawWrapped,
 } from './screenbase.js';
+import * as M from './mm6art.js';
 
 // --- item model -------------------------------------------------------------
 
@@ -59,21 +60,6 @@ const TYPES = {
   misc: { w: 1, h: 1, slot: null, icon: 'reagent' },
 };
 
-/** Material tint: [ramp, dark, mid, light]. */
-const MATERIALS = {
-  wood: ['wood', 3, 7, 11],
-  leather: ['dirt', 3, 7, 10],
-  bronze: ['fire', 4, 8, 12],
-  iron: ['grey', 4, 8, 12],
-  steel: ['stone', 5, 10, 14],
-  silver: ['ice', 6, 11, 15],
-  gold: ['gold', 5, 10, 14],
-  mithril: ['sky', 5, 10, 14],
-  obsidian: ['arcane', 1, 3, 6],
-  bone: ['sand', 8, 12, 15],
-  crystal: ['ice', 7, 12, 15],
-};
-
 function typeOf(item) { return TYPES[item && item.type] || TYPES.misc; }
 export function itemW(item) { return (item && item.w) || typeOf(item).w; }
 export function itemH(item) { return (item && item.h) || typeOf(item).h; }
@@ -91,336 +77,39 @@ export function slotFor(item, target) {
   return null;
 }
 
-function tones(item) {
-  const m = MATERIALS[item && item.material] || MATERIALS.steel;
-  return { dark: rampCss(m[0], m[1]), mid: rampCss(m[0], m[2]), lite: rampCss(m[0], m[3]) };
-}
-
 // --- procedural icons -------------------------------------------------------
 
 const ICON_CACHE = new Map();
 const CELL = 32;
 
-function pxl(g, x, y, w, h, c) { g.fillStyle = c; g.fillRect(x | 0, y | 0, w | 0, h | 0); }
-
 /**
- * A recognisable pixel icon for an item, painted from its type and material.
- * Cached by icon/material/size, so the grid costs one drawImage per item.
+ * A painted item bitmap. MM6's icons are modelled objects - a blade with a
+ * bright edge and a dark flat, a wrapped grip, a pommel, a bow with a curved
+ * limb and a taut string - so the whole set is painted in mm6art.js and simply
+ * sized to the item's grid footprint here.
  */
 export function itemIcon(item, cell = CELL) {
   const t = typeOf(item);
+  const kind = item.icon || t.icon;
   const w = itemW(item) * cell - 8;
   const h = itemH(item) * cell - 8;
-  const key = `${item.icon || t.icon}|${item.material || 'steel'}|${item.tint || ''}|${w}x${h}`;
+  const key = `${kind}|${item.material || 'steel'}|${item.tint || ''}|${w}x${h}`;
   let c = ICON_CACHE.get(key);
   if (c) return c;
-
-  c = document.createElement('canvas');
-  c.width = Math.max(4, w); c.height = Math.max(4, h);
-  const g = c.getContext('2d');
-  g.imageSmoothingEnabled = false;
-  paintIcon(g, item.icon || t.icon, c.width, c.height, tones(item), item);
-  outline(g, c.width, c.height);
+  c = M.itemArt(kind === 'blade' ? 'sword' : kind, Math.max(6, w), Math.max(8, h), {
+    mat: item.material || 'steel', accent: item.tint || null,
+  });
   ICON_CACHE.set(key, c);
   return c;
 }
 
-/**
- * MM6's item bitmaps are outlined in near-black, which is what stops them
- * dissolving into the wooden grid. Ring the painted pixels the same way.
- */
-function outline(g, w, h) {
-  const img = g.getImageData(0, 0, w, h);
-  const d = img.data;
-  const src = new Uint8Array(w * h);
-  for (let i = 0; i < w * h; i++) src[i] = d[i * 4 + 3] > 8 ? 1 : 0;
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const i = y * w + x;
-      if (src[i]) continue;
-      const near = (x > 0 && src[i - 1]) || (x < w - 1 && src[i + 1])
-        || (y > 0 && src[i - w]) || (y < h - 1 && src[i + w]);
-      if (!near) continue;
-      const p = i * 4;
-      d[p] = 14; d[p + 1] = 12; d[p + 2] = 10; d[p + 3] = 255;
-    }
-  }
-  g.putImageData(img, 0, 0);
-}
-
-function paintIcon(g, kind, w, h, T, item) {
-  const cx = (w / 2) | 0;
-  const grip = rampCss('wood', 4);
-  const gripLite = rampCss('wood', 8);
-  const accent = item.tint || rampCss('blood', 9);
-
-  switch (kind) {
-    case 'blade': {
-      const bw = Math.max(3, (w * 0.3) | 0);
-      const tip = 2, guardY = h - Math.max(9, (h * 0.26) | 0);
-      for (let y = tip; y < guardY; y++) {
-        const k = y < tip + 4 ? Math.max(1, ((bw * (y - tip + 1)) / 5) | 0) : bw;
-        pxl(g, cx - (k >> 1), y, k, 1, T.mid);
-        pxl(g, cx - (k >> 1), y, 1, 1, T.lite);
-        pxl(g, cx + (k >> 1) - 1, y, 1, 1, T.dark);
-      }
-      pxl(g, cx - (bw >> 1) - 4, guardY, bw + 8, 2, T.dark);
-      pxl(g, cx - (bw >> 1) - 4, guardY, bw + 8, 1, T.lite);
-      pxl(g, cx - 1, guardY + 2, 3, h - guardY - 4, grip);
-      pxl(g, cx - 1, guardY + 2, 1, h - guardY - 4, gripLite);
-      pxl(g, cx - 2, h - 2, 5, 2, T.mid);
-      break;
-    }
-    case 'axe': {
-      // Haft down the left third, a bearded head bulging out to the right.
-      const hx = Math.max(2, (w * 0.24) | 0);
-      pxl(g, hx, 2, 3, h - 3, grip);
-      pxl(g, hx, 2, 1, h - 3, gripLite);
-      const ay = 3, ah = Math.max(10, (h * 0.44) | 0);
-      const inner = hx + 2, outer = w - 2;
-      for (let y = 0; y < ah; y++) {
-        const t = y / (ah - 1);
-        const edge = inner + Math.round((outer - inner) * (0.5 + 0.5 * Math.sin(t * Math.PI)));
-        pxl(g, inner, ay + y, edge - inner, 1, T.mid);
-        pxl(g, edge - 2, ay + y, 2, 1, T.lite);
-        pxl(g, inner, ay + y, 1, 1, T.dark);
-      }
-      pxl(g, hx - 2, ay + 2, 2, ah - 4, T.dark);      // poll behind the haft
-      break;
-    }
-    case 'mace': {
-      const hy = (h * 0.32) | 0;
-      pxl(g, cx - 1, hy, 3, h - hy - 2, grip);
-      pxl(g, cx - 1, hy, 1, h - hy - 2, gripLite);
-      const r = Math.max(4, (w * 0.3) | 0);
-      for (let y = -r; y <= r; y++) {
-        const k = Math.round(Math.sqrt(Math.max(0, r * r - y * y)));
-        pxl(g, cx - k, hy + y, k * 2, 1, T.mid);
-      }
-      pxl(g, cx - r + 1, hy - r + 2, 2, 2, T.lite);
-      for (let i = 0; i < 4; i++) {
-        pxl(g, i % 2 ? cx - r - 2 : cx + r, hy - 4 + (i > 1 ? 5 : 0), 2, 3, T.dark);
-      }
-      break;
-    }
-    case 'spear': {
-      pxl(g, cx - 1, 8, 2, h - 10, grip);
-      pxl(g, cx - 2, 0, 4, 9, T.mid);
-      pxl(g, cx - 1, 0, 1, 9, T.lite);
-      pxl(g, cx - 3, 8, 6, 2, T.dark);
-      pxl(g, cx - 2, h - 3, 4, 3, T.dark);
-      break;
-    }
-    case 'staff': {
-      pxl(g, cx - 2, 5, 4, h - 7, grip);
-      pxl(g, cx - 2, 5, 1, h - 7, gripLite);
-      pxl(g, cx - 3, 0, 6, 6, T.mid);
-      pxl(g, cx - 1, 1, 2, 3, accent);
-      break;
-    }
-    case 'bow': {
-      for (let y = 2; y < h - 2; y++) {
-        const t = (y - h / 2) / (h / 2 - 2);
-        const x = 3 + Math.round((1 - t * t) * (w - 8));
-        pxl(g, x, y, 3, 1, T.mid);
-        pxl(g, x, y, 1, 1, T.lite);
-      }
-      for (let y = 2; y < h - 2; y++) pxl(g, 3, y, 1, 1, rampCss('sand', 13));
-      pxl(g, 3, 2, 3, 2, T.dark); pxl(g, 3, h - 4, 3, 2, T.dark);
-      break;
-    }
-    case 'shield': {
-      for (let y = 0; y < h; y++) {
-        const t = y / (h - 1);
-        const inset = t < 0.6 ? 1 : Math.round(((t - 0.6) / 0.4) * (w / 2 - 2));
-        pxl(g, 1 + inset, y, w - 2 - inset * 2, 1, T.mid);
-        pxl(g, 1 + inset, y, 1, 1, T.lite);
-        pxl(g, w - 2 - inset, y, 1, 1, T.dark);
-      }
-      pxl(g, 2, 1, w - 4, 1, T.lite);
-      pxl(g, cx - 2, (h * 0.3) | 0, 5, 5, accent);
-      break;
-    }
-    case 'helm': {
-      const top = (h * 0.16) | 0;
-      for (let y = top; y < h - 3; y++) {
-        const t = (y - top) / (h - 3 - top);
-        const k = Math.round((w / 2 - 1) * Math.sqrt(Math.max(0.2, 1 - (1 - t) * (1 - t) * 0.9)));
-        pxl(g, cx - k, y, k * 2, 1, T.mid);
-        pxl(g, cx - k, y, 1, 1, T.lite);
-        pxl(g, cx + k - 1, y, 1, 1, T.dark);
-      }
-      pxl(g, 2, (h * 0.6) | 0, w - 4, 2, T.dark);
-      pxl(g, cx - 1, Math.max(0, top - 3), 2, 4, accent);
-      pxl(g, cx - 5, (h * 0.74) | 0, 10, 2, rampCss('grey', 1));
-      break;
-    }
-    case 'armor': {
-      const sh = (h * 0.14) | 0;
-      pxl(g, 3, sh, w - 6, h - sh - 2, T.mid);
-      pxl(g, 3, sh, 1, h - sh - 2, T.lite);
-      pxl(g, w - 4, sh, 1, h - sh - 2, T.dark);
-      pxl(g, 1, sh, 5, 5, T.lite); pxl(g, w - 6, sh, 5, 5, T.lite);
-      pxl(g, cx - 4, sh + 2, 8, 3, T.dark);
-      for (let y = sh + 9; y < h - 4; y += 5) pxl(g, 4, y, w - 8, 1, T.dark);
-      pxl(g, cx - 1, sh + 7, 2, h - sh - 12, T.lite);
-      break;
-    }
-    case 'boots': {
-      for (const side of [0, 1]) {
-        const bx = side ? cx + 2 : 2;
-        const bw = ((w - 8) / 2) | 0;
-        pxl(g, bx, 2, bw, h - 6, T.mid);
-        pxl(g, bx, 2, 1, h - 6, T.lite);
-        pxl(g, bx, h - 5, bw + 3, 4, T.dark);
-      }
-      break;
-    }
-    case 'gauntlets': {
-      for (const side of [0, 1]) {
-        const bx = side ? cx + 2 : 2;
-        const bw = ((w - 8) / 2) | 0;
-        pxl(g, bx, 5, bw, h - 8, T.mid);
-        pxl(g, bx, 5, 1, h - 8, T.lite);
-        pxl(g, bx, 2, bw, 4, T.dark);
-        for (let f = 0; f < 3; f++) pxl(g, bx + 1 + f * 3, h - 5, 2, 3, T.dark);
-      }
-      break;
-    }
-    case 'belt': {
-      const by = ((h - 6) / 2) | 0;
-      pxl(g, 1, by, w - 2, 6, rampCss('dirt', 5));
-      pxl(g, 1, by, w - 2, 1, rampCss('dirt', 9));
-      pxl(g, cx - 4, by - 2, 9, 10, T.lite);
-      pxl(g, cx - 2, by, 4, 6, rampCss('dirt', 3));
-      break;
-    }
-    case 'cloak': {
-      for (let y = 2; y < h - 1; y++) {
-        const t = y / h;
-        const k = Math.round((w / 2 - 1) * (0.4 + t * 0.6));
-        pxl(g, cx - k, y, k * 2, 1, T.mid);
-        pxl(g, cx - k, y, 1, 1, T.lite);
-        pxl(g, cx + k - 1, y, 1, 1, T.dark);
-        if (y % 5 === 0) pxl(g, cx - 3, y, 1, 1, T.dark);
-      }
-      pxl(g, cx - 5, 1, 11, 3, T.lite);
-      break;
-    }
-    case 'amulet': {
-      for (let i = -6; i <= 6; i++) pxl(g, cx + i, 2 + Math.round(Math.abs(i) * 0.5), 1, 1, rampCss('gold', 10));
-      const r = Math.max(3, (Math.min(w, h) * 0.3) | 0);
-      const ay = h - r - 3;
-      for (let y = -r; y <= r; y++) {
-        const k = Math.round(Math.sqrt(Math.max(0, r * r - y * y)));
-        pxl(g, cx - k, ay + y, k * 2, 1, accent);
-      }
-      pxl(g, cx - 1, ay - r + 2, 1, 1, '#ffffff');
-      break;
-    }
-    case 'ring': {
-      const r = Math.max(4, (Math.min(w, h) / 2 - 2) | 0);
-      const ry = (h / 2 + 2) | 0;
-      for (let y = -r; y <= r; y++) {
-        const k = Math.round(Math.sqrt(Math.max(0, r * r - y * y)));
-        pxl(g, cx - k, ry + y, 1, 1, rampCss('gold', 10));
-        pxl(g, cx + k - 1, ry + y, 1, 1, rampCss('gold', 6));
-      }
-      pxl(g, cx - r, ry - r, r * 2, 1, rampCss('gold', 12));
-      pxl(g, cx - 2, ry - r - 3, 5, 5, accent);
-      pxl(g, cx - 1, ry - r - 2, 1, 1, '#ffffff');
-      break;
-    }
-    case 'potion': {
-      const liquid = item.tint || rampCss('blood', 10);
-      const bw = Math.max(7, (w * 0.72) | 0);
-      pxl(g, cx - 2, 1, 4, 5, rampCss('ice', 9));
-      pxl(g, cx - 3, 4, 7, 2, rampCss('ice', 13));
-      for (let y = 6; y < h - 1; y++) {
-        const t = (y - 6) / (h - 7);
-        const k = Math.max(1, Math.round((bw / 2) * Math.min(1, 0.45 + t * 1.5)));
-        pxl(g, cx - k, y, k * 2, 1, y > 9 ? liquid : rampCss('ice', 11));
-        pxl(g, cx - k, y, 1, 1, rampCss('ice', 13));
-      }
-      pxl(g, cx + 1, h - 6, 1, 3, '#ffffff');
-      break;
-    }
-    case 'scroll': {
-      pxl(g, 3, 2, w - 6, h - 4, rampCss('sand', 13));
-      pxl(g, 3, 2, w - 6, 1, rampCss('sand', 15));
-      pxl(g, 3, h - 3, w - 6, 1, rampCss('sand', 9));
-      pxl(g, 1, 1, 3, h - 2, rampCss('sand', 10));
-      pxl(g, w - 4, 1, 3, h - 2, rampCss('sand', 10));
-      for (let y = 5; y < h - 4; y += 3) pxl(g, 6, y, w - 12, 1, rampCss('dirt', 4));
-      break;
-    }
-    case 'wand': {
-      pxl(g, cx - 1, 6, 3, h - 8, rampCss('wood', 6));
-      pxl(g, cx - 1, 6, 1, h - 8, rampCss('wood', 10));
-      pxl(g, cx - 3, 1, 6, 6, accent);
-      pxl(g, cx - 1, 2, 2, 2, '#ffffff');
-      pxl(g, cx - 2, h - 3, 5, 2, rampCss('gold', 9));
-      break;
-    }
-    case 'book': {
-      pxl(g, 2, 2, w - 4, h - 4, rampCss('blood', 5));
-      pxl(g, 2, 2, w - 4, 1, rampCss('blood', 8));
-      pxl(g, 2, 2, 4, h - 4, rampCss('blood', 3));
-      pxl(g, 7, 4, w - 10, h - 8, rampCss('sand', 14));
-      pxl(g, 7, 4, w - 10, 1, rampCss('sand', 15));
-      pxl(g, (w / 2) | 0, 6, 1, h - 12, rampCss('sand', 10));
-      pxl(g, w - 9, ((h / 2) - 2) | 0, 4, 5, rampCss('gold', 11));
-      break;
-    }
-    case 'gem': {
-      const r = Math.min(w, h) / 2 - 1;
-      for (let y = 0; y < h - 2; y++) {
-        const t = y / (h - 3);
-        const k = Math.max(1, Math.round(r * (t < 0.34 ? 0.4 + t * 1.8 : 1 - (t - 0.34) * 1.4)));
-        pxl(g, cx - k, y + 1, k * 2, 1, accent);
-      }
-      pxl(g, cx - 1, 2, 2, 2, '#ffffff');
-      pxl(g, cx - 3, 5, 1, 4, '#ffffff');
-      break;
-    }
-    case 'gold': {
-      for (let i = 0; i < 6; i++) {
-        const gx = 1 + ((i * 6) % Math.max(1, w - 9));
-        const gy = h - 5 - ((i % 3) * 4);
-        pxl(g, gx, gy, 8, 4, rampCss('gold', 10));
-        pxl(g, gx, gy, 8, 1, rampCss('gold', 14));
-        pxl(g, gx, gy + 3, 8, 1, rampCss('gold', 6));
-      }
-      break;
-    }
-    default: {
-      pxl(g, 2, 5, w - 4, h - 6, rampCss('dirt', 6));
-      pxl(g, 2, 5, w - 4, 1, rampCss('dirt', 9));
-      pxl(g, cx - 3, 1, 7, 5, rampCss('foliage', 8));
-      pxl(g, cx - 1, 0, 2, 4, rampCss('foliage', 11));
-      pxl(g, 4, h - 4, w - 8, 1, rampCss('dirt', 3));
-      break;
-    }
-  }
-}
-
 // --- paperdoll --------------------------------------------------------------
-
-/** Slot wells in the right-hand column, relative to the doll well's origin. */
-const DOLL = [
-  ['helm', 66, 6, 32, 28, 'slot_helm'],
-  ['amulet', 120, 8, 26, 26, 'slot_amulet'],
-  ['cloak', 6, 8, 30, 36, 'slot_cloak'],
-  ['gauntlets', 6, 54, 32, 32, 'slot_gauntlets'],
-  ['bow', 120, 48, 38, 54, 'slot_bow'],
-  ['armor', 60, 50, 44, 58, 'slot_armor'],
-  ['mainhand', 6, 96, 32, 60, 'slot_weapon'],
-  ['offhand', 120, 110, 38, 52, 'slot_offhand'],
-  ['belt', 62, 116, 40, 20, 'slot_belt'],
-  ['boots', 64, 144, 36, 32, 'slot_boots'],
-  ['ring1', 10, 182, 26, 26, 'slot_ring'],
-  ['ring2', 128, 182, 26, 26, 'slot_ring'],
-];
+//
+// MM6 paints a body and then paints the equipped items straight onto it at
+// their anatomical positions: helm on the head, armour over the torso, boots at
+// the feet, the weapon in the hand. There is no slot chrome - no boxes, no
+// outlines, no glyphs. Empty slots simply show the body. The drag-and-drop hit
+// rectangles below are derived from the painted anatomy and are never drawn.
 
 const WELL = { x: SIDE.x + 4, y: 6, w: 164, h: 282 };
 
@@ -429,37 +118,55 @@ function equipOf(ch) {
   return ch.equipment;
 }
 
-/** A flat painted body, dark enough that the slot wells read on top of it. */
-function bodySilhouette(ctx, r) {
-  const cx = (r.x + r.w / 2) | 0;
-  const top = r.y + 8;
-  const sk = rampCss('flesh', 6), skD = rampCss('flesh', 4), cloth = rampCss('dirt', 7);
-  const headR = 14;
-  ctx.save();
-  for (let y = -headR; y <= headR; y++) {
-    const k = Math.round(Math.sqrt(Math.max(0, headR * headR - y * y)) * 0.84);
-    ctx.fillStyle = y < -5 ? skD : sk;
-    ctx.fillRect(cx - k, top + headR + y, k * 2, 1);
+/** Where each slot's art lands on the painted body, and how big it is. */
+function slotPlacement(anchor) {
+  const a = anchor;
+  const hw = a.head.w, tw = a.torso.w;
+  return {
+    helm: { cx: a.head.cx, cy: a.head.cy - 3, w: Math.round(hw * 1.30), h: Math.round(a.head.h * 0.92) },
+    amulet: { cx: a.neck.cx, cy: a.neck.y + 8, w: 20, h: 22 },
+    cloak: { cx: a.torso.cx, cy: a.torso.cy + 12, w: Math.round(tw * 2.0), h: Math.round(a.torso.h * 1.9) },
+    armor: { cx: a.torso.cx, cy: a.torso.cy + 2, w: Math.round(tw * 1.34), h: Math.round(a.torso.h * 1.16) },
+    belt: { cx: a.waist.cx, cy: a.waist.y + 1, w: Math.round(tw * 1.24), h: 12 },
+    boots: { cx: a.feet.cx, cy: a.feet.y - 2, w: Math.round(a.feet.w * 1.15), h: 26 },
+    gauntlets: { cx: a.torso.cx, cy: a.hands.left.y + 4, w: Math.round(tw * 2.1), h: 20 },
+    mainhand: { cx: a.hands.right.x + 6, cy: a.hands.right.y + 26, w: 26, h: 74 },
+    offhand: { cx: a.hands.left.x - 10, cy: a.hands.left.y + 12, w: 38, h: 46 },
+    bow: { cx: a.torso.cx + Math.round(tw * 1.7), cy: a.torso.cy + 10, w: 40, h: 72 },
+    ring1: { cx: a.hands.left.x - 1, cy: a.hands.left.y + 12, w: 13, h: 13 },
+    ring2: { cx: a.hands.right.x + 1, cy: a.hands.right.y + 12, w: 13, h: 13 },
+  };
+}
+
+/** Paint one worn item onto the body at its placement. */
+function paintWorn(ctx, slot, item, p) {
+  const kind = wornKind(slot, item);
+  const c = M.itemArt(kind, Math.max(6, p.w), Math.max(8, p.h), {
+    mat: item.material || wornMaterial(slot), accent: item.tint || null,
+  });
+  const x = Math.round(p.cx - c.width / 2), y = Math.round(p.cy - c.height / 2);
+  // Painted contact shadow: two stippled rows under the piece, no soft edge.
+  M.stipple(ctx, x + 2, y + 3, c.width, c.height, [12, 10, 8], 0.30);
+  M.blit(ctx, c, x, y);
+  if (item.broken) M.stipple(ctx, x, y, c.width, c.height, [200, 24, 12], 0.42);
+  else if (item.identified === false) M.stipple(ctx, x, y, c.width, c.height, [0, 200, 40], 0.30);
+}
+
+function wornKind(slot, item) {
+  const t = typeOf(item);
+  const k = item.icon || t.icon;
+  if (k === 'blade') return 'sword';
+  if (slot === 'armor' && item.skill) return item.skill === 'chain' ? 'chain' : 'armor';
+  return k;
+}
+
+function wornMaterial(slot) {
+  switch (slot) {
+    case 'boots': case 'belt': return 'leather';
+    case 'cloak': return 'cloth';
+    case 'amulet': case 'ring1': case 'ring2': return 'gold';
+    default: return 'steel';
   }
-  ctx.fillStyle = cloth;
-  ctx.fillRect(cx - 7, top + headR * 2 - 3, 14, 7);
-  const ty = top + headR * 2 + 4, th = 78;
-  for (let y = 0; y < th; y++) {
-    const k = Math.round(25 - (y / th) * 7);
-    ctx.fillStyle = cloth;
-    ctx.fillRect(cx - k, ty + y, k * 2, 1);
-  }
-  ctx.fillStyle = skD;
-  ctx.fillRect(cx - 33, ty + 6, 9, 62);
-  ctx.fillRect(cx + 24, ty + 6, 9, 62);
-  const ly = ty + th, lh = 62;
-  ctx.fillStyle = cloth;
-  ctx.fillRect(cx - 19, ly, 16, lh);
-  ctx.fillRect(cx + 3, ly, 16, lh);
-  ctx.fillStyle = skD;
-  ctx.fillRect(cx - 20, ly + lh, 18, 6);
-  ctx.fillRect(cx + 2, ly + lh, 18, 6);
-  ctx.restore();
 }
 
 /**
@@ -471,57 +178,42 @@ export function drawPaperdoll(ctx, screen, ch) {
   const ui = screen.ui;
   const r = WELL;
   A.stone(ctx, SIDE.x, 0, SIDE.w, 352, { rivets: true, gold: true });
-  A.inset(ctx, r.x, r.y, r.w, r.h);
-  ctx.save();
-  ctx.beginPath(); ctx.rect(r.x + 1, r.y + 1, r.w - 2, r.h - 2); ctx.clip();
-  ctx.fillStyle = rampCss('stone', 4);
-  ctx.fillRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2);
-  bodySilhouette(ctx, r);
 
   const eq = equipOf(ch);
+  const cloth = clothOf(ch);
+  const place = slotPlacement(M.paperdollAnchors(r));
+
+  ctx.save();
+  ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
+  // The doll stands on the panel's own tooled hide, not in a black well.
+  M.paper(ctx, r.x, r.y, r.w, r.h, 'sheet', 43);
+  M.stipple(ctx, r.x, r.y, r.w, r.h, [40, 28, 16], 0.55);
+  // Anything worn behind the body goes down first: the cloak hangs behind the
+  // shoulders and the bow is slung across the back.
+  if (eq.cloak) paintWorn(ctx, 'cloak', eq.cloak, place.cloak);
+  if (eq.bow) paintWorn(ctx, 'bow', eq.bow, place.bow);
+  M.paperdollBody(ctx, { x: r.x, y: r.y, w: r.w, h: r.h }, cloth);
+  for (const slot of ['armor', 'belt', 'boots', 'gauntlets', 'helm', 'amulet',
+    'offhand', 'mainhand', 'ring1', 'ring2']) {
+    if (eq[slot]) paintWorn(ctx, slot, eq[slot], place[slot]);
+  }
+  ctx.restore();
+
+  // Hit rectangles only: nothing is drawn for them, per MM6.
   const carried = ui.cursorItem;
-  for (const [slot, sx, sy, sw, sh, icon] of DOLL) {
-    const x = r.x + sx, y = r.y + sy;
-    const item = eq[slot];
-    const accepts = carried ? !!slotFor(carried, slot) : false;
-    const hit = ui.region(`doll:${slot}`, x, y, sw, sh, item ? itemLabel(item) : slotLabel(slot));
-
-    if (item) {
-      // Worn gear is painted straight onto the body, as a paperdoll should be;
-      // only the empty slots show their well.
-      const ic = itemIcon(item);
-      const s = Math.min(1, (sw - 2) / ic.width, (sh - 2) / ic.height);
-      const dw = Math.max(1, (ic.width * s) | 0), dh = Math.max(1, (ic.height * s) | 0);
-      const dx = (x + (sw - dw) / 2) | 0, dy = (y + (sh - dh) / 2) | 0;
-      ctx.globalAlpha = 0.35;
-      ctx.fillStyle = '#000000';
-      ctx.fillRect(dx + 2, dy + 2, dw, dh);
-      ctx.globalAlpha = 1;
-      ctx.drawImage(ic, 0, 0, ic.width, ic.height, dx, dy, dw, dh);
-      if (item.broken) { ctx.fillStyle = 'rgba(255,0,0,0.35)'; ctx.fillRect(dx, dy, dw, dh); }
-    } else {
-      ctx.globalAlpha = 0.45;
-      ctx.fillStyle = '#0c0a08';
-      ctx.fillRect(x, y, sw, sh);
-      ctx.globalAlpha = 1;
-      A.bevel(ctx, x, y, sw, sh, { sunken: true, size: 1 });
-      ctx.globalAlpha = 0.5;
-      A.icon(ctx, icon, (x + (sw - 16) / 2) | 0, (y + (sh - 16) / 2) | 0, 16);
-      ctx.globalAlpha = 1;
-    }
-    if (accepts) {
-      ctx.fillStyle = HILITE;
-      ctx.fillRect(x, y, sw, 1); ctx.fillRect(x, y + sh - 1, sw, 1);
-      ctx.fillRect(x, y, 1, sh); ctx.fillRect(x + sw - 1, y, 1, sh);
-    } else if (hit.hover) {
-      ctx.globalAlpha = 0.18; ctx.fillStyle = '#ffffff';
-      ctx.fillRect(x, y, sw, sh); ctx.globalAlpha = 1;
-    }
-
+  for (const slot of SLOTS) {
+    const p = place[slot];
+    if (!p) continue;
+    const x = Math.round(p.cx - p.w / 2), y = Math.round(p.cy - p.h / 2);
+    const item = eq[slot] || null;
+    const hit = ui.region(`doll:${slot}`, x, y, p.w, p.h, item ? itemLabel(item) : slotLabel(slot));
+    // The only feedback is on the carried item's legal targets, and it is a
+    // painted stipple rather than an outline.
+    if (carried && slotFor(carried, slot)) M.stipple(ctx, x, y, p.w, p.h, [225, 205, 35], 0.22);
+    else if (hit.hover && item) M.stipple(ctx, x, y, p.w, p.h, [255, 246, 220], 0.14);
     if (hit.rightClick && item && screen.showPopup) screen.showPopup(item);
     else if (hit.click && screen.slotClick) screen.slotClick(ch, slot, item || null);
   }
-  ctx.restore();
 
   // Gold and food, where MM6 keeps them: the lower right panel.
   const gy = r.y + r.h + 6;
@@ -530,6 +222,20 @@ export function drawPaperdoll(ctx, screen, ch) {
   A.icon(ctx, 'food', r.x + 86, gy, 14);
   F.drawText(ctx, String(screen.party.food | 0), r.x + 104, gy + 2, { face: 'small', color: WHITE });
   F.drawText(ctx, ch.name || '', r.x + r.w / 2, gy + 18, { face: 'small', align: 'center', color: WHITE });
+}
+
+/** Skin, hair and cloth for a character, so four party members do not match. */
+function clothOf(ch) {
+  const seed = ((ch && (ch.portraitSeed | 0)) || 1) + (ch && ch.name ? ch.name.length : 0);
+  const skins = [[216, 174, 138], [196, 148, 108], [166, 118, 82], [124, 84, 56]];
+  const hairs = [[54, 34, 20], [104, 72, 34], [30, 24, 22], [148, 128, 92], [96, 42, 26]];
+  const tunics = [[92, 74, 52], [70, 82, 60], [88, 62, 60], [64, 70, 92], [96, 84, 56]];
+  return {
+    skin: skins[seed % skins.length],
+    hair: hairs[(seed * 3) % hairs.length],
+    tunic: tunics[(seed * 5) % tunics.length],
+    trews: [58, 48, 34],
+  };
 }
 
 // --- the screen -------------------------------------------------------------
@@ -637,9 +343,8 @@ export class InventoryScreen extends Screen {
       drawPaperdoll(ctx, this, ch);
     }
 
-    this.status = this.ui.cursorItem
-      ? 'Click a cell or a body slot to put it down. Right-click an item to inspect it.'
-      : 'Click an item to pick it up. Right-click to inspect it.';
+    // MM6 never explains its controls on the page: the help line only ever
+    // carries what the pointer is actually over.
     this.drawHelpLine(ctx, 306);
 
     const clicked = drawTabs(ctx, this.ui, this.id, TAB_X, TAB_Y, TAB_W, TAB_H,
@@ -661,12 +366,20 @@ export class InventoryScreen extends Screen {
     const bag = this.bagOf(ch);
     const gx = px(GRID_X), gy = py(GRID_Y);
     const w = COLS * CELL, h = ROWS * CELL;
-    A.inset(ctx, gx - 2, gy - 2, w + 4, h + 4);
-    ctx.fillStyle = rampCss('wood', 2);
-    ctx.fillRect(gx, gy, w, h);
-    ctx.fillStyle = rampCss('wood', 4);
-    for (let c = 0; c <= COLS; c++) ctx.fillRect(gx + c * CELL, gy, 1, h);
-    for (let r = 0; r <= ROWS; r++) ctx.fillRect(gx, gy + r * CELL, w, 1);
+    // `fr_inven` is a painted hide panel with the cells embossed into it - the
+    // cell edges are a hair lighter and darker than the field, never a drawn
+    // wireframe.
+    M.paper(ctx, gx - 2, gy - 2, w + 4, h + 4, 'sheet', 71);
+    M.stipple(ctx, gx - 2, gy - 2, w + 4, h + 4, [34, 22, 12], 0.62);
+    A.bevel(ctx, gx - 2, gy - 2, w + 4, h + 4, { sunken: true, size: 1 });
+    for (let c = 0; c <= COLS; c++) {
+      M.stipple(ctx, gx + c * CELL, gy, 1, h, [22, 16, 10], 0.45);
+      if (c < COLS) M.stipple(ctx, gx + c * CELL + 1, gy, 1, h, [176, 152, 116], 0.20);
+    }
+    for (let r = 0; r <= ROWS; r++) {
+      M.stipple(ctx, gx, gy + r * CELL, w, 1, [22, 16, 10], 0.45);
+      if (r < ROWS) M.stipple(ctx, gx, gy + r * CELL + 1, w, 1, [176, 152, 116], 0.20);
+    }
 
     const carried = this.ui.cursorItem;
     let hoverCell = null;
@@ -684,10 +397,7 @@ export class InventoryScreen extends Screen {
       const iw = itemW(it) * CELL, ih = itemH(it) * CELL;
       const hit = this.ui.region(`${this.id}:it:${it.uid || it.id || it.name}:${it.x},${it.y}`,
         ix, iy, iw, ih, itemLabel(it));
-      if (hit.hover) {
-        ctx.fillStyle = rampCss('wood', 6);
-        ctx.fillRect(ix + 1, iy + 1, iw - 1, ih - 1);
-      }
+      if (hit.hover) M.stipple(ctx, ix + 1, iy + 1, iw - 1, ih - 1, [255, 240, 190], 0.22);
       const ic = itemIcon(it);
       ctx.drawImage(ic, (ix + (iw - ic.width) / 2) | 0, (iy + (ih - ic.height) / 2) | 0);
       if (it.broken) tint(ctx, ix + 1, iy + 1, iw - 1, ih - 1, 'rgba(255,0,0,0.35)');

@@ -1889,25 +1889,70 @@ function buildGhostRig(H, P, C, rnd) {
 
 function rc(spec, fb) { return spec ? rampHex(spec[0], spec[1]) : fb; }
 
+/**
+ * Raise an art colour to a minimum luminance without changing its hue. The
+ * bake's own ordered-dither pass snaps the result back onto the 256-colour
+ * palette, so nothing leaves this file that survives as an off-palette value.
+ *
+ * This exists because of arithmetic, not taste. The baked key light puts the
+ * shadow side of a sprite at 0.34 of its albedo and the average visible facet
+ * somewhere near 0.55, and the sprite is then seen at 30-70 px against MM6
+ * grass, which sits at luminance 72-118. An albedo of luminance 97 (grass
+ * shade 5, the old goblin skin) therefore lands on screen at ~53 - darker than
+ * the ground it stands on, which is exactly why every creature read as a
+ * silhouette. Monsters have to be *brighter* than the terrain to be visible
+ * against it, and MM6's are: its palettes spend most of their range in the top
+ * half. Saturated darks that cannot reach the target by scaling alone are
+ * allowed a little desaturation, which is also what a 256-colour palettisation
+ * did to them in 1998.
+ */
+function lift(hex, target, maxWash = 0.30) {
+  let r = (hex >> 16) & 255, g = (hex >> 8) & 255, b = hex & 255;
+  const L = 0.299 * r + 0.587 * g + 0.114 * b;
+  if (L >= target || L < 1) return hex;
+  const k = Math.min(target / L, 255 / Math.max(1, r, g, b));
+  r *= k; g *= k; b *= k;
+  const L2 = 0.299 * r + 0.587 * g + 0.114 * b;
+  if (L2 < target) {
+    // Still short after hitting the channel ceiling: mix toward white, capped
+    // so a purple never turns into lilac.
+    const w = Math.min(maxWash, (target - L2) / Math.max(1, 255 - L2));
+    r += (255 - r) * w; g += (255 - g) * w; b += (255 - b) * w;
+  }
+  return (Math.round(clamp(r, 0, 255)) << 16) | (Math.round(clamp(g, 0, 255)) << 8) | Math.round(clamp(b, 0, 255));
+}
+
+// Minimum albedo luminance per colour role. The "mass" colours - the ones that
+// own most of the silhouette - are held highest; trim and derived shades sit
+// below them so the two-tone reading of a figure survives the lift.
+const LIFT = {
+  skin: 126, body: 122, cloth: 108, metal: 112, wood: 100, hair: 88, horn: 132,
+  skin2: 92, cloth2: 82, wing: 108, wing2: 82, trouser: 82, boot: 70,
+};
+
 function resolveCols(p = {}) {
-  const skin = rc(p.skin, rampHex('flesh', 4));
-  const cloth = rc(p.cloth, rampHex('dirt', 6));
+  const skin = lift(rc(p.skin, rampHex('flesh', 4)), LIFT.skin);
+  const cloth = lift(rc(p.cloth, rampHex('dirt', 6)), LIFT.cloth);
+  const wood = lift(rc(p.wood, rampHex('wood', 6)), LIFT.wood);
   const C = {
     skin,
-    skin2: rc(p.skin2, mulHex(skin, 0.78)),
-    body: rc(p.body, skin),
+    // Derived tones come off the *lifted* base, so they keep their intended
+    // ratio to it and only get lifted themselves if they were authored dark.
+    skin2: lift(rc(p.skin2, mulHex(skin, 0.78)), LIFT.skin2),
+    body: lift(rc(p.body, skin), LIFT.body),
     cloth,
-    cloth2: rc(p.cloth2, mulHex(cloth, 0.7)),
-    metal: rc(p.metal, rampHex('stone', 9)),
-    wood: rc(p.wood, rampHex('wood', 6)),
-    hair: rc(p.hair, rampHex('wood', 4)),
-    horn: rc(p.horn, rampHex('sand', 11)),
+    cloth2: lift(rc(p.cloth2, mulHex(cloth, 0.7)), LIFT.cloth2),
+    metal: lift(rc(p.metal, rampHex('stone', 9)), LIFT.metal),
+    wood,
+    hair: lift(rc(p.hair, rampHex('wood', 4)), LIFT.hair),
+    horn: lift(rc(p.horn, rampHex('sand', 11)), LIFT.horn),
+    // Eyes and glows are meant to be extremes; they are never lifted.
     eye: rc(p.eye, 0x0b0b0f),
     glow: rc(p.glow, rampHex('arcane', 6)),
-    wing: rc(p.wing, mulHex(skin, 0.85)),
-    wing2: rc(p.wing2, mulHex(skin, 0.6)),
-    trouser: rc(p.trouser, mulHex(cloth, 0.62)),
-    boot: rc(p.boot, mulHex(rc(p.wood, rampHex('wood', 6)), 0.55)),
+    wing: lift(rc(p.wing, mulHex(skin, 0.85)), LIFT.wing),
+    wing2: lift(rc(p.wing2, mulHex(skin, 0.6)), LIFT.wing2),
+    trouser: lift(rc(p.trouser, mulHex(cloth, 0.62)), LIFT.trouser),
+    boot: lift(rc(p.boot, mulHex(wood, 0.55)), LIFT.boot),
   };
   return C;
 }

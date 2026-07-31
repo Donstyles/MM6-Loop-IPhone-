@@ -88,9 +88,8 @@ function frame(now) {
   ui.endFrame();
   input.endFrame();
 
-  const info = engine.renderer.info;
-  perf.drawCalls = info.render.calls;
-  perf.tris = info.render.triangles;
+  perf.drawCalls = engine.sceneCalls || 0;
+  perf.tris = engine.sceneTris || 0;
   perf.ms = performance.now() - t0;
   if (session) { perf.sprites = session.stats.sprites; perf.entities = session.stats.entities; }
 
