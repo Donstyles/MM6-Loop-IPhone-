@@ -21,9 +21,9 @@ import { Rand, clamp, smoothstep, fbm2, valueNoise2 } from '../../core/rng.js';
 import { rampCss, ramp, snap } from '../../core/palette.js';
 import * as F from '../../art/font.js';
 import { PORTRAIT_W, PORTRAIT_H } from '../../art/portraits.js';
-import { Screen, A, portraitOf, wrapLines, drawWrapped } from './screenbase.js';
+import { Screen, A, PANEL, portraitOf, wrapLines, drawWrapped } from './screenbase.js';
 
-export { Screen, A, portraitOf, wrapLines, drawWrapped };
+export { Screen, A, PANEL, portraitOf, wrapLines, drawWrapped };
 
 // --- the engine colour table (exact) ---------------------------------------
 
@@ -39,9 +39,8 @@ export const C_BODY = '#4b4b4b';       // Tundora: book and page body text
 export const C_DIM = '#9a8f78';
 
 // --- geometry (all absolute, verbatim from the engine) ----------------------
-
-/** Panel art replaces the 3D viewport exactly. */
-export const PANEL = { x: 8, y: 8, w: 461, h: 345 };
+// PANEL (8,8,461,345) comes from screenbase and is re-exported above: panel art
+// replaces the 3D viewport exactly, leaving the carved surround visible.
 
 /** The dialogue panel that replaces the right column while a house is open. */
 export function dlgRect() {

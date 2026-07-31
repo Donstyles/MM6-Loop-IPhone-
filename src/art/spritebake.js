@@ -615,7 +615,7 @@ export function bakeCreatureSheet(renderer, kind, seed = 1, opts = {}) {
   const def = CREATURE_DEFS[kind] || CREATURE_FAMILIES[kind];
   const h = def ? def.height : 192;
   return bakeSheet(renderer, (s) => buildCreature(kind, s), {
-    kind, seed, actions: ACTIONS, maxCellH: cellBudget(h, 36, 96, 0.42), maxAtlas: 1024,
+    kind, seed, actions: ACTIONS, maxCellH: cellBudget(h, 48, 96, 0.42), maxAtlas: 1024,
     aspect: def ? def.aspect : 0, ...opts,
   });
 }

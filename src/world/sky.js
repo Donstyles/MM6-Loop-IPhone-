@@ -49,7 +49,14 @@ export function timeTint(hours) {
   const v = minutes >= 480 ? 960 - minutes : minutes;
   const level = 20 - (v / 480) * 20;
   const dim = Math.min(216, 8 * level);
-  return (255 - dim) / 255;
+  const raw = (255 - dim) / 255;
+  // The engine's curve only reaches 1.0 at exactly 13:00, so applied literally
+  // it dims a mid-morning sky by nearly 30% and the whole world reads as dusk.
+  // Flatten the plateau across full daylight and keep the ramp for dawn/dusk,
+  // which is what the shell's global multiply does too - applying both would
+  // darken everything twice.
+  if (h >= 7 && h < 19) return Math.max(raw, 0.94);
+  return raw;
 }
 
 /** Ambient / diffuse curve (OpenGLRenderer.cpp:1204). */
@@ -99,20 +106,23 @@ export function skyTexture(kind = 'plansky3') {
   for (let y = 0; y < S; y++) {
     for (let x = 0; x < S; x++) {
       const u = x / S, v = y / S;
-      // Two cloud scales plus a stretched streak term - clouds in the MM6
-      // plate are drawn as long soft banks, not fluffy puffs.
-      const big = tileFbm2(u * 3, v * 3, 3, 4, 0.55, seed);
-      const streak = tileFbm2(u * 2.2, v * 7.0, 7, 4, 0.5, seed + 11);
-      const fine = tileFbm2(u * 9, v * 9, 9, 3, 0.5, seed + 29);
-      let n = big * 0.52 + streak * 0.30 + fine * 0.18;
-      const cloud = smoothstep(0.42, 0.74, n);
-      // Base sky is a pale hazy blue - MM6's plate is much lighter than memory
-      // suggests, because the grey multiply only ever darkens it from here.
-      const base = rampSample('sky', 0.88 + fine * 0.10);
-      const lit = mixC(base, [248, 248, 244], cloud);
-      // Underside shading of each bank.
-      const under = smoothstep(0.40, 0.62, tileFbm2(u * 3 + 0.05, v * 3 + 0.09, 3, 4, 0.55, seed));
-      p.setArr(x, y, scaleC(lit, 0.90 + 0.14 * under));
+      // Distinct soft cumulus, not a continuous smear: one blobby low-frequency
+      // mass with a fine erosion term, and no stretched streak component. The
+      // radiating streaks in the final image come from the plane projection
+      // near the zenith, so baking them into the plate doubles them up.
+      const mass = tileFbm2(u * 3.2, v * 3.2, 3, 4, 0.52, seed);
+      const erode = tileFbm2(u * 8, v * 8, 8, 3, 0.5, seed + 29);
+      const n = mass * 0.78 + erode * 0.22;
+      const cloud = smoothstep(0.50, 0.63, n);          // tight = separate forms
+      const core = smoothstep(0.58, 0.74, n);           // bright cumulus tops
+      // A light, slightly warm daylight blue. The grey multiply only ever
+      // darkens from here, so the plate has to start bright.
+      const base = rampSample('sky', 0.90 + erode * 0.08);
+      let lit = mixC(base, [214, 220, 228], cloud);
+      lit = mixC(lit, [252, 251, 245], core * 0.85);
+      // Shade the undersides so the banks read as volumes.
+      const under = smoothstep(0.44, 0.58, tileFbm2(u * 3.2 + 0.06, v * 3.2 + 0.10, 3, 4, 0.52, seed));
+      p.setArr(x, y, scaleC(lit, 0.93 + 0.11 * under));
     }
   }
   const tex = toTexture(p, { dither: 12, repeat: true, mips: true, magNearest: false });

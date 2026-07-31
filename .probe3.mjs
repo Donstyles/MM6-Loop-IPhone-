@@ -11,12 +11,13 @@ console.log(JSON.stringify(await page.evaluate(async () => {
   m.renderPortrait(m.makeFace(1, {}), 'normal');   // warm
   const t0 = performance.now();
   const g = m.buildPortraits([1000, 8717, 16434]);
-  let n = 0, worst = 0;
+  let n = 0; const times = [];
   for (;;) { const a = performance.now(); const r = g.next(); const d = performance.now()-a;
-    if (d > worst) worst = d; n++; if (r.done) break; }
+    times.push(+d.toFixed(1)); n++; if (r.done) break; }
+  const worst = Math.max(...times);
   const total = performance.now() - t0;
   const sh = m.portraitSheet(m.makeFace(1000, {}));
-  return { steps: n, worstStepMs: +worst.toFixed(1), totalMs: +total.toFixed(0),
+  return { times, steps: n, worstStepMs: +worst.toFixed(1), totalMs: +total.toFixed(0),
     perFrame: +(total / (3*m.EXPRESSIONS.length)).toFixed(1),
     sheet: sh.canvas.width + 'x' + sh.canvas.height, exprs: m.EXPRESSIONS.length };
 })));

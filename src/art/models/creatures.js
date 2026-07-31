@@ -238,10 +238,10 @@ function makeWeapon(kind, H, C) {
       break;
     case 'bow':
       // limbs in the XY plane so the bow is broadside-on from most octants
-      g.add(box(u * 0.044, u * 0.30, u * 0.044, wood, { taper: 0.85, y: u * 0.02 }));
+      g.add(box(u * 0.058, u * 0.32, u * 0.058, wood, { taper: 0.85, y: u * 0.02 }));
       for (const sgn of [1, -1]) {
-        g.add(box(u * 0.038, u * 0.22, u * 0.038, wood, { y: sgn * u * 0.24, z: u * 0.030, rx: sgn * 0.30, taper: 0.6 }));
-        g.add(box(u * 0.030, u * 0.14, u * 0.030, wood, { y: sgn * u * 0.40, z: u * 0.085, rx: sgn * 0.75, taper: 0.4 }));
+        g.add(box(u * 0.050, u * 0.24, u * 0.050, wood, { y: sgn * u * 0.25, z: u * 0.030, rx: sgn * 0.30, taper: 0.6 }));
+        g.add(box(u * 0.040, u * 0.16, u * 0.040, wood, { y: sgn * u * 0.42, z: u * 0.090, rx: sgn * 0.75, taper: 0.4 }));
       }
       g.add(box(u * 0.016, u * 0.92, u * 0.016, C.cloth2, { z: -u * 0.075 }));
       break;
@@ -641,7 +641,7 @@ function buildBipedRig(H, P, C, rnd) {
     for (const [key, s] of [['L', -1], ['R', 1]]) {
       const w = grp(s * shoulderW * 0.42, torsoH * 0.86, -torsoD * 0.42);
       torso.add(w);
-      if (P.wingFold) { w.rotation.z = s * P.wingFold; w.rotation.y = -s * 1.15; w.rotation.x = -0.35; }
+      if (P.wingFold) { w.rotation.z = -s * P.wingFold; w.rotation.y = -s * 0.28; w.rotation.x = 0.18; }
       w.add(makeWing(P.wings, span, C.wing, C.wing2, s));
       legs['wing' + key] = w;
     }
@@ -2034,8 +2034,8 @@ F('Cockatrice', 'biped', 178,
     horn: ['gold', 11], wing: ['sand', 9], wing2: ['wood', 6], eye: ['fire', 12],
   },
   {
-    headShape: 'beak', headR: 0.095, digitigrade: 1, claws: 1, wings: 'feather', wingSpan: 0.52,
-    wingFold: 0.75, tail: 0.55, hunch: 0.55, boots: 0, belt: 0, armLen: 0.26, armR: 0.030,
+    headShape: 'beak', headR: 0.095, digitigrade: 1, claws: 1, wings: 'feather', wingSpan: 0.50,
+    wingFold: 1.32, tail: 0.55, hunch: 0.34, boots: 0, belt: 0, armLen: 0.26, armR: 0.030,
     torsoH: 0.34, torsoD: 0.22, shoulderW: 0.26, hipW: 0.24, legLen: 0.44, glow: 1,
   },
   [["Agar's Pet", 13, 55], ["Agar's Monster", 15, 67, { skin: ['blood', 6], body: ['blood', 5], wing: ['blood', 7] }],
@@ -2166,7 +2166,7 @@ F('Gargoyle', 'biped', 200,
     wing: ['stone', 5], wing2: ['stone', 3], horn: ['stone', 9], eye: ['fire', 11],
   },
   {
-    horns: 'devil', ears: 'point', claws: 1, wings: 'bat', wingSpan: 0.62, wingFold: 1.15, digitigrade: 1,
+    horns: 'devil', ears: 'point', claws: 1, wings: 'bat', wingSpan: 0.62, wingFold: 1.30, digitigrade: 1,
     hunch: 0.30, tail: 0.4, boots: 0, belt: 0, glow: 1, legLen: 0.40, armLen: 0.46,
   },
   [['Stone Gargoyle', 16, 73],

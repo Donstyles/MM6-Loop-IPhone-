@@ -736,9 +736,51 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
   }
 
   let flick = 0;
+
+  // Automap plate. Indoors MM6 reveals the map as you walk it, so the panel
+  // wants a per-cell picture rather than a bitmap crop; we hand back the same
+  // drawMinimap signature the region uses so the shell has one code path.
+  function drawMinimap(ctx, rect, player, zoom, pan) {
+    if (!ctx || !rect) return;
+    const rx = rect.x !== undefined ? rect.x : (rect.left || 0);
+    const ry = rect.y !== undefined ? rect.y : (rect.top || 0);
+    const rw = rect.w !== undefined ? rect.w : (rect.width || 0);
+    const rh = rect.h !== undefined ? rect.h : (rect.height || 0);
+    if (rw <= 0 || rh <= 0) return;
+    const z = (!zoom || !isFinite(zoom) || zoom <= 0) ? 12000 : zoom;
+    const px = player ? (player.x || 0) : startPos.x;
+    const pz = player ? (player.z !== undefined ? player.z : (player.y || 0)) : startPos.z;
+    const scale = rw / z;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(rx, ry, rw, rh);
+    ctx.clip();
+    const cx = rx + rw / 2, cy = ry + rh / 2;
+    ctx.fillStyle = '#171310';
+    ctx.fillRect(rx, ry, rw, rh);
+    const cs = CELL * scale;
+    ctx.fillStyle = '#8a7c60';
+    for (const [k, c] of cells) {
+      if (c.seen === false) continue;
+      const x = cx + (c.i * CELL + CELL / 2 - px) * scale;
+      const y = cy + (c.j * CELL + CELL / 2 - pz) * scale;
+      if (x < rx - cs || x > rx + rw + cs || y < ry - cs || y > ry + rh + cs) continue;
+      ctx.fillStyle = c.liquid ? '#4a5c6e' : (c.kind === 'corridor' ? '#6e6250' : '#8a7c60');
+      ctx.fillRect(x - cs / 2, y - cs / 2, Math.max(1, cs), Math.max(1, cs));
+    }
+    ctx.fillStyle = '#c8a040';
+    for (const d of doorMeshes) {
+      const x = cx + (d.position.x - px) * scale;
+      const y = cy + (d.position.z - pz) * scale;
+      ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
+    }
+    ctx.restore();
+  }
+
   prog(1, 'done');
 
   return {
+    drawMinimap,
     group, theme, name: spec.name || theme,
     rooms: rooms.map((rm) => ({
       index: rm.index, x: (rm.i0 + rm.w / 2) * CELL, z: (rm.j0 + rm.h / 2) * CELL,

@@ -40,8 +40,8 @@ export const EXPRESSIONS = ['normal', 'smile', 'hurt', 'angry', 'scared', 'poiso
   'dmg_minor', 'dmg_moderate', 'dmg_major', 'avoid', 'wide_smile', 'sad',
   'talk1', 'talk2', 'talk3', 'talk4'];
 
-/** Supersample factor. 3x box-filtered down reads as brush softness. */
-const SS = 3;
+/** Supersample factor: paint at 2x and box-filter down for softer edges. */
+const SS = 2;
 
 // Design space. All geometry below is written in these units and mapped onto
 // whatever output size the caller asked for, so a portrait can be re-rendered
@@ -1352,7 +1352,11 @@ function drawGear(buf, subj, face, ex, P) {
   const hoodDark = hood ? scl(hoodBase, 0.30) : null;
   const hoodLite = hood ? mixC(scl(hoodBase, 1.55), rs('sand', 0.78), 0.16) : null;
 
-  for (let py = 0; py < BH; py++) {
+  // Rows the gear can reach: a hood drapes to the bottom edge, a helm stops
+  // at the brow. Everything above the crown is background.
+  const gTop = Math.max(0, Math.floor(((hcy - ry * 1.9) / DH) * BH));
+  const gBot = gear.hood || gear.hat ? BH : Math.min(BH, Math.ceil(((chinY + 4) / DH) * BH));
+  for (let py = gTop; py < gBot; py++) {
     const Yw = (py + 0.5) * px2dy;
     for (let pxi = 0; pxi < BW; pxi++) {
       const Xw = (pxi + 0.5) * px2dx;
@@ -1792,41 +1796,47 @@ export function getPortrait(seed, opts = {}, expression = 'normal') {
 }
 
 /**
- * Loading-screen generator. Yields between every single expression frame, not
- * between faces: one face is 27 frames and holding the main thread for all of
- * them at once reads as a hang.
+ * The frames the HUD actually reaches for in normal play. Warming these keeps
+ * loading short; the rarer conditions cost one frame of hitch the first time
+ * they happen, which is invisible next to the message log popping up.
+ */
+export const CORE_EXPRESSIONS = ['normal', 'smile', 'dmg_minor', 'dmg_moderate',
+  'dmg_major', 'poisoned', 'asleep', 'unconscious', 'dead'];
+
+/**
+ * Loading-screen generator. Yields between every single frame, never between
+ * faces: a whole face is 27 frames and holding the main thread for all of them
+ * at once reads as a hang.
  * @param {Array<{seed:*, sex?:string, klass?:string, age?:string}>|Array<number>} seeds
  */
 export function* buildPortraits(seeds) {
   const list = Array.isArray(seeds) ? seeds.slice(0, 32) : [];
   const out = [];
-  const total = Math.max(1, list.length * EXPRESSIONS.length);
-  let step = 0;
-  let worst = 0;
+  const total = Math.max(1, list.length * CORE_EXPRESSIONS.length);
+  let step = 0, worst = 0;
+  const now = () => (typeof performance !== 'undefined' ? performance.now() : 0);
   for (let i = 0; i < list.length; i++) {
     const s = list[i];
     const spec = typeof s === 'object' && s !== null ? s : { seed: s };
-    const face = makeFace(spec.seed, spec);
-    const key = faceKey(face) + `|${PORTRAIT_W}x${PORTRAIT_H}`;
-    let sheet = sheetCache.get(key);
-    if (!sheet) {
-      const it = sheetGen(face, PORTRAIT_W, PORTRAIT_H);
-      for (;;) {
-        const t0 = (typeof performance !== 'undefined' ? performance.now() : 0);
-        const r = it.next();
-        worst = Math.max(worst, (typeof performance !== 'undefined' ? performance.now() : 0) - t0);
-        if (r.done) { sheet = r.value; break; }
-        yield { i, index: step++, total, face };
+    const seed = spec.seed !== undefined ? spec.seed : 0;
+    const face = makeFace(seed, spec);
+    const fk = `${seed}|${spec.sex || '?'}|${spec.klass || '?'}|${spec.age || '?'}`;
+    faceCache.set(fk, face);
+    for (const e of CORE_EXPRESSIONS) {
+      const pk = `${fk}|${e}`;
+      if (!portraitCache.has(pk)) {
+        const t0 = now();
+        cachePut(portraitCache, pk, renderPortrait(face, e), 160);
+        const dt = now() - t0;
+        if (dt > worst) worst = dt;
       }
-      cachePut(sheetCache, key, sheet, SHEET_CACHE_MAX);
-    } else {
-      step += EXPRESSIONS.length;
+      yield { i, index: ++step, total, face, expression: e };
     }
-    out.push({ face, sheet });
-    yield { i, index: step, total, face, sheet, all: out };
+    // The full atlas is only built if something actually asks for it.
+    out.push({ face, seed, get sheet() { return portraitSheet(face); } });
   }
-  if (worst > 30 && typeof console !== 'undefined') {
-    console.info(`portraits: slowest frame ${worst.toFixed(1)}ms (budget 30ms)`);
+  if (worst > 30 && typeof console !== 'undefined' && console.info) {
+    console.info(`portraits: slowest frame ${worst.toFixed(1)} ms (budget 30 ms)`);
   }
   return out;
 }

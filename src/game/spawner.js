@@ -204,18 +204,23 @@ export class Spawner {
     const sh = this.sheet('creature', kind, s.seed || 1);
     if (!sh) return null;
     const def = this.monsters && this.monsters.monsterById ? this.monsters.monsterById(kind) : null;
+    // The rules layer works on combatant instances, not definitions.
+    const mon = this.monsters && this.monsters.spawnMonster
+      ? this.monsters.spawnMonster(kind, { x, y, z })
+      : null;
     const e = new Entity({
       category: CATEGORY.MONSTER, kind, sheet: sh,
       x, y, z, yaw: Math.random() * Math.PI * 2,
       radius: def ? Math.max(50, (def.size || 200) * 0.32) : 70,
       solid: true, speed: def ? (def.speed || 260) : 260,
       aggroRange: def ? (def.aggroRange || 1800) : 1800,
-      hp: def ? def.hp : 20,
-      maxHp: def ? def.hp : 20,
+      hp: mon ? mon.hp : (def ? def.hp : 20),
+      maxHp: mon ? mon.maxHP : (def ? def.hp : 20),
       data: def || { name: kind, hp: 20, level: 1 },
       label: def ? def.name : kind,
       action: 'stand',
     });
+    e.mon = mon;
     if (def && def.size && sh.worldH) e.scale = def.size / sh.worldH;
     e.home.set(x, y, z);
     return this.session.entities.add(e);

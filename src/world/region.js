@@ -42,10 +42,10 @@ export const REGIONS = {
     fogClass: 'none', hazeTint: [0.62, 0.67, 0.73], sky: 'plansky3',
     skyTint: [1, 1, 1], cloudiness: 0.42,
     flora: [
-      { kind: 'oak', density: 0.12, scale: [780, 1300], m: [0.40, 1], s: [0, 0.42], h: [0.10, 0.80] },
-      { kind: 'pine', density: 0.03, scale: [850, 1400], m: [0.55, 1], s: [0, 0.5], h: [0.35, 0.9] },
-      { kind: 'bush', density: 0.05, scale: [220, 380], s: [0, 0.45] },
-      { kind: 'rock_large', density: 0.015, scale: [200, 420], s: [0.2, 0.9] },
+      { kind: 'oak', density: 0.384, scale: [780, 1300], m: [0.40, 1], s: [0, 0.42], h: [0.10, 0.80] },
+      { kind: 'pine', density: 0.096, scale: [850, 1400], m: [0.55, 1], s: [0, 0.5], h: [0.35, 0.9] },
+      { kind: 'bush', density: 0.16, scale: [220, 380], s: [0, 0.45] },
+      { kind: 'rock_large', density: 0.048, scale: [200, 420], s: [0.2, 0.9] },
     ],
     levels: [1, 6], monsters: ['goblin', 'goblin_shaman', 'wolf', 'bat', 'giant_rat', 'peasant_bandit'],
     towns: [{ name: 'New Sorpigal', size: 'town', coastal: true }],
@@ -75,10 +75,10 @@ export const REGIONS = {
     fogClass: 'light', hazeTint: [0.60, 0.64, 0.70], sky: 'plansky3',
     skyTint: [0.98, 1.0, 1.02], cloudiness: 0.5,
     flora: [
-      { kind: 'oak', density: 0.15, scale: [820, 1450], m: [0.36, 1], s: [0, 0.4] },
-      { kind: 'pine', density: 0.04, scale: [900, 1500], m: [0.60, 1] },
-      { kind: 'bush', density: 0.045, scale: [220, 380] },
-      { kind: 'haystack_prop', density: 0.004, scale: [1, 1], h: [0.2, 0.45] },
+      { kind: 'oak', density: 0.48, scale: [820, 1450], m: [0.36, 1], s: [0, 0.4] },
+      { kind: 'pine', density: 0.128, scale: [900, 1500], m: [0.60, 1] },
+      { kind: 'bush', density: 0.144, scale: [220, 380] },
+      { kind: 'haystack_prop', density: 0.0128, scale: [1, 1], h: [0.2, 0.45] },
     ],
     levels: [3, 12], monsters: ['bandit', 'wolf', 'goblin', 'harpy', 'skeleton', 'zombie'],
     towns: [{ name: 'Ironfist', size: 'city', castle: true }],
@@ -109,9 +109,9 @@ export const REGIONS = {
     fogClass: 'none', hazeTint: [0.64, 0.69, 0.74], sky: 'plansky3',
     skyTint: [1, 1, 1], cloudiness: 0.4,
     flora: [
-      { kind: 'oak', density: 0.08, scale: [800, 1300], m: [0.44, 1] },
-      { kind: 'bush', density: 0.05, scale: [220, 380] },
-      { kind: 'flowers_white', density: 0.035, scale: [180, 300] },
+      { kind: 'oak', density: 0.256, scale: [800, 1300], m: [0.44, 1] },
+      { kind: 'bush', density: 0.16, scale: [220, 380] },
+      { kind: 'flowers_white', density: 0.112, scale: [180, 300] },
     ],
     levels: [5, 15], monsters: ['bandit', 'thief', 'goblin', 'wolf', 'harpy', 'apprentice_mage'],
     towns: [{ name: 'Free Haven', size: 'city', coastal: true }, { name: 'Havenshire', size: 'village' }],
@@ -141,10 +141,10 @@ export const REGIONS = {
     fogClass: 'dense', hazeTint: [0.55, 0.58, 0.60], sky: 'plansky1',
     skyTint: [0.86, 0.90, 0.94], cloudiness: 0.86,
     flora: [
-      { kind: 'dead_tree', density: 0.07, scale: [700, 1200] },
-      { kind: 'pine', density: 0.05, scale: [800, 1300], m: [0.5, 1] },
-      { kind: 'fern', density: 0.07, scale: [200, 340] },
-      { kind: 'rock_large', density: 0.03, scale: [220, 500], s: [0.2, 0.9] },
+      { kind: 'dead_tree', density: 0.224, scale: [700, 1200] },
+      { kind: 'pine', density: 0.16, scale: [800, 1300], m: [0.5, 1] },
+      { kind: 'fern', density: 0.224, scale: [200, 340] },
+      { kind: 'rock_large', density: 0.096, scale: [220, 500], s: [0.2, 0.9] },
     ],
     levels: [12, 24], monsters: ['harpy', 'gargoyle', 'wyvern', 'ghost', 'cutpurse'],
     towns: [{ name: 'Mist', size: 'village', coastal: true }],
@@ -173,9 +173,9 @@ export const REGIONS = {
     fogClass: 'none', hazeTint: [0.72, 0.75, 0.74], sky: 'plansky2',
     skyTint: [1.06, 1.04, 0.98], cloudiness: 0.3,
     flora: [
-      { kind: 'palm', density: 0.1, scale: [900, 1500], h: [0.03, 0.5] },
-      { kind: 'bush', density: 0.05, scale: [220, 400], m: [0.4, 1] },
-      { kind: 'rock_large', density: 0.015, scale: [200, 420], s: [0.25, 0.9] },
+      { kind: 'palm', density: 0.32, scale: [900, 1500], h: [0.03, 0.5] },
+      { kind: 'bush', density: 0.16, scale: [220, 400], m: [0.4, 1] },
+      { kind: 'rock_large', density: 0.048, scale: [200, 420], s: [0.25, 0.9] },
     ],
     levels: [3, 10], monsters: ['lizardman', 'lizard_archer', 'crocodile', 'giant_crab', 'pirate'],
     towns: [{ name: 'Bootleg Bay', size: 'village', coastal: true }],
@@ -204,10 +204,10 @@ export const REGIONS = {
     fogClass: 'light', hazeTint: [0.54, 0.60, 0.67], sky: 'plansky1',
     skyTint: [0.92, 0.96, 1.02], cloudiness: 0.68,
     flora: [
-      { kind: 'pine', density: 0.17, scale: [950, 1700], s: [0, 0.5] },
-      { kind: 'pine_snow', density: 0.07, scale: [900, 1500] },
-      { kind: 'rock_large', density: 0.03, scale: [220, 500], s: [0.2, 0.9] },
-      { kind: 'stump', density: 0.01, scale: [180, 260] },
+      { kind: 'pine', density: 0.544, scale: [950, 1700], s: [0, 0.5] },
+      { kind: 'pine_snow', density: 0.224, scale: [900, 1500] },
+      { kind: 'rock_large', density: 0.096, scale: [220, 500], s: [0.2, 0.9] },
+      { kind: 'stump', density: 0.032, scale: [180, 260] },
     ],
     levels: [10, 20], monsters: ['bandit', 'wolf', 'werewolf', 'ogre', 'harpy', 'gargoyle'],
     towns: [{ name: 'Silver Cove', size: 'town', coastal: true }],
@@ -235,10 +235,10 @@ export const REGIONS = {
     fogClass: 'light', hazeTint: [0.34, 0.38, 0.33], sky: 'plansky1',
     skyTint: [0.62, 0.66, 0.62], cloudiness: 0.9,
     flora: [
-      { kind: 'dead_tree', density: 0.2, scale: [850, 1600] },
-      { kind: 'mushroom_cluster', density: 0.04, scale: [200, 340] },
-      { kind: 'reeds', density: 0.05, scale: [220, 380], h: [0, 0.2] },
-      { kind: 'rock_large', density: 0.015, scale: [200, 400] },
+      { kind: 'dead_tree', density: 0.64, scale: [850, 1600] },
+      { kind: 'mushroom_cluster', density: 0.128, scale: [200, 340] },
+      { kind: 'reeds', density: 0.16, scale: [220, 380], h: [0, 0.2] },
+      { kind: 'rock_large', density: 0.048, scale: [200, 400] },
     ],
     levels: [16, 30], monsters: ['zombie', 'skeleton', 'ghoul', 'vampire_bat', 'wight', 'necromancer'],
     towns: [{ name: 'Blackshire', size: 'village' }],
@@ -266,9 +266,9 @@ export const REGIONS = {
     fogClass: 'light', hazeTint: [0.74, 0.79, 0.85], sky: 'plansky2',
     skyTint: [0.96, 0.99, 1.06], cloudiness: 0.62,
     flora: [
-      { kind: 'pine_snow', density: 0.08, scale: [850, 1500], h: [0, 0.6] },
-      { kind: 'rock_large', density: 0.04, scale: [220, 520], s: [0.2, 0.9] },
-      { kind: 'pine', density: 0.03, scale: [800, 1300], h: [0, 0.5] },
+      { kind: 'pine_snow', density: 0.256, scale: [850, 1500], h: [0, 0.6] },
+      { kind: 'rock_large', density: 0.128, scale: [220, 520], s: [0.2, 0.9] },
+      { kind: 'pine', density: 0.096, scale: [800, 1300], h: [0, 0.5] },
     ],
     levels: [14, 26], monsters: ['ogre', 'yeti', 'ice_elemental', 'dwarf_raider', 'wolf'],
     towns: [{ name: 'White Cap', size: 'village' }],
@@ -296,8 +296,8 @@ export const REGIONS = {
     fogClass: 'light', hazeTint: [0.44, 0.36, 0.33], sky: 'plansky1',
     skyTint: [0.92, 0.72, 0.64], cloudiness: 0.8,
     flora: [
-      { kind: 'dead_tree', density: 0.04, scale: [700, 1200], h: [0, 0.5] },
-      { kind: 'rock_large', density: 0.07, scale: [240, 620], s: [0.15, 0.9] },
+      { kind: 'dead_tree', density: 0.128, scale: [700, 1200], h: [0, 0.5] },
+      { kind: 'rock_large', density: 0.224, scale: [240, 620], s: [0.15, 0.9] },
     ],
     levels: [26, 42], monsters: ['dragon', 'fire_elemental', 'magma_elemental', 'gargoyle', 'devil'],
     towns: [{ name: 'Kriegspire', size: 'village' }],
@@ -326,9 +326,9 @@ export const REGIONS = {
     fogClass: 'light', hazeTint: [0.48, 0.52, 0.44], sky: 'plansky1',
     skyTint: [0.84, 0.88, 0.80], cloudiness: 0.72,
     flora: [
-      { kind: 'reeds', density: 0.15, scale: [220, 420], h: [0, 0.3] },
-      { kind: 'dead_tree', density: 0.07, scale: [700, 1300] },
-      { kind: 'fern', density: 0.06, scale: [200, 340] },
+      { kind: 'reeds', density: 0.48, scale: [220, 420], h: [0, 0.3] },
+      { kind: 'dead_tree', density: 0.224, scale: [700, 1300] },
+      { kind: 'fern', density: 0.192, scale: [200, 340] },
     ],
     levels: [8, 18], monsters: ['eel', 'lizardman', 'swamp_troll', 'giant_leech', 'bog_beast'],
     towns: [{ name: 'Eelford', size: 'village', coastal: true }],
@@ -356,9 +356,9 @@ export const REGIONS = {
     fogClass: 'none', hazeTint: [0.80, 0.72, 0.56], sky: 'plansky2',
     skyTint: [1.10, 1.02, 0.82], cloudiness: 0.18,
     flora: [
-      { kind: 'cactus', density: 0.025, scale: [300, 600] },
-      { kind: 'rock_large', density: 0.025, scale: [220, 520] },
-      { kind: 'dead_tree', density: 0.007, scale: [600, 1000] },
+      { kind: 'cactus', density: 0.08, scale: [300, 600] },
+      { kind: 'rock_large', density: 0.08, scale: [220, 520] },
+      { kind: 'dead_tree', density: 0.0224, scale: [600, 1000] },
     ],
     levels: [30, 48], monsters: ['sand_worm', 'mummy', 'genie', 'scorpion', 'dragon'],
     towns: [{ name: 'The Oasis', size: 'village' }],
@@ -385,9 +385,9 @@ export const REGIONS = {
     fogClass: 'light', hazeTint: [0.68, 0.74, 0.80], sky: 'plansky2',
     skyTint: [0.94, 0.98, 1.06], cloudiness: 0.66,
     flora: [
-      { kind: 'pine_snow', density: 0.035, scale: [700, 1200], h: [0, 0.5] },
-      { kind: 'rock_large', density: 0.06, scale: [220, 560], s: [0.15, 0.9] },
-      { kind: 'bush_berry', density: 0.05, scale: [180, 300] },
+      { kind: 'pine_snow', density: 0.112, scale: [700, 1200], h: [0, 0.5] },
+      { kind: 'rock_large', density: 0.192, scale: [220, 560], s: [0.15, 0.9] },
+      { kind: 'bush_berry', density: 0.16, scale: [180, 300] },
     ],
     levels: [20, 34], monsters: ['yeti', 'ice_elemental', 'frost_giant', 'wolf', 'wyvern'],
     towns: [{ name: 'Highfrost', size: 'village' }],
@@ -414,10 +414,10 @@ export const REGIONS = {
     fogClass: 'none', hazeTint: [0.62, 0.72, 0.64], sky: 'plansky3',
     skyTint: [1.02, 1.06, 1.00], cloudiness: 0.30,
     flora: [
-      { kind: 'oak', density: 0.17, scale: [900, 1700], s: [0, 0.44] },
-      { kind: 'flowers_white', density: 0.07, scale: [200, 340] },
-      { kind: 'bush', density: 0.06, scale: [240, 420] },
-      { kind: 'fern', density: 0.05, scale: [200, 340] },
+      { kind: 'oak', density: 0.544, scale: [900, 1700], s: [0, 0.44] },
+      { kind: 'flowers_white', density: 0.224, scale: [200, 340] },
+      { kind: 'bush', density: 0.192, scale: [240, 420] },
+      { kind: 'fern', density: 0.16, scale: [200, 340] },
     ],
     levels: [38, 60], monsters: ['titan', 'dragon', 'archmage', 'behemoth', 'devil'],
     towns: [{ name: 'The Retreat', size: 'village' }],
@@ -749,24 +749,37 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
     minimap,
     /**
      * Blit the pre-rendered top-down plate, MM6-style: outdoors the automap is
-     * an image, not a vector redraw. `zoom` is the world span the rect covers.
+     * an image the game samples, not a vector redraw. `zoom` is the world span
+     * the rect covers. A trailing `pan` argument is accepted and ignored.
      */
-    drawMinimap(ctx, rect, player, zoom = 16384) {
-      const span = (MAP_TILES * TILE);
-      const px = ((player ? player.x : 0) - hm.origin) / span * minimap.width;
-      const pz = ((player ? player.z : 0) - hm.origin) / span * minimap.height;
-      const crop = (zoom / span) * minimap.width;
+    drawMinimap(ctx, rect, player, zoom, pan) {
+      if (!ctx || !rect) return;
+      // Callers spell the rect either way; accept both.
+      const rx = rect.x !== undefined ? rect.x : (rect.left || 0);
+      const ry = rect.y !== undefined ? rect.y : (rect.top || 0);
+      const rw = rect.w !== undefined ? rect.w : (rect.width || 0);
+      const rh = rect.h !== undefined ? rect.h : (rect.height || 0);
+      if (rw <= 0 || rh <= 0) return;
+      const span = MAP_TILES * TILE;
+      const z = (!zoom || !isFinite(zoom) || zoom <= 0) ? span * 0.25 : zoom;
+      const px0 = player ? (player.x || 0) : 0;
+      const pz0 = player ? (player.z !== undefined ? player.z : (player.y || 0)) : 0;
+      const px = (px0 - hm.origin) / span * minimap.width;
+      const pz = (pz0 - hm.origin) / span * minimap.height;
+      const crop = (z / span) * minimap.width;
+      const aspect = rh / rw;
       ctx.save();
       ctx.beginPath();
-      ctx.rect(rect.x, rect.y, rect.w, rect.h);
+      ctx.rect(rx, ry, rw, rh);
       ctx.clip();
       ctx.imageSmoothingEnabled = false;
-      const aspect = rect.h / rect.w;
-      ctx.drawImage(
-        minimap,
-        px - crop / 2, pz - crop * aspect / 2, crop, crop * aspect,
-        rect.x, rect.y, rect.w, rect.h,
-      );
+      try {
+        ctx.drawImage(
+          minimap,
+          px - crop / 2, pz - crop * aspect / 2, crop, crop * aspect,
+          rx, ry, rw, rh,
+        );
+      } catch (e) { /* off-plate crop; leave the panel as-is */ }
       ctx.restore();
     },
     /** Grey world light at a point, for tinting sprites the same as geometry. */
@@ -807,7 +820,11 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
         sky.update(dt, timeOfDay, weather || def.weather, camera);
         const f = opts.scene && opts.scene.fog;
         if (f) {
-          const light = sky.state.tint;
+          // Same curve the terrain and buildings bake with, so billboards sit
+          // in the scene rather than reading as cut-outs. Expressed in sRGB and
+          // raised to 2.2 because the shader multiplies a decoded sample.
+          const daylight = clamp(sky.state.ambient / 0.69, 0.22, 1);
+          const light = Math.pow(0.62 + 0.38 * daylight, 2.2);
           for (const b of flora.batches) b.mesh.userData.setFog(f.color, f.near, f.far, light);
           for (const t of towns) if (t.trees) t.trees.userData.setFog(f.color, f.near, f.far, light);
         }

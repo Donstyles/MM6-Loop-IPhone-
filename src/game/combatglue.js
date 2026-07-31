@@ -80,19 +80,20 @@ export function installCombat(session) {
     if (!victim) return;
     const def = e.data || {};
     let dmg = 0, hit = true;
-    if (combat && combat.monsterAttack) {
-      const res = combat.monsterAttack(def, victim, rnd);
-      hit = res.hit; dmg = res.damage;
+    if (combat && combat.resolveAttack && e.mon) {
+      const entry = combat.resolveAttack(e.mon, victim, rnd, {});
+      hit = entry.hit; dmg = entry.damage;
     } else {
       hit = rnd.float() > 0.35;
       dmg = hit ? rnd.dice(1, 6) + (def.level || 1) : 0;
+      if (hit) victim.hp -= dmg;
     }
     if (!hit) {
       session.message(`${def.name || e.kind} misses ${victim.name}.`);
       if (session.audio) session.audio.play('miss', { volume: 0.4 });
       return;
     }
-    applyPartyDamage(session, victim, dmg, def.attack?.element || 'physical');
+    reportPartyDamage(session, victim, dmg);
     if (session.audio) session.audio.play('hit_flesh');
     if (session.vfx) session.vfx.burst('blood_hit', e.pos.x, e.pos.y + 120, e.pos.z, { scale: 0.6 });
     session.engine.setFlash(Math.min(0.5, dmg / 60), 0xd02020);
@@ -151,12 +152,14 @@ export function installCombat(session) {
 
   // --- helpers exposed on the session -------------------------------------
 
-  session.damageMonster = (e, amount, element = 'physical', source = null) => {
+  session.damageMonster = (e, amount, element = 'physical', source = null, preApplied = false) => {
     if (!e || e.dead) return;
-    if (combat && combat.applyMonsterDamage) {
-      amount = combat.applyMonsterDamage(e.data, amount, element, rnd);
+    if (!preApplied && combat && combat.applyDamage && e.mon) {
+      amount = combat.applyDamage(e.mon, amount, element, rnd, {}).dealt;
+    } else if (e.mon) {
+      e.mon.hp -= amount;
     }
-    e.hp -= amount;
+    e.hp = e.mon ? e.mon.hp : e.hp - amount;
     e.hitFlash = 1;
     if (e.state === 'idle' || e.state === 'wander') { e.state = 'chase'; session.inCombat = true; }
     if (session.vfx) {
@@ -228,7 +231,9 @@ function pickTarget(session) {
 }
 
 function pickVictim(session, rnd) {
-  const alive = (session.party.members || []).filter((c) => c.hp > 0 && !(c.conditions || []).includes('dead'));
+  const alive = (session.party.members || []).filter(
+    (c) => c.hp > 0 && !conditionList(c).includes('dead'),
+  );
   if (!alive.length) return null;
   return alive[rnd.int(alive.length)];
 }
@@ -243,6 +248,7 @@ function swing(session, ch, index, target, combat, rnd) {
   const useBow = !melee && bow;
 
   ch.recovery = combat && combat.recoveryFor ? combat.recoveryFor(ch, useBow) / 60 : 1.2;
+  if (!isFinite(ch.recovery) || ch.recovery < 0) ch.recovery = 1.2;
 
   if (session.audio) session.audio.play(useBow ? 'bow_shot' : (weapon ? 'swing_heavy' : 'swing_light'));
 
@@ -274,10 +280,11 @@ function swing(session, ch, index, target, combat, rnd) {
 function resolveHit(session, ch, target, combat, rnd, ranged) {
   if (!target || target.dead) return;
   let hit = true, dmg = 0, crit = false;
-  if (combat && combat.attackRoll && combat.weaponDamage) {
-    const roll = combat.attackRoll(ch, target.data || {}, rnd, ranged);
-    hit = roll.hit; crit = roll.crit;
-    if (hit) dmg = combat.weaponDamage(ch, target.data || {}, rnd, ranged) * (crit ? 2 : 1);
+  // combat.js works on combatant instances, which the spawner attaches as
+  // `entity.mon`; the sprite entity only mirrors hp for the health bar.
+  if (combat && combat.resolveAttack && target.mon) {
+    const entry = combat.resolveAttack(ch, target.mon, rnd, { ranged });
+    hit = entry.hit; crit = entry.critical; dmg = entry.damage;
   } else {
     hit = rnd.float() > 0.3;
     dmg = hit ? rnd.dice(2, 6) + 2 : 0;
@@ -355,17 +362,34 @@ function fireSpell(session, ch, spell, target, combat, rnd) {
   }
 }
 
-function applyPartyDamage(session, ch, dmg, element) {
-  const combat = session.modules?.combatMod;
-  if (combat && combat.applyDamage) dmg = combat.applyDamage(ch, dmg, element);
-  ch.hp -= dmg;
+/** Announce damage the rules layer has already applied. */
+function reportPartyDamage(session, ch, dmg) {
+  if (dmg <= 0) return;
   session.message(`${ch.name} takes ${dmg} damage.`, '#e04030');
   if (ch.hp <= 0) {
     ch.hp = 0;
-    if (!ch.conditions.includes('unconscious')) ch.conditions.push('unconscious');
+    setCondition(ch, 'unconscious');
     session.message(`${ch.name} falls unconscious!`, '#e04030');
     if (session.audio) session.audio.play('death_player');
   }
+}
+
+/** Conditions may be an array or a flags object; set one either way. */
+function setCondition(ch, id) {
+  if (Array.isArray(ch.conditions)) {
+    if (!ch.conditions.includes(id)) ch.conditions.push(id);
+  } else if (ch.conditions && typeof ch.conditions === 'object') {
+    ch.conditions[id] = true;
+  } else {
+    ch.conditions = [id];
+  }
+}
+
+function applyPartyDamage(session, ch, dmg, element) {
+  const combat = session.modules?.combatMod;
+  if (combat && combat.applyDamage) dmg = combat.applyDamage(ch, dmg, element, new Rand(ch.id || 1), {}).dealt;
+  else ch.hp -= dmg;
+  reportPartyDamage(session, ch, dmg);
 }
 
 function killMonster(session, e, source) {

@@ -602,16 +602,18 @@ const DEFAULT_TOD = 9.5;
  */
 function faceGrey(nx, ny, nz, sun, ambient, diffuse, upness) {
   const ndl = Math.max(0, nx * sun.x + ny * sun.y + nz * sun.z);
-  // The MM6 sun has no north/south component at all, so a north- or
-  // south-facing slope shades identically to flat ground and the landform
-  // vanishes. A small steepness term stands in for the ambient occlusion the
-  // engine got from its baked per-vertex values and puts the hills back.
-  const steep = 1 - 0.30 * (1 - clamp(upness === undefined ? ny : upness, 0, 1));
-  // The engine's raw `ambient + diffuse*N.L` saturates to white on any level
-  // ground after about 08:00, which is why MM6 snow visibly clips at noon. We
-  // hold the same shape but pull both terms back so the landform stays legible
-  // at every hour instead of blowing out for most of the day.
-  const s = clamp((ambient * 0.55 + clamp(diffuse * ndl, 0, 0.85) * 0.88) * steep, 0, 1);
+  // Anchored to two sanity points rather than to the engine's raw
+  // `ambient + diffuse*N.L`, which saturates to white on level ground for most
+  // of the day: a slope facing the sun at noon lands on the raw texture colour,
+  // and the least-lit face sits at 46% of it.
+  const lit = 0.46 + 0.54 * ndl;
+  // MM6's sun has no north/south component at all, so a north- or south-facing
+  // slope shades identically to flat ground and the landform vanishes. A small
+  // steepness term stands in for the occlusion the engine baked per-vertex.
+  const steep = 1 - 0.14 * (1 - clamp(upness === undefined ? ny : upness, 0, 1));
+  // Time of day scales the whole thing; `ambient` peaks at 0.69.
+  const daylight = clamp(ambient / 0.69, 0.22, 1);
+  const s = clamp(lit * steep * (0.62 + 0.38 * daylight) * (diffuse > 0 ? 1 : 0.55), 0, 1);
   return SRGB_TO_LIN(quantiseShade(s));
 }
 
@@ -1017,7 +1019,7 @@ export function floraTexture(kind, seed = 1) {
 
   switch (kind) {
     case 'pine': case 'pine_snow': case 'fir': {
-      trunk(2, 3.5, 40, 'wood', 0.28);
+      trunk(2, 3.5, 40, 'wood', 0.46);
       for (let i = 0; i < 4; i++) {
         const y = 10 + i * 10, w = 8 + i * 5;
         for (let yy = y; yy < y + 13 && yy < S; yy++) {
@@ -1034,7 +1036,7 @@ export function floraTexture(kind, seed = 1) {
       break;
     }
     case 'palm': {
-      trunk(2, 3, 18, 'wood', 0.42);
+      trunk(2, 3, 18, 'wood', 0.52);
       for (let a = 0; a < 7; a++) {
         const ang = -Math.PI * 0.15 - a * (Math.PI * 0.78 / 6);
         for (let t = 0; t < 26; t++) {
@@ -1050,7 +1052,7 @@ export function floraTexture(kind, seed = 1) {
       break;
     }
     case 'dead_tree': {
-      trunk(2, 4, 12, 'wood', 0.20);
+      trunk(2, 4, 12, 'wood', 0.42);
       for (let a = 0; a < 5; a++) {
         const ang = -Math.PI * 0.25 - a * 0.28;
         for (let t = 0; t < 18; t++) {
@@ -1063,7 +1065,7 @@ export function floraTexture(kind, seed = 1) {
       break;
     }
     case 'bush': case 'bush_berry': case 'shrub': case 'sapling': case 'vine':
-      blob(32, 46, 15, 12, 'foliage', 0.22, 0.78, 31);
+      blob(32, 46, 15, 12, 'foliage', 0.38, 0.90, 31);
       if (kind === 'bush_berry') speckleBerries(p, rnd);
       break;
     case 'fern': case 'grass_tuft':
@@ -1105,10 +1107,10 @@ export function floraTexture(kind, seed = 1) {
       // variants, the conifers did not. Autumn is the same silhouette in the
       // fire ramp rather than a separate drawing.
       const leaf = kind === 'oak_autumn' ? 'fire' : kind === 'willow' ? 'grass' : 'foliage';
-      trunk(2.5, 4.5, 34, 'wood', kind === 'birch' ? 0.74 : 0.26);
-      blob(32, 26, 19, 17, leaf, 0.18, 0.86, 21);
-      blob(22, 20, 10, 9, leaf, 0.26, 0.9, 22);
-      blob(43, 30, 10, 9, leaf, 0.14, 0.7, 23);
+      trunk(2.5, 4.5, 34, 'wood', kind === 'birch' ? 0.80 : 0.46);
+      blob(32, 26, 19, 17, leaf, 0.34, 0.95, 21);
+      blob(22, 20, 10, 9, leaf, 0.42, 1.0, 22);
+      blob(43, 30, 10, 9, leaf, 0.28, 0.82, 23);
       break;
     }
   }

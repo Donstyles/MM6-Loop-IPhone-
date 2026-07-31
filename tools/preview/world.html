@@ -172,30 +172,21 @@ async function boot() {
         camera.rotation.x = -0.17;
       }
     } else {
-      // Region: find a local high point with open ground in front of it and
-      // stand there at eye height, the way MM6's own box art shots are framed.
-      let best = null;
-      const R = 16000;
-      for (let k = 0; k < 900; k++) {
-        const a = (k * 2.399963), d = R * Math.sqrt((k % 97) / 97);
-        const x = Math.cos(a) * d, z = Math.sin(a) * d;
-        const y = world.heightAt(x, z);
-        if (y < world.hm.water + 400) continue;
-        // Look down the direction of steepest open descent.
-        let bestDir = null;
-        for (let s = 0; s < 8; s++) {
-          const ang = s * Math.PI / 4;
-          let drop = 0;
-          for (let t = 1; t <= 6; t++) drop += y - world.heightAt(x + Math.cos(ang) * t * 1100, z + Math.sin(ang) * t * 1100);
-          if (!bestDir || drop > bestDir.drop) bestDir = { ang, drop };
-        }
-        const score = bestDir.drop;
-        if (!best || score > best.score) best = { x, y, z, score, ang: bestDir.ang };
+      // Region: stand on a road. Flora is excluded from road tiles, so this
+      // guarantees a clear foreground, and standing on the road looking down it
+      // is how MM6's own outdoor screenshots are framed.
+      const rd = world.roads[0];
+      let v = null;
+      if (rd && rd.points.length > 4) {
+        const i = Math.floor(rd.points.length * 0.35);
+        const a = rd.points[i], b = rd.points[Math.min(rd.points.length - 1, i + 3)];
+        const y = world.heightAt(a.x, a.z);
+        v = { x: a.x, y, z: a.z, ang: Math.atan2(b.x - a.x, b.z - a.z) };
       }
-      const v = best || { x: 0, y: world.heightAt(0, 0), z: 0, ang: 0 };
-      camera.position.set(v.x, v.y + 200, v.z);
-      camera.rotation.y = Math.atan2(-Math.cos(v.ang), -Math.sin(v.ang));
-      camera.rotation.x = -0.05;
+      if (!v) v = { x: 0, y: world.heightAt(0, 0), z: 0, ang: 0 };
+      camera.position.set(v.x, v.y + 160, v.z);
+      camera.rotation.y = v.ang + Math.PI;
+      camera.rotation.x = -0.03;
     }
   }
   resize();
