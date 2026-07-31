@@ -7,14 +7,14 @@
 // ---------------------------------------------------------------------------
 
 import { rampCss } from '../../core/palette.js';
-import { clamp, Rand } from '../../core/rng.js';
+import { clamp } from '../../core/rng.js';
 import * as F from '../../art/font.js';
 import { maxHP, maxSP, effectiveStat } from '../../game/stats.js';
 import {
-  HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, hotText, rngFor,
-  paintWall, paintFloor, paintShelf, paintCounter, paintClutter, vignette,
-  members, activeMember, charName, partyGold, spend, earn, addCondition, hasCondition,
-  C_WHITE, C_GOLD, C_CANARY, C_DIM, C_RED, C_GREEN, C_LEARN,
+  HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, hotText, rngFor, paintWall,
+  paintFloor, paintShelf, paintCounter, paintClutter, vignette, members, activeMember,
+  charName, partyGold, spend, earn, addCondition, hasCondition, C_WHITE, C_CANARY, C_DIM,
+  C_RED, C_GREEN,
 } from './dialogue.js';
 
 const RUMOURS = [
@@ -250,7 +250,6 @@ export class TavernScreen extends HouseScreen {
       // Bias per tick: strength difference decides, luck of the dice decorates.
       bias: clamp((might - foe) / 40, -0.34, 0.34),
     };
-    this.mode = 'game';
     this.say(`${charName(ch)} rolls up a sleeve. ${gold(this.stake)} gold on the table.`);
   }
 
@@ -330,8 +329,9 @@ export class TavernScreen extends HouseScreen {
 
   /** The wager: a tug-of-war bar with both arms pulling. */
   drawGame(ctx) {
+    // Sits below the hire list, which owns the top left of the illustration.
     const w = 300, h = 66;
-    const x = PANEL.x + PANEL.w - w - 16, y = PANEL.y + 16;
+    const x = PANEL.x + PANEL.w - w - 16, y = PANEL.y + 116;
     plate(ctx, x, y, w, h, 0.74);
     F.drawText(ctx, 'Arm Wrestling', x + 10, y + 6, { color: C_CANARY });
     const g = this.game;

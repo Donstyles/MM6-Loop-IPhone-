@@ -14,10 +14,7 @@ import { layout } from '../../core/layout.js';
 import { rampCss, ramp } from '../../core/palette.js';
 import { clamp, Rand, fbm2, valueNoise2 } from '../../core/rng.js';
 import * as F from '../../art/font.js';
-import {
-  Screen, A, baked, glow, poly, washPixels, vignette,
-  C_WHITE, C_GOLD, C_CANARY, C_DIM,
-} from './dialogue.js';
+import { Screen, A, baked, glow, poly, washPixels, vignette, C_WHITE, C_GOLD, C_DIM } from './dialogue.js';
 
 const MENU = [
   { id: 'new', label: 'New Game' },

@@ -153,63 +153,112 @@ function restore(list) {
  * business end towards +Y, so at rest it stands beside the body (a strong
  * silhouette) and sweeps forward naturally when the arm swings.
  */
+/**
+ * A hand-held weapon, built in hand space with the grip at the origin and the
+ * business end towards +Y. Everything here is deliberately oversized: a weapon
+ * that looks a touch too big in the modelling view is the one that still reads
+ * as an axe when the sprite is 64 px tall.
+ */
 function makeWeapon(kind, H, C) {
   const g = new THREE.Group();
   const wood = C.wood, steel = C.metal;
   const u = H;
   switch (kind) {
     case 'sword':
-      g.add(box(u * 0.050, u * 0.32, u * 0.026, steel, { pivot: 'bottom', y: u * 0.05, taper: 0.4 }));
-      g.add(box(u * 0.115, u * 0.026, u * 0.040, mulHex(steel, 0.7), { y: u * 0.045 }));
-      g.add(box(u * 0.042, u * 0.060, u * 0.042, C.wood, { pivot: 'bottom', y: -u * 0.014 }));
-      g.add(sph(u * 0.026, mulHex(steel, 1.15), { y: -u * 0.018 }));
+      g.add(box(u * 0.062, u * 0.38, u * 0.032, steel, { pivot: 'bottom', y: u * 0.06, taper: 0.4 }));
+      g.add(box(u * 0.150, u * 0.032, u * 0.050, mulHex(steel, 0.65), { y: u * 0.052 }));
+      g.add(box(u * 0.048, u * 0.070, u * 0.048, wood, { pivot: 'bottom', y: -u * 0.016 }));
+      g.add(sph(u * 0.030, mulHex(steel, 1.2), { y: -u * 0.020 }));
+      break;
+    case 'greatsword':
+      g.add(box(u * 0.075, u * 0.60, u * 0.038, steel, { pivot: 'bottom', y: u * 0.09, taper: 0.35 }));
+      g.add(box(u * 0.210, u * 0.038, u * 0.058, mulHex(steel, 0.6), { y: u * 0.082 }));
+      g.add(box(u * 0.052, u * 0.130, u * 0.052, wood, { pivot: 'bottom', y: -u * 0.048 }));
+      g.add(sph(u * 0.038, mulHex(steel, 1.2), { y: -u * 0.055 }));
+      break;
+    case 'rapier':
+      g.add(box(u * 0.024, u * 0.42, u * 0.024, mulHex(steel, 1.2), { pivot: 'bottom', y: u * 0.05, taper: 0.25 }));
+      g.add(cyl(u * 0.060, u * 0.060, u * 0.020, mulHex(steel, 0.7), { seg: 8, y: u * 0.048 }));
+      g.add(box(u * 0.040, u * 0.070, u * 0.040, wood, { pivot: 'bottom', y: -u * 0.020 }));
       break;
     case 'dagger':
-      g.add(box(u * 0.038, u * 0.15, u * 0.020, steel, { pivot: 'bottom', y: u * 0.03, taper: 0.3 }));
-      g.add(box(u * 0.080, u * 0.020, u * 0.030, mulHex(steel, 0.7), { y: u * 0.028 }));
-      g.add(box(u * 0.034, u * 0.045, u * 0.034, wood, { pivot: 'bottom', y: -u * 0.014 }));
+      g.add(box(u * 0.044, u * 0.17, u * 0.024, steel, { pivot: 'bottom', y: u * 0.03, taper: 0.3 }));
+      g.add(box(u * 0.095, u * 0.024, u * 0.036, mulHex(steel, 0.65), { y: u * 0.030 }));
+      g.add(box(u * 0.036, u * 0.050, u * 0.036, wood, { pivot: 'bottom', y: -u * 0.016 }));
       break;
     case 'axe':
-      g.add(box(u * 0.045, u * 0.36, u * 0.045, wood, { pivot: 'bottom', y: -u * 0.05 }));
-      g.add(box(u * 0.048, u * 0.145, u * 0.115, steel, { y: u * 0.25, z: u * 0.06, taperZ: 1.5 }));
-      g.add(box(u * 0.046, u * 0.095, u * 0.070, mulHex(steel, 0.85), { y: u * 0.25, z: -u * 0.05 }));
+      g.add(box(u * 0.050, u * 0.40, u * 0.050, wood, { pivot: 'bottom', y: -u * 0.06 }));
+      g.add(box(u * 0.056, u * 0.190, u * 0.150, steel, { y: u * 0.27, z: u * 0.080, taperZ: 1.6 }));
+      g.add(box(u * 0.054, u * 0.120, u * 0.090, mulHex(steel, 0.8), { y: u * 0.27, z: -u * 0.065 }));
+      g.add(box(u * 0.056, u * 0.045, u * 0.056, mulHex(steel, 1.2), { y: u * 0.34 }));
+      break;
+    case 'greataxe':
+      g.add(box(u * 0.058, u * 0.62, u * 0.058, wood, { pivot: 'bottom', y: -u * 0.16 }));
+      g.add(box(u * 0.062, u * 0.280, u * 0.230, steel, { y: u * 0.36, z: u * 0.120, taperZ: 1.7 }));
+      g.add(box(u * 0.060, u * 0.190, u * 0.140, mulHex(steel, 0.78), { y: u * 0.36, z: -u * 0.100 }));
+      g.add(cone(u * 0.036, u * 0.110, mulHex(steel, 1.15), { y: u * 0.52 }));
+      break;
+    case 'hammer':
+      g.add(box(u * 0.050, u * 0.40, u * 0.050, wood, { pivot: 'bottom', y: -u * 0.06 }));
+      g.add(box(u * 0.230, u * 0.110, u * 0.110, steel, { y: u * 0.29 }));
+      g.add(box(u * 0.060, u * 0.130, u * 0.130, mulHex(steel, 1.15), { x: u * 0.115, y: u * 0.29 }));
       break;
     case 'club':
-      g.add(box(u * 0.055, u * 0.30, u * 0.055, wood, { pivot: 'bottom', y: -u * 0.05, taper: 1.8, bulge: 0.18 }));
-      for (let i = 0; i < 3; i++) g.add(cone(u * 0.020, u * 0.05, C.horn, { y: u * (0.13 + i * 0.055), x: (i % 2 ? 1 : -1) * u * 0.045, rz: (i % 2 ? -1 : 1) * 1.4 }));
-      break;
-    case 'mace':
-      g.add(box(u * 0.042, u * 0.26, u * 0.042, wood, { pivot: 'bottom', y: -u * 0.05 }));
-      g.add(sph(u * 0.062, steel, { y: u * 0.21, detail: 0 }));
+      g.add(box(u * 0.070, u * 0.36, u * 0.070, wood, { pivot: 'bottom', y: -u * 0.06, taper: 1.9, bulge: 0.20 }));
       for (let i = 0; i < 4; i++) {
-        g.add(cone(u * 0.022, u * 0.048, mulHex(steel, 1.1),
-          { y: u * 0.21, x: Math.cos(i * PI / 2) * u * 0.062, z: Math.sin(i * PI / 2) * u * 0.062, rz: -Math.cos(i * PI / 2) * 1.4, rx: Math.sin(i * PI / 2) * 1.4 }));
+        g.add(cone(u * 0.028, u * 0.070, C.horn,
+          { y: u * (0.14 + i * 0.055), x: (i % 2 ? 1 : -1) * u * 0.055, z: (i % 2 ? -1 : 1) * u * 0.02, rz: (i % 2 ? -1 : 1) * 1.45 }));
       }
       break;
-    case 'staff': {
-      g.add(box(u * 0.042, u * 0.58, u * 0.042, wood, { pivot: 'bottom', y: -u * 0.22, taper: 0.85 }));
-      g.add(cyl(u * 0.055, u * 0.055, u * 0.030, mulHex(wood, 1.3), { seg: 7, y: u * 0.325 }));
-      g.add(sph(u * 0.060, C.glow, { y: u * 0.385, emissive: 0.9, detail: 0 }));
+    case 'mace':
+      g.add(box(u * 0.048, u * 0.30, u * 0.048, wood, { pivot: 'bottom', y: -u * 0.05 }));
+      g.add(sph(u * 0.078, steel, { y: u * 0.25 }));
+      for (let i = 0; i < 4; i++) {
+        g.add(cone(u * 0.028, u * 0.062, mulHex(steel, 1.15),
+          { y: u * 0.25, x: Math.cos(i * PI / 2) * u * 0.078, z: Math.sin(i * PI / 2) * u * 0.078, rz: -Math.cos(i * PI / 2) * 1.45, rx: Math.sin(i * PI / 2) * 1.45 }));
+      }
       break;
-    }
+    case 'staff':
+      g.add(box(u * 0.048, u * 0.64, u * 0.048, wood, { pivot: 'bottom', y: -u * 0.24, taper: 0.85 }));
+      g.add(cyl(u * 0.070, u * 0.070, u * 0.036, mulHex(wood, 1.35), { seg: 7, y: u * 0.355 }));
+      for (let i = 0; i < 3; i++) {
+        g.add(box(u * 0.024, u * 0.090, u * 0.024, mulHex(wood, 1.2),
+          { y: u * 0.40, x: Math.cos(i * 2.1) * u * 0.055, z: Math.sin(i * 2.1) * u * 0.055, rz: -Math.cos(i * 2.1) * 0.7 }));
+      }
+      g.add(sph(u * 0.075, C.glow, { y: u * 0.45, emissive: 0.95 }));
+      break;
     case 'spear':
-      g.add(box(u * 0.038, u * 0.66, u * 0.038, wood, { pivot: 'bottom', y: -u * 0.24 }));
-      g.add(cone(u * 0.046, u * 0.13, steel, { y: u * 0.47 }));
-      g.add(box(u * 0.055, u * 0.020, u * 0.030, mulHex(steel, 0.8), { y: u * 0.405 }));
+      g.add(box(u * 0.042, u * 0.72, u * 0.042, wood, { pivot: 'bottom', y: -u * 0.26 }));
+      g.add(cone(u * 0.058, u * 0.170, steel, { y: u * 0.52 }));
+      g.add(box(u * 0.075, u * 0.026, u * 0.040, mulHex(steel, 0.75), { y: u * 0.435 }));
       break;
     case 'scythe':
-      g.add(box(u * 0.042, u * 0.56, u * 0.042, wood, { pivot: 'bottom', y: -u * 0.20 }));
-      g.add(box(u * 0.036, u * 0.055, u * 0.24, steel, { y: u * 0.34, z: u * 0.12, taperZ: 0.35 }));
+      g.add(box(u * 0.048, u * 0.62, u * 0.048, wood, { pivot: 'bottom', y: -u * 0.22 }));
+      g.add(box(u * 0.044, u * 0.075, u * 0.320, steel, { y: u * 0.38, z: u * 0.16, taperZ: 0.3 }));
       break;
     case 'bow':
-      g.add(box(u * 0.036, u * 0.36, u * 0.036, wood, { taper: 0.6, rz: 0.10, x: -u * 0.01 }));
-      g.add(box(u * 0.030, u * 0.15, u * 0.030, wood, { y: u * 0.20, rz: 0.55 }));
-      g.add(box(u * 0.030, u * 0.15, u * 0.030, wood, { y: -u * 0.20, rz: -0.55 }));
-      g.add(box(u * 0.014, u * 0.44, u * 0.014, C.cloth2, { x: u * 0.055 }));
+      // limbs in the XY plane so the bow is broadside-on from most octants
+      g.add(box(u * 0.044, u * 0.30, u * 0.044, wood, { taper: 0.85, y: u * 0.02 }));
+      for (const sgn of [1, -1]) {
+        g.add(box(u * 0.038, u * 0.22, u * 0.038, wood, { y: sgn * u * 0.24, z: u * 0.030, rx: sgn * 0.30, taper: 0.6 }));
+        g.add(box(u * 0.030, u * 0.14, u * 0.030, wood, { y: sgn * u * 0.40, z: u * 0.085, rx: sgn * 0.75, taper: 0.4 }));
+      }
+      g.add(box(u * 0.016, u * 0.92, u * 0.016, C.cloth2, { z: -u * 0.075 }));
       break;
+    case 'bolt': {
+      // a titan's thrown lightning: a jagged self-lit shaft
+      let y = -u * 0.10;
+      for (let i = 0; i < 5; i++) {
+        g.add(box(u * 0.034, u * 0.14, u * 0.034, C.glow,
+          { pivot: 'bottom', y, x: (i % 2 ? 1 : -1) * u * 0.030, rz: (i % 2 ? 1 : -1) * 0.45, emissive: 1 }));
+        y += u * 0.115;
+      }
+      g.add(cone(u * 0.055, u * 0.14, C.glow, { y: y + u * 0.05, emissive: 1 }));
+      break;
+    }
     case 'torch':
-      g.add(box(u * 0.038, u * 0.22, u * 0.038, wood, { pivot: 'bottom', y: -u * 0.04 }));
-      g.add(cone(u * 0.055, u * 0.10, rampHex('fire', 12), { y: u * 0.21, emissive: 1 }));
+      g.add(box(u * 0.044, u * 0.24, u * 0.044, wood, { pivot: 'bottom', y: -u * 0.04 }));
+      g.add(cone(u * 0.062, u * 0.12, rampHex('fire', 12), { y: u * 0.23, emissive: 1 }));
       break;
     default:
       return null;
@@ -286,7 +335,21 @@ function buildHead(headG, H, P, C) {
     // round: the default humanoid skull
     headG.add(sph(r, skin, { y: r, sy: P.headSy || 1.06, sz: P.headSz || 1.0 }));
     if (P.snout) headG.add(box(r * 0.7, r * 0.5, r * 0.8, mulHex(skin, 0.92), { y: r * 0.82, z: r * 0.9, taper: 0.7 }));
-    for (const s of [-1, 1]) headG.add(box(r * 0.24, r * 0.16, r * 0.16, eyeCol, { x: s * r * 0.40, y: r * 1.14, z: r * 0.86, emissive: eyeGlow }));
+    const one = P.eyes === 1;
+    // a brow shelf casts the sockets into shadow, which is what makes a face
+    // read at sprite size rather than a blank ball
+    headG.add(box(r * 1.28, r * 0.20, r * 0.34, mulHex(skin, 0.80), { y: r * 1.34, z: r * 0.72 }));
+    if (one) {
+      headG.add(box(r * 0.62, r * 0.44, r * 0.18, mulHex(eyeCol, 0.35), { y: r * 1.10, z: r * 0.86 }));
+      headG.add(sph(r * 0.24, eyeCol, { y: r * 1.10, z: r * 0.92, emissive: Math.max(eyeGlow, 0.35) }));
+    } else {
+      for (const s of [-1, 1]) {
+        headG.add(box(r * 0.36, r * 0.26, r * 0.16, mulHex(eyeCol, 0.35), { x: s * r * 0.40, y: r * 1.10, z: r * 0.84 }));
+        headG.add(box(r * 0.20, r * 0.14, r * 0.14, eyeCol, { x: s * r * 0.40, y: r * 1.10, z: r * 0.90, emissive: eyeGlow }));
+      }
+      headG.add(box(r * 0.20, r * 0.34, r * 0.26, mulHex(skin, 1.08), { y: r * 0.90, z: r * 0.92 }));
+    }
+    headG.add(box(r * 0.44, r * 0.10, r * 0.14, mulHex(skin, 0.62), { y: r * 0.58, z: r * 0.90 }));
   }
 
   if (P.ears === 'long') {
@@ -315,9 +378,12 @@ function buildHead(headG, H, P, C) {
 
   if (P.hair) {
     const hc = C.hair;
-    headG.add(sph(r * 1.06, hc, { y: r * 1.16, sy: 0.78, sz: 1.02 }));
+    headG.add(sph(r * 1.10, hc, { y: r * 1.22, sy: 0.82, sz: 1.05 }));
+    headG.add(box(r * 1.5, r * 0.26, r * 0.55, hc, { y: r * 1.52, z: r * 0.62 }));
+    headG.add(box(r * 1.55, r * 0.90, r * 0.45, hc, { y: r * 1.20, z: -r * 0.80, taper: 0.9 }));
     if (P.hair === 'long') {
-      headG.add(box(r * 1.5, r * 1.5, r * 0.5, hc, { y: r * 0.75, z: -r * 0.85, taper: 0.8 }));
+      headG.add(box(r * 1.6, r * 1.7, r * 0.55, hc, { pivot: 'top', y: r * 1.45, z: -r * 0.80, taper: 0.85 }));
+      for (const s of [-1, 1]) headG.add(box(r * 0.42, r * 1.5, r * 0.6, hc, { pivot: 'top', x: s * r * 0.92, y: r * 1.5, taper: 0.7 }));
     }
   }
   if (P.beard) {
@@ -492,13 +558,20 @@ function buildBipedRig(H, P, C, rnd) {
     }
     arms['arm' + key] = sh; arms['fore' + key] = fo; arms['hand' + key] = hand;
   }
+  const isBow = P.weapon === 'bow';
   if (P.weapon && P.weapon !== 'none') {
     const w = makeWeapon(P.weapon, H, C);
-    if (w) { w.rotation.x = -0.14; arms.handR.add(w); }
+    if (w) {
+      // Cant the weapon forward and out so it clears the torso silhouette
+      // instead of hiding behind the arm at every octant.
+      w.rotation.x = isBow ? 0 : -0.30;
+      w.rotation.z = isBow ? 0 : -0.22;
+      (isBow ? arms.handL : arms.handR).add(w);
+    }
   }
   if (P.weapon2) {
     const w = makeWeapon(P.weapon2, H, C);
-    if (w) { w.rotation.x = -0.10; arms.handL.add(w); }
+    if (w) { w.rotation.x = -0.24; w.rotation.z = 0.22; arms.handL.add(w); }
   }
   if (P.shield) {
     const sh = makeShield(P.shield, H, C);
@@ -590,7 +663,7 @@ function buildBipedRig(H, P, C, rnd) {
     root, body, torso, head,
     ...arms, ...legs,
     arch: 'biped',
-    b: { H, bodyY, torsoH, legLen, stride: P.stride, armSwing: P.armSwing, flyer: P.flyer, serpent: serpentLower },
+    b: { H, bodyY, torsoH, legLen, stride: P.stride, armSwing: P.armSwing, flyer: P.flyer, serpent: serpentLower, bow: isBow },
   };
   rig.snap = snapshot(root);
   return rig;
@@ -653,6 +726,19 @@ function poseBiped(r, action, t) {
     }
     case 'cast': {
       const u = t < 0.5 ? ez(t / 0.5) : 1 - ez((t - 0.5) / 0.5) * 0.35;
+      if (b.bow) {
+        // bow arm punches out level, string hand draws back past the jaw
+        r.armL.rotation.x += -1.62 * u;
+        r.armL.rotation.z += 0.16 * u;
+        r.foreL.rotation.x += 0.10 * u;
+        r.armR.rotation.x += -1.30 * u;
+        r.armR.rotation.z += -0.30 * u;
+        r.foreR.rotation.x += -1.55 * u;
+        r.torso.rotation.y += -0.42 * u;
+        r.head.rotation.y += -0.28 * u;
+        if (hasLegs) { r.legL.rotation.x += -0.20 * u; r.legR.rotation.x += 0.20 * u; }
+        break;
+      }
       const tr = Math.sin(t * PI * 8) * 0.05 * u;
       r.armL.rotation.x += -1.80 * u + tr;
       r.armR.rotation.x += -1.80 * u - tr;
@@ -1239,9 +1325,10 @@ function buildBlobRig(H, P, C, rnd) {
   root.add(body);
   const lobes = [];
   const n = P.lobes;
+  const rise = P.squat === undefined ? 0.78 : P.squat;
   for (let i = 0; i < n; i++) {
     const t = i / (n - 1);
-    const g = grp(Math.sin(i * 2.1) * H * 0.05, H * (0.10 + t * 0.78), Math.cos(i * 1.7) * H * 0.035);
+    const g = grp(Math.sin(i * 2.1) * H * 0.05, H * (0.10 + t * rise), Math.cos(i * 1.7) * H * 0.035 + (P.maw ? t * H * 0.12 : 0));
     body.add(g);
     const rr = H * P.wide * (P.flame ? (0.58 - t * 0.42) : (0.58 - t * 0.30)) * (1 + 0.16 * Math.sin(i * 2.3));
     g.add(sph(rr, i % 2 ? C.body : mulHex(C.body, 1.18), {
@@ -1271,6 +1358,21 @@ function buildBlobRig(H, P, C, rnd) {
         { x: Math.cos(a) * H * P.wide * 0.42, z: Math.sin(a) * H * P.wide * 0.42, y: H * rnd.float(0.02, 0.16), emissive: P.glow }));
     }
   }
+  if (P.maw) {
+    // the ring of feelers around a sucker's mouth is its whole identity
+    const mouth = grp(0, H * (0.10 + rise) + H * 0.02, H * P.wide * 0.34);
+    body.add(mouth);
+    mouth.add(sph(H * 0.13, mulHex(C.body, 0.55), { sz: 0.55 }));
+    mouth.add(sph(H * 0.075, rampHex('blood', 3), { z: H * 0.055, sz: 0.5 }));
+    for (let i = 0; i < 7; i++) {
+      const a = (i / 7) * PI * 2;
+      mouth.add(box(H * 0.028, H * 0.16, H * 0.028, mulHex(C.body, 1.15), {
+        pivot: 'bottom', x: Math.cos(a) * H * 0.115, y: Math.sin(a) * H * 0.115,
+        rz: -Math.cos(a) * 1.15, rx: Math.sin(a) * 1.15 + 1.15, taper: 0.3,
+      }));
+    }
+    for (const s of [-1, 1]) body.add(sph(H * 0.035, C.glow, { x: s * H * 0.13, y: H * (0.10 + rise) + H * 0.14, z: H * P.wide * 0.24, emissive: 0.7 }));
+  }
   const arms = [];
   if (P.arms) {
     for (const s of [-1, 1]) {
@@ -1286,7 +1388,7 @@ function buildBlobRig(H, P, C, rnd) {
     }
   }
   // eyes make an amorphous shape read as a creature immediately
-  if (P.eyes !== 0) {
+  if (P.eyes !== 0 && !P.maw) {
     for (const s of [-1, 1]) body.add(sph(H * 0.035, P.glow ? 0x101014 : C.glow, { x: s * H * 0.10, y: H * 0.55, z: H * P.wide * 0.34, emissive: P.glow ? 0 : 0.8 }));
   }
 
@@ -1641,7 +1743,8 @@ function buildEyeRig(H, P, C, rnd) {
   body.add(sph(R * 0.16, 0x08080c, { z: R * 1.02, sz: 0.4 }));
   const lids = [];
   for (const s of [-1, 1]) {
-    const l = sph(R * 0.72, mulHex(C.body, 0.8), { z: R * 0.55, y: s * R * 0.52, sz: 0.45, sy: 0.55 });
+    const l = grp(0, s * R * 0.52, R * 0.55);
+    l.add(sph(R * 0.72, mulHex(C.body, 0.8), { sz: 0.45, sy: 0.55 }));
     body.add(l);
     lids.push(l);
   }
@@ -1823,9 +1926,9 @@ export const ACTIONS = {
   attack_melee: { frames: 4, loop: false, fps: 8 },
   attack_ranged: { frames: 4, loop: false, fps: 8 },
   got_hit: { frames: 2, loop: false, fps: 8 },
-  dying: { frames: 6, loop: false, fps: 10 },
+  dying: { frames: 5, loop: false, fps: 10 },
   dead: { frames: 1, loop: false, fps: 1 },
-  bored: { frames: 6, loop: true, fps: 8 },
+  bored: { frames: 4, loop: true, fps: 8 },
 };
 
 export const ACTION_NAMES = Object.keys(ACTIONS);
@@ -1884,7 +1987,7 @@ F('Archer', 'biped', 192,
 
 F('Barbarian', 'biped', 208,
   { skin: ['flesh', 4], body: ['flesh', 4], cloth: ['wood', 4], cloth2: ['dirt', 3], hair: ['wood', 2], horn: ['sand', 11] },
-  { weapon: 'axe', shoulderW: 0.31, hipW: 0.25, armLen: 0.44, beard: 1, hair: 1, stride: 0.95 },
+  { weapon: 'greataxe', shoulderW: 0.31, hipW: 0.25, armLen: 0.44, beard: 1, hair: 1, stride: 0.95 },
   [['Magyar', 14, 61], ['Magyar Soldier', 25, 137, { cloth: ['stone', 5], metal: ['stone', 10] }],
     ['Magyar Matron', 37, 247, { cloth: ['blood', 5], hair: ['fire', 8], skin: ['flesh', 6] }]]);
 
@@ -1907,7 +2010,7 @@ F('Beholder', 'eye', 150,
 
 F('Bloodsucker', 'blob', 76,
   { skin: ['flesh', 5], body: ['flesh', 4], glow: ['blood', 10] },
-  { lobes: 4, wide: 0.95, drip: 1, arms: 0 },
+  { lobes: 4, wide: 1.05, drip: 1, arms: 0, maw: 1, squat: 0.55 },
   [['Blood Sucker', 2, 6], ['Brain Sucker', 4, 13, { body: ['plaster', 7], glow: ['arcane', 6] }],
     ['Soul Sucker', 8, 30, { body: ['arcane', 3], glow: ['arcane', 7] }]],
   {});
@@ -1931,8 +2034,9 @@ F('Cockatrice', 'biped', 178,
     horn: ['gold', 11], wing: ['sand', 9], wing2: ['wood', 6], eye: ['fire', 12],
   },
   {
-    headShape: 'beak', headR: 0.085, digitigrade: 1, claws: 1, wings: 'feather', wingSpan: 0.72,
-    tail: 0.45, hunch: 0.28, boots: 0, belt: 0, armLen: 0.30, glow: 1,
+    headShape: 'beak', headR: 0.095, digitigrade: 1, claws: 1, wings: 'feather', wingSpan: 0.52,
+    wingFold: 0.75, tail: 0.55, hunch: 0.55, boots: 0, belt: 0, armLen: 0.26, armR: 0.030,
+    torsoH: 0.34, torsoD: 0.22, shoulderW: 0.26, hipW: 0.24, legLen: 0.44, glow: 1,
   },
   [["Agar's Pet", 13, 55], ["Agar's Monster", 15, 67, { skin: ['blood', 6], body: ['blood', 5], wing: ['blood', 7] }],
     ["Agar's Abomination", 17, 79, { skin: ['arcane', 4], body: ['arcane', 3], wing: ['arcane', 5], horn: ['ice', 11] }]],
@@ -2010,7 +2114,7 @@ F('Dwarf', 'biped', 148,
   { skin: ['flesh', 4], cloth: ['wood', 6], cloth2: ['blood', 5], hair: ['fire', 7], metal: ['stone', 9] },
   {
     headR: 0.100, legLen: 0.34, torsoH: 0.36, shoulderW: 0.31, hipW: 0.27, armLen: 0.38,
-    beard: 'long', weapon: 'axe', helm: 'cap', stride: 0.85,
+    beard: 'long', weapon: 'hammer', helm: 'cap', stride: 0.85,
   },
   [['Dwarf', 10, 40], ['Dwarf Warrior', 20, 100, { cloth: ['stone', 6], metal: ['stone', 11], hair: ['wood', 3] }],
     ['Dwarf Lord', 30, 180, { cloth: ['blood', 5], metal: ['gold', 10], hair: ['grey', 11] }]]);
@@ -2131,7 +2235,7 @@ F('Jackalman', 'biped', 218,
 
 F('KnightPlate', 'biped', 230,
   { skin: ['grey', 2], body: ['grey', 3], cloth: ['grey', 2], cloth2: ['blood', 4], metal: ['grey', 5], eye: ['blood', 12] },
-  { weapon: 'sword', helm: 'full', pads: 1, cape: 1, shoulderW: 0.30, hipW: 0.25, glow: 1 },
+  { weapon: 'greatsword', helm: 'full', pads: 1, cape: 1, shoulderW: 0.30, hipW: 0.25, glow: 1 },
   [['Death Knight', 40, 280],
     ['Doom Knight', 60, 540, { body: ['stone', 4], metal: ['stone', 7], cloth2: ['arcane', 4], eye: ['arcane', 7] }],
     ['Cuisinart', 80, 880, { body: ['grey', 9], metal: ['grey', 13], cloth2: ['fire', 9], eye: ['fire', 14] }]],
@@ -2177,7 +2281,7 @@ F('Minotaur', 'biped', 320,
   },
   {
     headShape: 'bull', horns: 'bull', headR: 0.082, shoulderW: 0.36, hipW: 0.28, armLen: 0.50,
-    armR: 0.058, legLen: 0.44, digitigrade: 1, weapon: 'axe', tail: 0.35, hunch: 0.14, glow: 1,
+    armR: 0.058, legLen: 0.44, digitigrade: 1, weapon: 'greataxe', tail: 0.35, hunch: 0.14, glow: 1,
   },
   [['Minotaur', 39, 269],
     ['Minotaur Mage', 59, 525, { skin: ['stone', 5], body: ['stone', 5], cloth: ['arcane', 3], weapon: 'staff', glow: ['arcane', 7] }],
@@ -2192,7 +2296,7 @@ F('Monk', 'biped', 192,
 
 F('Nobleman', 'biped', 192,
   { skin: ['flesh', 6], body: ['stone', 10], cloth: ['sky', 7], cloth2: ['gold', 10], metal: ['stone', 12], hair: ['wood', 4] },
-  { weapon: 'sword', helm: 'hat', cape: 1, hair: 1, armR: 0.036 },
+  { weapon: 'rapier', helm: 'hat', cape: 1, hair: 1, armR: 0.036 },
   [['Swordsman', 10, 40], ['Expert Swordsman', 17, 79, { cloth: ['blood', 5], cloth2: ['plaster', 12] }],
     ['Master Swordsman', 24, 129, { cloth: ['arcane', 4], cloth2: ['gold', 12], body: ['grey', 11] }]]);
 
@@ -2327,7 +2431,7 @@ F('Titan', 'biped', 384,
     skin: ['gold', 10], body: ['gold', 9], skin2: ['gold', 7], cloth: ['plaster', 13], cloth2: ['sky', 8],
     metal: ['gold', 12], hair: ['grey', 12], glow: ['ice', 14],
   },
-  { headR: 0.070, shoulderW: 0.30, weapon: 'spear', helm: 'crown', cape: 1, pads: 1, beard: 'long', hair: 1, glow: 1, robe: 'short' },
+  { headR: 0.070, shoulderW: 0.30, weapon: 'bolt', helm: 'crown', cape: 1, pads: 1, beard: 'long', hair: 1, glow: 1, robe: 'short' },
   [['Titan', 65, 617], ['Noble Titan', 75, 787, { cloth: ['sky', 9], metal: ['ice', 13], glow: ['sky', 14] }],
     ['Supreme Titan', 95, 1187, { skin: ['ice', 11], body: ['ice', 10], cloth: ['gold', 11], glow: ['gold', 15] }]]);
 

@@ -8,15 +8,14 @@
 // ---------------------------------------------------------------------------
 
 import { rampCss } from '../../core/palette.js';
-import { clamp } from '../../core/rng.js';
+
 import * as F from '../../art/font.js';
-import { SPELLS_BY_SCHOOL, SCHOOLS, spellPrice, schoolSkill } from '../../game/spells.js';
+import { SPELLS_BY_SCHOOL, spellPrice, schoolSkill } from '../../game/spells.js';
 import { SCHOOL_TIER_LIMIT, classSkillMax, MASTERY_NAMES, masteryCost, masteryRequirement } from '../../game/skills.js';
 import { CLASSES } from '../../game/stats.js';
 import {
-  HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, hotText,
-  paintWall, paintFloor, paintShelf, paintClutter, vignette,
-  members, activeMember, charName, partyGold, spend,
+  HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, paintWall, paintFloor,
+  paintShelf, paintClutter, vignette, members, activeMember, charName, partyGold, spend,
   C_WHITE, C_GOLD, C_CANARY, C_DIM, C_RED, C_GREEN, C_LEARN,
 } from './dialogue.js';
 

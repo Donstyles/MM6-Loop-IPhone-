@@ -8,13 +8,12 @@
 // ---------------------------------------------------------------------------
 
 import { rampCss } from '../../core/palette.js';
-import { clamp } from '../../core/rng.js';
+
 import * as F from '../../art/font.js';
 import {
-  HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, hotText,
-  paintWall, paintFloor, paintShelf, paintCounter, paintClutter, vignette,
-  partyGold, spend, earn,
-  C_WHITE, C_GOLD, C_CANARY, C_DIM, C_RED, C_GREEN,
+  HouseScreen, PANEL, A, plate, baked, glow, figure, gold, hotText, paintWall, paintFloor,
+  paintShelf, paintCounter, paintClutter, vignette, partyGold, spend, earn, C_WHITE, C_GOLD,
+  C_CANARY, C_DIM, C_GREEN,
 } from './dialogue.js';
 
 const WEEK = 7 * 24 * 60;      // game minutes

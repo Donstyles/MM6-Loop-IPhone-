@@ -10,16 +10,15 @@
 // a chance of being woken by something that followed you.
 // ---------------------------------------------------------------------------
 
-import { layout } from '../../core/layout.js';
+
 import { rampCss } from '../../core/palette.js';
 import { clamp, Rand } from '../../core/rng.js';
 import * as F from '../../art/font.js';
 import { maxHP, maxSP } from '../../game/stats.js';
 import {
-  Screen, PANEL, A, plate, baked, glow, poly, gold, rngFor,
-  paintFloor, paintClutter, vignette,
-  members, charName, hasCondition, clearCondition, say,
-  C_WHITE, C_GOLD, C_CANARY, C_DIM, C_RED, C_GREEN,
+  Screen, PANEL, A, plate, baked, glow, poly, rngFor, paintFloor, paintClutter, vignette,
+  members, charName, hasCondition, clearCondition, say, C_WHITE, C_GOLD, C_CANARY, C_DIM,
+  C_RED, C_GREEN,
 } from './dialogue.js';
 
 // Absolute rects: the spec's panel-relative numbers plus the (8,8) origin.

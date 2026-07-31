@@ -401,13 +401,36 @@ function exprOf(name) {
 // The painter
 // ---------------------------------------------------------------------------
 
+// One set of working buffers, reused by every portrait. Allocating five typed
+// arrays per render churned ~1.2 MB a frame through the loading stage, which
+// is exactly the kind of pressure that gets a tab killed mid-load.
+const scratch = { n: 0, buf: null, subj: null, hgt: null, hcv: null, hair: null };
+const bgCache = { key: '', data: null };
+function getScratch(N) {
+  if (scratch.n < N) {
+    scratch.n = N;
+    scratch.buf = new Float32Array(N * 3);
+    scratch.subj = new Float32Array(N);
+    scratch.hgt = new Float32Array(N);
+    scratch.hcv = new Float32Array(N);
+    scratch.hair = new Float32Array(N);
+  } else {
+    scratch.subj.fill(0, 0, N);
+    scratch.hgt.fill(0, 0, N);
+    scratch.hcv.fill(0, 0, N);
+    scratch.hair.fill(0, 0, N);
+  }
+  return scratch;
+}
+
 function paint(face, ex, W, H) {
   const BW = W * SS, BH = H * SS, N = BW * BH;
-  const buf = new Float32Array(N * 3);
-  const subj = new Float32Array(N);   // subject coverage, for ash/stone grading
-  const hgt = new Float32Array(N);    // head height field
-  const hcv = new Float32Array(N);    // head coverage
-  const hair = new Float32Array(N);   // hair coverage
+  const sc = getScratch(N);
+  const buf = sc.buf;      // fully overwritten by the background pass
+  const subj = sc.subj;    // subject coverage, for ash/stone grading
+  const hgt = sc.hgt;      // head height field
+  const hcv = sc.hcv;      // head coverage
+  const hair = sc.hair;    // hair coverage
   const px2dx = DW / BW, px2dy = DH / BH;
 
   const g = face.geom;
@@ -475,7 +498,12 @@ function paint(face, ex, W, H) {
   // =========================================================================
   // 1. background - a warm mottled pool behind the head, cold in the corners
   // =========================================================================
-  {
+  // The plate behind the head is identical for every expression of a face, so
+  // it is painted once and memcpy'd for the other twenty-six frames.
+  const bgKey = `${faceKey(face)}|${BW}x${BH}`;
+  if (bgCache.key === bgKey) {
+    buf.set(bgCache.data.subarray(0, N * 3));
+  } else {
     const warm = mixC(rs('dirt', 0.40), rs('sand', 0.30), 0.35);
     const cold = mixC(rs('stone', 0.05), rs('grey', 0.03), 0.5);
     const bt = face.bgTint;
@@ -502,6 +530,9 @@ function paint(face, ex, W, H) {
         buf[i + 2] = c2 + (w2 - c2) * t;
       }
     }
+    if (!bgCache.data || bgCache.data.length < N * 3) bgCache.data = new Float32Array(N * 3);
+    bgCache.data.set(buf.subarray(0, N * 3));
+    bgCache.key = bgKey;
   }
 
   // =========================================================================
@@ -1216,8 +1247,8 @@ function hairColourAt(HC, p, X, Y, sd, LX, LY, ex) {
   const nl = 1 / Math.sqrt(ux * ux + uy * uy + zc * zc + 1e-6);
   const diff = Math.max(0, (ux * LX + uy * LY + zc * 0.72) * nl);
 
-  const s1 = fb(X * 2.6 + Y * 0.55, Y * 0.85, 3, sd + 210);
-  const s2 = fb(X * 6.0, Y * 1.1, 2, sd + 211);
+  const s1 = fb(X * 2.6 + Y * 0.55, Y * 0.85, 2, sd + 210);
+  const s2 = nz(X * 6.0, Y * 1.1, sd + 211);
   const clump = s1 * 0.7 + s2 * 0.3;
 
   let shade = 0.24 + diff * 0.92;
@@ -1229,8 +1260,8 @@ function hairColourAt(HC, p, X, Y, sd, LX, LY, ex) {
   // Strand strokes: narrow arcs of light following the curve of the skull,
   // concentrated where the key light grazes it.
   const ang = Math.atan2(uy + 0.15, ux);
-  const sheen = Math.exp(-Math.pow((ux + 0.44) / 0.40, 2)) * Math.exp(-Math.pow((uy + 0.48) / 0.48, 2));
-  const phase = ang * 7.5 + (fb(X * 0.45, Y * 0.45, 2, sd + 215) - 0.5) * 4.0 + r2 * 2.5;
+  const sheen = Math.exp(-sq((ux + 0.44) / 0.40)) * Math.exp(-sq((uy + 0.48) / 0.48));
+  const phase = ang * 7.5 + (nz(X * 0.45, Y * 0.45, sd + 215) - 0.5) * 4.0 + r2 * 2.5;
   const stroke = Math.pow(Math.abs(Math.sin(phase)), 7);
   c = mixC(c, HC.lite, sheen * HC.sheen * (0.25 + stroke * 0.75));
   // dark layer where the hair meets the forehead, and at the outer edge
@@ -1335,8 +1366,9 @@ function drawGear(buf, subj, face, ex, P) {
       if (hood) {
         const orx = rx * 1.20, ory = ry * (1.12 + hood.peak * 0.10);
         const ocy = hcy - ry * (0.05 + hood.peak * 0.08);
-        const rough = (fb(X * 0.4, Y * 0.4, 3, sd + 401) - 0.5) * 0.10;
-        let a = cov(ell(X - hcx, Y - ocy, orx, ory) + rough, 0.09);
+        const em = ell(X - hcx, Y - ocy, orx, ory);
+        const rough = em > 0.6 && em < 1.6 ? (fb(X * 0.4, Y * 0.4, 2, sd + 401) - 0.5) * 0.10 : 0;
+        let a = cov(em + rough, 0.09);
         const dw = orx + (Y - hcy) * 0.72;
         a = Math.max(a, smoothstep(dw + 1.2, dw - 0.8, Math.abs(X - hcx))
           * smoothstep(hcy - 1, hcy + 5, Y));
@@ -1360,9 +1392,9 @@ function drawGear(buf, subj, face, ex, P) {
           let sh = 0.16 + Math.max(0, (ux * LX + uy * LY + zc * 0.75) * nl) * 0.95;
           // Folds: radial creases running out of the face opening, which is
           // where cloth actually gathers.
-          const ang = Math.atan2(Y - ocy, X - hcx);
-          const fold = fb(Math.cos(ang) * 3.6 + Math.sqrt(r2) * 5.5, Math.sin(ang) * 3.6, 3, sd + 403);
-          const crease = Math.pow(Math.abs(Math.sin(ang * 6.5 + fold * 3.4)), 3);
+          const inv = 1 / (Math.sqrt(r2) + 1e-3);
+          const fold = fb(ux * inv * 3.6 + Math.sqrt(r2) * 5.5, uy * inv * 3.6, 2, sd + 403);
+          const crease = Math.pow(Math.abs(Math.sin((uy * inv) * 6.5 + Math.sign(ux) * 1.4 + fold * 3.4)), 3);
           sh *= 0.66 + fold * 0.62;
           sh *= 1 - crease * 0.46;
           sh *= mix(0.20, 1, smoothstep(1.0, 1.42, holeM));   // inside the opening
@@ -1550,7 +1582,7 @@ function drawShoulders(buf, subj, face, ex, P) {
           c = mixC(c, mixC(rs('gold', 0.30), rs('gold', 0.84), clamp(sh, 0, 1)), edge * 0.75);
         }
       } else {
-        const fold = fb(X * 0.62 + Y * 0.10, Y * 0.30, 3, sd + 503);
+        const fold = fb(X * 0.62 + Y * 0.10, Y * 0.30, 2, sd + 503);
         const crease = Math.pow(Math.abs(Math.sin(dx * 0.55 + fold * 4.0)), 4);
         sh *= 0.68 + fold * 0.66;
         sh *= 1 - crease * 0.28;
@@ -1660,6 +1692,12 @@ function gradePass(buf, subj, face, ex, BW, BH, px2dx, px2dy, sd) {
  * @returns {HTMLCanvasElement|OffscreenCanvas} opaque, palettised
  */
 export function renderPortrait(face, expression = 'normal', w = PORTRAIT_W, h = PORTRAIT_H) {
+  // Defensive: a NaN or silly size here would either allocate a gigantic
+  // buffer or hand the canvas a bad dimension, and this runs during loading
+  // where neither failure is recoverable.
+  w = Math.max(8, Math.min(256, Math.round(Number(w) || PORTRAIT_W)));
+  h = Math.max(8, Math.min(256, Math.round(Number(h) || PORTRAIT_H)));
+  if (!face || !face.geom) face = makeFace(0, {});
   const ex = exprOf(expression);
   const { buf, BW } = paint(face, ex, w, h);
   const canvas = makeCanvas(w, h);
@@ -1689,6 +1727,37 @@ export function renderPortrait(face, expression = 'normal', w = PORTRAIT_W, h = 
 }
 
 const sheetCache = new Map();
+const SHEET_CACHE_MAX = 12;     // a party of four plus hirelings and NPCs
+
+/** LRU-ish trim so a long session cannot accumulate atlases without bound. */
+function cachePut(map, key, val, max) {
+  map.set(key, val);
+  while (map.size > max) map.delete(map.keys().next().value);
+  return val;
+}
+
+/**
+ * Build one face's expression atlas, yielding after each frame so a loading
+ * screen can paint between them. Blocking for two seconds inside one task is
+ * what makes a tab look hung.
+ */
+function* sheetGen(face, w, h) {
+  const cols = 7, rows = Math.ceil(EXPRESSIONS.length / cols);
+  const canvas = makeCanvas(cols * w, rows * h);
+  const g = ctx2d(canvas);
+  for (let i = 0; i < EXPRESSIONS.length; i++) {
+    g.drawImage(renderPortrait(face, EXPRESSIONS[i], w, h), (i % cols) * w, Math.floor(i / cols) * h);
+    yield i;
+  }
+  return {
+    canvas, cols, rows, cellW: w, cellH: h,
+    index: (expr) => Math.max(0, EXPRESSIONS.indexOf(expr)),
+    rect: (expr) => {
+      const i = Math.max(0, EXPRESSIONS.indexOf(expr));
+      return { x: (i % cols) * w, y: Math.floor(i / cols) * h, w, h };
+    },
+  };
+}
 
 /**
  * Every expression of one face on a single atlas so the HUD can blit without
@@ -1698,22 +1767,10 @@ export function portraitSheet(face, w = PORTRAIT_W, h = PORTRAIT_H) {
   const key = faceKey(face) + `|${w}x${h}`;
   const hit = sheetCache.get(key);
   if (hit) return hit;
-  const cols = 7, rows = Math.ceil(EXPRESSIONS.length / cols);
-  const canvas = makeCanvas(cols * w, rows * h);
-  const g = ctx2d(canvas);
-  EXPRESSIONS.forEach((e, i) => {
-    g.drawImage(renderPortrait(face, e, w, h), (i % cols) * w, Math.floor(i / cols) * h);
-  });
-  const sheet = {
-    canvas, cols, rows, cellW: w, cellH: h,
-    index: (expr) => Math.max(0, EXPRESSIONS.indexOf(expr)),
-    rect: (expr) => {
-      const i = Math.max(0, EXPRESSIONS.indexOf(expr));
-      return { x: (i % cols) * w, y: Math.floor(i / cols) * h, w, h };
-    },
-  };
-  sheetCache.set(key, sheet);
-  return sheet;
+  const it = sheetGen(face, w, h);
+  let r = it.next();
+  while (!r.done) r = it.next();
+  return cachePut(sheetCache, key, r.value, SHEET_CACHE_MAX);
 }
 
 const faceCache = new Map();
@@ -1727,27 +1784,49 @@ function faceKey(face) {
 export function getPortrait(seed, opts = {}, expression = 'normal') {
   const fk = `${seed}|${opts.sex || '?'}|${opts.klass || '?'}|${opts.age || '?'}`;
   let face = faceCache.get(fk);
-  if (!face) { face = makeFace(seed, opts); faceCache.set(fk, face); }
+  if (!face) face = cachePut(faceCache, fk, makeFace(seed, opts), 64);
   const pk = `${fk}|${expression}`;
-  let c = portraitCache.get(pk);
-  if (!c) { c = renderPortrait(face, expression); portraitCache.set(pk, c); }
-  return c;
+  const hit = portraitCache.get(pk);
+  if (hit) return hit;
+  return cachePut(portraitCache, pk, renderPortrait(face, expression), 160);
 }
 
 /**
- * Loading-screen generator: yields one sheet per seed so the progress bar can
- * move between characters.
- * @param {Array<{seed:*, sex?:string, klass?:string, age?:string}>} seeds
+ * Loading-screen generator. Yields between every single expression frame, not
+ * between faces: one face is 27 frames and holding the main thread for all of
+ * them at once reads as a hang.
+ * @param {Array<{seed:*, sex?:string, klass?:string, age?:string}>|Array<number>} seeds
  */
 export function* buildPortraits(seeds) {
+  const list = Array.isArray(seeds) ? seeds.slice(0, 32) : [];
   const out = [];
-  for (let i = 0; i < seeds.length; i++) {
-    const s = seeds[i];
+  const total = Math.max(1, list.length * EXPRESSIONS.length);
+  let step = 0;
+  let worst = 0;
+  for (let i = 0; i < list.length; i++) {
+    const s = list[i];
     const spec = typeof s === 'object' && s !== null ? s : { seed: s };
     const face = makeFace(spec.seed, spec);
-    const sheet = portraitSheet(face);
+    const key = faceKey(face) + `|${PORTRAIT_W}x${PORTRAIT_H}`;
+    let sheet = sheetCache.get(key);
+    if (!sheet) {
+      const it = sheetGen(face, PORTRAIT_W, PORTRAIT_H);
+      for (;;) {
+        const t0 = (typeof performance !== 'undefined' ? performance.now() : 0);
+        const r = it.next();
+        worst = Math.max(worst, (typeof performance !== 'undefined' ? performance.now() : 0) - t0);
+        if (r.done) { sheet = r.value; break; }
+        yield { i, index: step++, total, face };
+      }
+      cachePut(sheetCache, key, sheet, SHEET_CACHE_MAX);
+    } else {
+      step += EXPRESSIONS.length;
+    }
     out.push({ face, sheet });
-    yield { i, total: seeds.length, face, sheet, all: out };
+    yield { i, index: step, total, face, sheet, all: out };
+  }
+  if (worst > 30 && typeof console !== 'undefined') {
+    console.info(`portraits: slowest frame ${worst.toFixed(1)}ms (budget 30ms)`);
   }
   return out;
 }

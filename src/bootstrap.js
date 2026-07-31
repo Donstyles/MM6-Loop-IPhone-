@@ -72,6 +72,7 @@ export async function startGame(shell) {
 
   const session = new Session(engine, party);
   const hud = new HUD(session, ui);
+  session.hud = hud;
   setSession(session, hud);
 
   session.modules = { partyMod, questMod, combatMod, monsterMod, itemMod, regionMod, dungeonMod, spriteMod, vfxMod };
@@ -90,6 +91,13 @@ export async function startGame(shell) {
             const bus = session.audio.musicBus || session.audio.master || null;
             if (ctx) session.music = new musicMod.Music(ctx, bus);
           }
+          // Bake the ambience beds this region needs now rather than stalling
+          // the first time something asks for them.
+          if (session.audio.prerender) {
+            session.audio.prerender([session.ambienceId || 'amb_forest', 'amb_wind']);
+          }
+          if (session.audio.setAmbience) session.audio.setAmbience(session.ambienceId || 'amb_forest');
+          if (session.music) session.music.play(session.musicTrack || 'field');
         } catch (e) { console.warn('audio init failed', e); }
         removeEventListener('pointerdown', kick);
       };
@@ -225,7 +233,10 @@ export async function loadRegion(session, regionId, seed, entry = null) {
   const map = outdoorMap(region);
   session.setMap(map, regionId, entry);
   populateRegion(session, region, seed);
-  if (session.music) session.music.play(region.music || 'field');
+  session.musicTrack = region.music || 'field';
+  session.ambienceId = region.ambience || 'amb_forest';
+  if (session.music) session.music.play(session.musicTrack);
+  if (session.audio && session.audio.setAmbience) session.audio.setAmbience(session.ambienceId);
   session.message(`You arrive in ${region.name}.`);
 }
 
@@ -237,7 +248,10 @@ export async function loadDungeon(session, spec, seed, entry = null) {
   const map = dungeonMap(d);
   session.setMap(map, spec.id || 'dungeon', entry);
   populateDungeon(session, d, seed);
-  if (session.music) session.music.play(d.music || 'dungeon');
+  session.musicTrack = d.music || 'dungeon';
+  session.ambienceId = d.ambience || 'amb_dungeon';
+  if (session.music) session.music.play(session.musicTrack);
+  if (session.audio && session.audio.setAmbience) session.audio.setAmbience(session.ambienceId);
   session.message(`You enter ${d.name || 'the dungeon'}.`);
 }
 

@@ -13,17 +13,14 @@
 // ---------------------------------------------------------------------------
 
 import { rampCss, ramp } from '../../core/palette.js';
-import { clamp } from '../../core/rng.js';
+
 import * as F from '../../art/font.js';
 import { priceMultipliers } from '../../game/stats.js';
+import { itemName, itemValue, itemDescription, itemDef, shopStock } from '../../game/items.js';
 import {
-  itemName, itemValue, itemDescription, itemDef, shopStock, makeItem,
-} from '../../game/items.js';
-import {
-  HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, rngFor,
-  paintWall, paintFloor, paintShelf, paintCounter, paintClutter, vignette,
-  activeMember, charName, partyGold, spend, earn, say,
-  C_WHITE, C_GOLD, C_CANARY, C_DIM, C_RED, C_LEARN,
+  HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, rngFor, paintWall,
+  paintFloor, paintShelf, paintCounter, paintClutter, vignette, activeMember, charName,
+  partyGold, spend, earn, say, C_WHITE, C_GOLD, C_CANARY, C_DIM, C_RED,
 } from './dialogue.js';
 
 // ---------------------------------------------------------------------------

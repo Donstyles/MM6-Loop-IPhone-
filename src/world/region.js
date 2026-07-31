@@ -246,7 +246,7 @@ export const REGIONS = {
       { name: 'The Necromancers\' Guild', theme: 'crypt', rooms: 16, levels: 3 },
       { name: 'Blackshire Crypt', theme: 'crypt', rooms: 14, levels: 2 },
     ],
-    weather: 'fog',
+    weather: 'cloudy',
   },
 
   white_cap: {

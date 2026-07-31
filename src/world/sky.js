@@ -108,8 +108,8 @@ export function skyTexture(kind = 'plansky3') {
       const cloud = smoothstep(0.42, 0.74, n);
       // Base sky is a pale hazy blue - MM6's plate is much lighter than memory
       // suggests, because the grey multiply only ever darkens it from here.
-      const base = rampSample('sky', 0.70 + fine * 0.12);
-      const lit = mixC(base, [240, 240, 236], cloud);
+      const base = rampSample('sky', 0.88 + fine * 0.10);
+      const lit = mixC(base, [248, 248, 244], cloud);
       // Underside shading of each bank.
       const under = smoothstep(0.40, 0.62, tileFbm2(u * 3 + 0.05, v * 3 + 0.09, 3, 4, 0.55, seed));
       p.setArr(x, y, scaleC(lit, 0.90 + 0.14 * under));
@@ -330,11 +330,15 @@ export function buildSky(scene, opts = {}) {
 
     // Sky tint: the region's colour cast times the time-of-day grey, capped at
     // 248/255 the way the engine pins sky fog.
+    //
+    // The tint multiplies an already-decoded (linear) texture sample, but MM6's
+    // multiply happens on 8-bit sRGB palette values, so raise it to 2.2 to get
+    // the same visual result. Skipping this washes every sky out by ~40%.
     const skyCap = 248 / 255;
     mat.uniforms.uTint.value.setRGB(
-      Math.min(skyCap, g * state.skyTintRGB[0]),
-      Math.min(skyCap, g * state.skyTintRGB[1]),
-      Math.min(skyCap, g * state.skyTintRGB[2]),
+      Math.pow(Math.min(skyCap, g * state.skyTintRGB[0]), 2.2),
+      Math.pow(Math.min(skyCap, g * state.skyTintRGB[1]), 2.2),
+      Math.pow(Math.min(skyCap, g * state.skyTintRGB[2]), 2.2),
     );
 
     // Two separate systems, exactly as the engine has them.
@@ -361,10 +365,12 @@ export function buildSky(scene, opts = {}) {
       const dv = clamp(density, 0, 1);
       const v = ((1 - dv) * 200 + dv * 31) / 255;
       const k = 0.62;
+      // Authored in sRGB; three's working space is linear, so say so.
       fog.color.setRGB(
         lerpN(v, state.plate.r * g, k),
         lerpN(v, state.plate.g * g, k),
         lerpN(v * 1.01, state.plate.b * g, k),
+        THREE.SRGBColorSpace,
       );
       fog.near = use.weak;
       fog.far = use.weak + Math.max(1, use.strong - use.weak) / cap;
@@ -376,7 +382,7 @@ export function buildSky(scene, opts = {}) {
       // plate's own mean tinted exactly like the sky quad above it. Using the
       // identical colour for fog target and sub-horizon fill is what makes the
       // seam disappear; fading toward black instead leaves a dark rim.
-      state.haze.setRGB(state.plate.r * g, state.plate.g * g, state.plate.b * g);
+      state.haze.setRGB(state.plate.r * g, state.plate.g * g, state.plate.b * g, THREE.SRGBColorSpace);
       const maxA = Math.min(cap, 0.58);
       fog.color.copy(state.haze);
       fog.near = SHADEMIST_DIST * 0.75;

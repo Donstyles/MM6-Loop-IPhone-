@@ -10,13 +10,11 @@
 
 import { layout } from '../../core/layout.js';
 import { rampCss } from '../../core/palette.js';
-import { clamp } from '../../core/rng.js';
+
 import * as F from '../../art/font.js';
 import { PORTRAIT_W, PORTRAIT_H } from '../../art/portraits.js';
 import { maxHP, maxSP, xpForLevel } from '../../game/stats.js';
-import {
-  Screen, A, portraitOf, gold, charName, glow, C_WHITE, C_GOLD, C_CANARY, C_DIM,
-} from './dialogue.js';
+import { Screen, A, portraitOf, gold, charName, glow, C_WHITE, C_GOLD, C_CANARY, C_DIM } from './dialogue.js';
 
 const BOX = { w: 360, h: 226 };
 

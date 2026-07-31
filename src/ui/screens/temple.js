@@ -12,10 +12,9 @@ import { clamp } from '../../core/rng.js';
 import * as F from '../../art/font.js';
 import { healCost, worstCondition, CONDITIONS, maxHP, maxSP } from '../../game/stats.js';
 import {
-  HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, hotText,
-  paintWall, paintFloor, paintClutter, vignette, members, activeMember, charName,
-  partyGold, spend, hasCondition, clearCondition, conditionIds,
-  C_WHITE, C_GOLD, C_CANARY, C_DIM, C_RED, C_GREEN, C_LEARN,
+  HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, paintWall, paintFloor,
+  paintClutter, vignette, members, activeMember, charName, partyGold, spend, hasCondition,
+  clearCondition, conditionIds, C_WHITE, C_CANARY, C_DIM, C_RED, C_GREEN,
 } from './dialogue.js';
 
 const GODS = ['The Sun', 'The Moon', 'The Sky', 'The Forge', 'The Deep'];

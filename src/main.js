@@ -117,9 +117,12 @@ function tickGame(dt) {
     if (top.fullFrame) {
       top.draw(uiCtx);
     } else {
+      // Panels own everything above the party bar: the character sheet's
+      // paperdoll and a shop's dialogue column both legitimately paint over the
+      // right-hand panel, so only the bottom bar is protected.
       uiCtx.save();
       uiCtx.beginPath();
-      uiCtx.rect(layout.view.x, layout.view.y, layout.view.w, layout.view.h);
+      uiCtx.rect(0, 0, layout.w, layout.hud.y);
       uiCtx.clip();
       top.draw(uiCtx);
       uiCtx.restore();
@@ -186,7 +189,13 @@ function handleHudButtons() {
     else if (b.id === 'quickref') openScreen('quickref');
     else if (b.id === 'options') openScreen('options');
     else if (b.id === 'turnbased') session.toggleTurnBased();
-    else if (b.id.startsWith('char')) session.activeChar = parseInt(b.id.slice(4), 10);
+    else if (b.id === 'datetime') session.message(`${session.clock.formatDate()}, ${session.clock.format()}`);
+    else if (b.id.startsWith('tab:')) {
+      // The five book spines at the foot of the right column.
+      const tab = b.id.slice(4);
+      if (tab === 'maps') openScreen('mapscreen');
+      else openScreen('questlog', { tab });
+    } else if (b.id.startsWith('char')) session.activeChar = parseInt(b.id.slice(4), 10);
   }
 }
 

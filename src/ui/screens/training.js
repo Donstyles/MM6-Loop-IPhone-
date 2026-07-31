@@ -10,14 +10,11 @@
 import { rampCss } from '../../core/palette.js';
 import { clamp } from '../../core/rng.js';
 import * as F from '../../art/font.js';
+import { xpForLevel, trainingCost, maxHP, maxSP, CLASSES } from '../../game/stats.js';
 import {
-  xpForLevel, levelForXP, trainingCost, maxHP, maxSP, CLASSES,
-} from '../../game/stats.js';
-import {
-  HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold,
-  paintWall, paintFloor, paintShelf, paintClutter, vignette,
-  members, charName, partyGold, spend,
-  C_WHITE, C_GOLD, C_CANARY, C_DIM, C_RED, C_GREEN, C_LEARN,
+  HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, paintWall, paintFloor,
+  paintShelf, paintClutter, vignette, members, charName, partyGold, spend, C_WHITE, C_GOLD,
+  C_CANARY, C_DIM, C_RED, C_GREEN,
 } from './dialogue.js';
 import { LevelUpScreen } from './levelup.js';
 

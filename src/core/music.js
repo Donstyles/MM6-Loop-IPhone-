@@ -846,6 +846,13 @@ export class Music {
     try { this.vib.start(0); } catch (e) { /* offline contexts start at 0 anyway */ }
 
     this._ready = buildKit(ctx.sampleRate).then((k) => { this.kit = k; return true; });
+
+    // Park the scheduler while the tab is hidden whether or not the shell
+    // remembered to wire it up. Offline render contexts have no tab.
+    if (!ctx.startRendering && typeof document !== 'undefined') {
+      this._onVis = () => { if (document.hidden) this.suspend(); else this.resume(); };
+      document.addEventListener('visibilitychange', this._onVis);
+    }
   }
 
   ready() { return this._ready; }

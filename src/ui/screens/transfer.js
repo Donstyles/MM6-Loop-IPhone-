@@ -9,13 +9,11 @@
 // ---------------------------------------------------------------------------
 
 import { rampCss, ramp } from '../../core/palette.js';
-import { clamp, Rand, fbm2, valueNoise2 } from '../../core/rng.js';
+import { clamp, Rand, fbm2 } from '../../core/rng.js';
 import * as F from '../../art/font.js';
 import {
-  HouseScreen, PANEL, A, plate, baked, glow, poly, washPixels, vignette, gold,
-  yesNo, optionList, OPTION, dlgRect, exitButton, hotText,
-  members, partyGold, spend, say,
-  C_WHITE, C_GOLD, C_CANARY, C_DIM, C_RED, C_GREEN, C_BODY,
+  HouseScreen, PANEL, A, baked, poly, washPixels, gold, yesNo, optionList, OPTION, dlgRect,
+  exitButton, partyGold, spend, say, C_WHITE, C_GOLD, C_CANARY, C_DIM, C_RED, C_BODY,
 } from './dialogue.js';
 
 /**

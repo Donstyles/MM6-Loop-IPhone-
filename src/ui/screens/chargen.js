@@ -11,17 +11,14 @@
 
 import { layout } from '../../core/layout.js';
 import { rampCss } from '../../core/palette.js';
-import { clamp, Rand } from '../../core/rng.js';
+import { Rand } from '../../core/rng.js';
 import * as F from '../../art/font.js';
-import { PORTRAIT_W, PORTRAIT_H, makeFace } from '../../art/portraits.js';
-import {
-  CLASSES, BASE_CLASSES, STATS, STAT_IDS, maxHP, maxSP, armorClass, statBonus,
-} from '../../game/stats.js';
+import { PORTRAIT_W, PORTRAIT_H } from '../../art/portraits.js';
+import { CLASSES, BASE_CLASSES, STATS, maxHP, maxSP, armorClass, statBonus } from '../../game/stats.js';
 import { CLASS_START_SKILLS, skillById } from '../../game/skills.js';
 import {
-  Screen, A, portraitOf, baked, glow, poly, plate, washPixels, vignette, gold,
-  paintWall, paintFloor, paintClutter, drawWrapped,
-  C_WHITE, C_GOLD, C_CANARY, C_DIM, C_RED, C_GREEN, C_LEARN, hotText,
+  Screen, A, portraitOf, baked, glow, poly, plate, vignette, gold, paintWall, paintFloor,
+  drawWrapped, C_WHITE, C_GOLD, C_CANARY, C_DIM, C_RED, C_GREEN, C_LEARN, hotText,
 } from './dialogue.js';
 
 const POOL = 25;

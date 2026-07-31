@@ -50,12 +50,13 @@ export function octantFor(actorYaw, angleToCam) {
 // deliberately no rim, no outline and no cel banding, because the 256-colour
 // palettisation is what does the banding.
 const LIGHT_D = {
-  keyDir: [-0.46, 0.62, 0.64],
-  fillDir: [0.58, -0.30, 0.30],
-  fillCol: [0.30, 0.38, 0.58],
-  ambient: 0.28,
-  key: 0.92,
-  fill: 0.16,
+  keyDir: [-0.58, 0.66, 0.48],
+  fillDir: [0.62, -0.28, 0.24],
+  fillCol: [0.28, 0.36, 0.56],
+  ambient: 0.22,
+  key: 1.05,
+  fill: 0.14,
+  wrap: 0.15,   // how much of the key wraps past the terminator
   bands: 0,
 };
 
@@ -66,81 +67,158 @@ void main() {
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }`;
 
+// One material for the whole model: colour and self-illumination ride in on
+// vertex attributes so every limb of a creature merges into a handful of draw
+// calls instead of one per box.
+const VERT_VC = `
+attribute vec3 aColor;
+attribute float aEmissive;
+varying vec3 vN;
+varying vec3 vC;
+varying float vE;
+void main() {
+  vN = normalize(normalMatrix * normal);
+  vC = aColor;
+  vE = aEmissive;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}`;
+
 const FRAG = `
-uniform vec3 uColor;
-uniform float uEmissive;
 uniform vec3 uKeyDir;
 uniform vec3 uFillDir;
 uniform vec3 uFillCol;
 uniform float uAmbient;
 uniform float uKey;
 uniform float uFill;
+uniform float uWrap;
 uniform float uBands;
 varying vec3 vN;
+varying vec3 vC;
+varying float vE;
 void main() {
   vec3 N = normalize(vN);
   float nd = dot(N, uKeyDir);
-  // half-lambert wrap keeps the dark side coloured instead of black, the way
-  // hand-painted sprite art shades a form.
-  float k = max(nd, 0.0) * 0.78 + (nd * 0.5 + 0.5) * 0.22;
+  // Mostly hard lambert with a sliver of wrap: the shadow side has to drop to
+  // roughly a third of the lit side or a low-poly figure reads as a paper
+  // cut-out at 64 px.
+  float k = max(nd, 0.0) * (1.0 - uWrap) + (nd * 0.5 + 0.5) * uWrap;
   float f = max(dot(N, uFillDir), 0.0);
   float s = uAmbient + uKey * k;
   // uBands > 0 forces discrete shading; MM6 did not do this, the palette did,
   // so the default is 0 and the gradient stays smooth until it is palettised.
   if (uBands > 0.5) s = floor(s * uBands + 0.5) / uBands;
-  vec3 c = uColor * s + uFillCol * (f * uFill) * (0.35 + uColor);
-  c = mix(c, uColor * (1.0 + 0.25 * s), uEmissive);
+  vec3 c = vC * s + uFillCol * (f * uFill) * (0.35 + vC);
+  c = mix(c, vC * (1.0 + 0.25 * s), vE);
   gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
 }`;
 
-const CEL_CACHE = new Map();
+let _celMat = null;
 let _lightSig = '';
 
-function celMaterial(hex, emissive, L) {
-  const sig = L.keyDir.join() + L.ambient + L.key + L.fill + L.bands + L.fillCol.join();
-  if (sig !== _lightSig) { CEL_CACHE.forEach((m) => m.dispose()); CEL_CACHE.clear(); _lightSig = sig; }
-  const key = `${hex}|${emissive}`;
-  let m = CEL_CACHE.get(key);
-  if (m) return m;
-  m = new THREE.ShaderMaterial({
-    vertexShader: VERT,
+function celMaterial(L) {
+  const sig = JSON.stringify(L);
+  if (_celMat && sig === _lightSig) return _celMat;
+  if (_celMat) _celMat.dispose();
+  _lightSig = sig;
+  _celMat = new THREE.ShaderMaterial({
+    vertexShader: VERT_VC,
     fragmentShader: FRAG,
     uniforms: {
-      // raw sRGB values - the shader writes the final byte, no colour
-      // management, no tone mapping, so what we read back is what we drew.
-      uColor: { value: new THREE.Vector3(((hex >> 16) & 255) / 255, ((hex >> 8) & 255) / 255, (hex & 255) / 255) },
-      uEmissive: { value: emissive },
+      // Raw sRGB values in, final byte out - no colour management, no tone
+      // mapping, so what we read back is exactly what the shader drew.
       uKeyDir: { value: new THREE.Vector3().fromArray(L.keyDir).normalize() },
       uFillDir: { value: new THREE.Vector3().fromArray(L.fillDir).normalize() },
       uFillCol: { value: new THREE.Vector3().fromArray(L.fillCol) },
       uAmbient: { value: L.ambient },
       uKey: { value: L.key },
       uFill: { value: L.fill },
+      uWrap: { value: L.wrap === undefined ? 0.15 : L.wrap },
       uBands: { value: L.bands },
     },
     side: THREE.DoubleSide,   // wings, leaves and banners are single quads
     toneMapped: false,
     fog: false,
   });
-  CEL_CACHE.set(key, m);
-  return m;
+  return _celMat;
 }
 
-/** Swap every mesh onto a cel material, remembering what was there. */
-function applyCel(root, L) {
-  const saved = [];
-  root.traverse((o) => {
-    if (!o.isMesh) return;
-    const src = o.material;
-    const hex = src.color ? src.color.getHex(THREE.SRGBColorSpace) : 0xffffff;
-    const em = (src.userData && src.userData.emissive) || 0;
-    saved.push([o, src]);
-    o.material = celMaterial(hex, em, L);
-  });
-  return saved;
+const _m4 = new THREE.Matrix4();
+const _m3 = new THREE.Matrix3();
+const _v3 = new THREE.Vector3();
+
+/**
+ * Collapse every Group's direct mesh children into one vertex-coloured mesh.
+ *
+ * A creature is 40-80 little boxes, and the sheet renders it 140 times, so the
+ * bake is entirely draw-call bound. Limb transforms live on the Groups (the
+ * animation only ever rotates Groups), so the meshes inside a Group are rigid
+ * relative to each other and can be baked together. This typically takes a
+ * humanoid from ~70 draw calls a frame to ~14.
+ */
+function flattenModel(root, L) {
+  const mat = celMaterial(L);
+  const added = [];
+  const hidden = [];
+  const groups = [];
+  root.traverse((o) => { if (o.isGroup || o.isObject3D && !o.isMesh) groups.push(o); });
+  for (const g of groups) {
+    const meshes = [];
+    for (const c of g.children) if (c.isMesh && c.visible) meshes.push(c);
+    if (!meshes.length) continue;
+    let total = 0;
+    const parts = [];
+    for (const m of meshes) {
+      let geo = m.geometry;
+      const tmp = !!geo.index;
+      if (tmp) geo = geo.toNonIndexed();
+      if (!geo.attributes.normal) geo.computeVertexNormals();
+      parts.push({ m, geo, tmp });
+      total += geo.attributes.position.count;
+    }
+    const P = new Float32Array(total * 3);
+    const N = new Float32Array(total * 3);
+    const C = new Float32Array(total * 3);
+    const E = new Float32Array(total);
+    let o = 0;
+    for (const part of parts) {
+      const { m, geo } = part;
+      m.updateMatrix();
+      _m4.copy(m.matrix);
+      _m3.getNormalMatrix(_m4);
+      const src = m.material;
+      const hex = src.color ? src.color.getHex(THREE.SRGBColorSpace) : 0xffffff;
+      const cr = ((hex >> 16) & 255) / 255, cg = ((hex >> 8) & 255) / 255, cb = (hex & 255) / 255;
+      const em = (src.userData && src.userData.emissive) || 0;
+      const pos = geo.attributes.position, nor = geo.attributes.normal;
+      for (let i = 0; i < pos.count; i++, o++) {
+        _v3.fromBufferAttribute(pos, i).applyMatrix4(_m4);
+        P[o * 3] = _v3.x; P[o * 3 + 1] = _v3.y; P[o * 3 + 2] = _v3.z;
+        _v3.fromBufferAttribute(nor, i).applyMatrix3(_m3).normalize();
+        N[o * 3] = _v3.x; N[o * 3 + 1] = _v3.y; N[o * 3 + 2] = _v3.z;
+        C[o * 3] = cr; C[o * 3 + 1] = cg; C[o * 3 + 2] = cb;
+        E[o] = em;
+      }
+      if (part.tmp) geo.dispose();
+      m.visible = false;
+      hidden.push(m);
+    }
+    const merged = new THREE.BufferGeometry();
+    merged.setAttribute('position', new THREE.BufferAttribute(P, 3));
+    merged.setAttribute('normal', new THREE.BufferAttribute(N, 3));
+    merged.setAttribute('aColor', new THREE.BufferAttribute(C, 3));
+    merged.setAttribute('aEmissive', new THREE.BufferAttribute(E, 1));
+    const mesh = new THREE.Mesh(merged, mat);
+    mesh.frustumCulled = false;
+    g.add(mesh);
+    added.push([g, mesh]);
+  }
+  return { added, hidden };
 }
 
-function restoreMaterials(saved) { for (const [o, m] of saved) o.material = m; }
+function unflatten(flat) {
+  for (const [g, mesh] of flat.added) { g.remove(mesh); mesh.geometry.dispose(); }
+  for (const m of flat.hidden) m.visible = true;
+}
 
 // --- atlas layout ----------------------------------------------------------
 
@@ -301,7 +379,7 @@ export function bakeSheet(renderer, builderFn, opts = {}) {
   _cam.updateMatrixWorld(true);
 
   // --- render -------------------------------------------------------------
-  const saved = applyCel(model.root, L);
+  const flat = flattenModel(model.root, L);
   _pivot.clear();
   _pivot.add(model.root);
   _pivot.rotation.set(0, 0, 0);
@@ -357,7 +435,7 @@ export function bakeSheet(renderer, builderFn, opts = {}) {
   renderer.setScissor(0, 0, renderer.domElement.width, renderer.domElement.height);
 
   _pivot.clear();
-  restoreMaterials(saved);
+  unflatten(flat);
   if (!keepModel && model.dispose) model.dispose();
 
   // --- CPU pass -----------------------------------------------------------
@@ -522,11 +600,22 @@ function rimOutline(d, lay) {
 
 const STATIC_ACTIONS = { stand: { frames: 1, loop: false, fps: 1 } };
 
+/**
+ * Cell budget scaled to the subject. A rat baked into a 96 px cell is 96 px of
+ * fill rate and readback for a creature that is 24 px on screen; sizing the
+ * cell to the model keeps the whole preload proportional to what is actually
+ * visible.
+ */
+function cellBudget(height, lo, hi, k) {
+  return Math.max(lo, Math.min(hi, Math.round(height * k / 4) * 4));
+}
+
 /** `kind` is a monster id ('GoblinB') or a bare family id ('Goblin'). */
 export function bakeCreatureSheet(renderer, kind, seed = 1, opts = {}) {
   const def = CREATURE_DEFS[kind] || CREATURE_FAMILIES[kind];
+  const h = def ? def.height : 192;
   return bakeSheet(renderer, (s) => buildCreature(kind, s), {
-    kind, seed, actions: ACTIONS, maxCellH: 96, maxAtlas: 1024,
+    kind, seed, actions: ACTIONS, maxCellH: cellBudget(h, 36, 96, 0.42), maxAtlas: 1024,
     aspect: def ? def.aspect : 0, ...opts,
   });
 }
@@ -541,7 +630,8 @@ export function bakeNPCSheet(renderer, archetype, seed = 1, opts = {}) {
 export function bakeFloraSheet(renderer, kind, seed = 1, opts = {}) {
   const def = FLORA_DEFS[kind];
   return bakeSheet(renderer, (s) => buildFlora(kind, s), {
-    kind, seed, actions: STATIC_ACTIONS, maxCellH: 224, maxAtlas: 1024, margin: 1.04, ...opts,
+    kind, seed, actions: STATIC_ACTIONS,
+    maxCellH: cellBudget(def ? def.h : 400, 48, 192, 0.20), maxAtlas: 1024, margin: 1.04, ...opts,
   });
 }
 
@@ -549,7 +639,8 @@ export function bakePropSheet(renderer, kind, seed = 1, opts = {}) {
   const def = PROP_DEFS[kind];
   return bakeSheet(renderer, (s) => buildProp(kind, s), {
     kind, seed, actions: STATIC_ACTIONS,
-    maxCellH: def && def.item ? 48 : 96, maxAtlas: 1024, margin: 1.06, ...opts,
+    maxCellH: def && def.item ? 40 : cellBudget(def ? def.h : 100, 48, 112, 0.62),
+    maxAtlas: 1024, margin: 1.06, ...opts,
   });
 }
 

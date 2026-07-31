@@ -4,7 +4,7 @@ const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-119
 const p = await b.newPage({ viewport:{width:1280,height:960} });
 p.on('pageerror', e => console.log('[PAGEERROR]', e.message.slice(0,160)));
 p.on('console', m => { if (m.type()==='error') console.log('[err]', m.text().slice(0,180)); });
-await p.goto('http://127.0.0.1:5174/', { waitUntil:'domcontentloaded' });
+await p.goto('http://127.0.0.1:5174/?skip=portraits,sprites', { waitUntil:'domcontentloaded' });
 const t0 = Date.now();
 try { await p.waitForFunction('window.__gameReady === true', { timeout: 420000 }); }
 catch { console.log('TIMEOUT'); }

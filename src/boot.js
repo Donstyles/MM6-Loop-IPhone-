@@ -158,28 +158,15 @@ export class Boot {
    * rest bake on demand (the sheet cache makes that a one-time cost each).
    */
   async _spriteWorkList() {
+    // Baking the whole set in one stage spikes memory hard enough to lose the
+    // tab, and `getSheet` caches on first use anyway, so we preload only the
+    // scenery you see immediately and let the bestiary bake as it spawns.
     const flora = await safeImport('./art/models/flora.js');
-    const props = await safeImport('./art/models/props.js');
-    const creatures = await safeImport('./art/models/creatures.js');
     const list = [];
-    for (const k of (flora?.FLORA_KINDS || [])) list.push({ category: 'flora', kind: k, seed: 1 });
-    for (const k of (props?.PROP_KINDS || [])) list.push({ category: 'prop', kind: k, seed: 1 });
-
-    // The bestiary the first region can actually throw at you. Everything else
-    // bakes the first time it is spawned.
-    const starters = [
-      'BloodsuckerA', 'GoblinA', 'GoblinB', 'GoblinC',
-      'RatA', 'BatA', 'SpiderA', 'FighterLeathA',
-      'PeasantM1A', 'PeasantF1A', 'GuardA', 'SkeletonA',
-    ];
-    const all = creatures?.CREATURE_KINDS || [];
-    const pick = starters.filter((k) => all.includes(k));
-    // If the roster ids differ from what we expect, fall back to the first few.
-    const chosen = pick.length >= 6 ? pick : all.slice(0, 16);
-    for (const k of chosen) list.push({ category: 'creature', kind: k, seed: 1 });
-
-    const npcs = ['peasant_m', 'peasant_f', 'merchant', 'guard', 'noble_m', 'noble_f'];
-    for (const k of npcs) list.push({ category: 'npc', kind: k, seed: 1 });
+    const scenery = ['oak', 'pine', 'birch', 'bush', 'rock_small', 'rock_large', 'grass_tuft'];
+    const floraKinds = flora?.FLORA_KINDS || [];
+    for (const k of scenery) if (floraKinds.includes(k)) list.push({ category: 'flora', kind: k, seed: 1 });
+    for (const k of ['peasant_m', 'peasant_f', 'guard']) list.push({ category: 'npc', kind: k, seed: 1 });
     return list;
   }
 
