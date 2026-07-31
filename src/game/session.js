@@ -140,30 +140,60 @@ export class Session {
     this.turnBased = false;
   }
 
-  applyFog() {
-    if (!this.map) return;
-    const f = this.map.fog;
-    const scene = this.engine.scene;
-    const nightK = this.map.indoor ? 0 : this.nightFactor();
-    const c = f.color.clone();
-    if (nightK > 0) c.lerp(new THREE.Color(0x0a1020), nightK * 0.82);
-    if (!scene.fog) scene.fog = new THREE.Fog(c.getHex(), f.near, f.far);
-    scene.fog.color.copy(c);
-    scene.fog.near = f.near;
-    scene.fog.far = f.far;
-    this.sprites.setFog(c, f.near, f.far);
-    if (this.map.setFogColor) this.map.setFogColor(c);
+  /**
+   * MM6's day/night is a single greyscale multiply applied identically to the
+   * sky, the terrain and every sprite - which is exactly why the world reads as
+   * tonally unified despite mixing polygons and billboards. Returns 1.0 at
+   * 13:00, 0.373 (#5F5F5F) at dawn and dusk, and 0.153 (#272727) at night.
+   */
+  dayTint() {
+    const h = this.clock.hour, m = this.clock.minute;
+    if (h < 5 || h >= 21) return 39 / 255;
+    const minutes = 60 * (h - 5) + m;              // 0 at 05:00 .. 960 at 21:00
+    const v = minutes >= 480 ? 960 - minutes : minutes;
+    const maxDim = 20 - (v / 480) * 20;            // 20 at dawn/dusk, 0 at 13:00
+    return (255 - Math.min(216, 8 * maxDim)) / 255;
   }
 
-  /** 0 at midday, 1 in the dead of night. */
-  nightFactor() {
-    const t = this.clock.timeOfDay;           // 0..1, 0 = midnight
-    const h = t * 24;
-    if (h >= 7 && h <= 18) return 0;
-    if (h > 18 && h < 21) return (h - 18) / 3;
-    if (h > 4 && h < 7) return 1 - (h - 4) / 3;
-    return 1;
+  /** Per-day weather roll: MM6 picks none/light/medium/dense fog per map. */
+  fogBands() {
+    const day = Math.floor(this.clock.minutes / DAY_MINUTES);
+    const roll = (Math.sin(day * 12.9898 + (this.mapId || '').length * 78.233) * 43758.5453) % 1;
+    const r = Math.abs(roll);
+    if (r < 0.62) return { near: 4096, far: 8192 };   // clear-ish: only a soft horizon
+    if (r < 0.88) return { near: 0, far: 4096 };      // medium
+    return { near: 0, far: 2048 };                    // dense
   }
+
+  applyFog() {
+    if (!this.map) return;
+    const scene = this.engine.scene;
+    const indoor = this.map.indoor;
+    const k = indoor ? 1 : this.dayTint();
+
+    // Haze is the same grey the world is being multiplied by, so geometry
+    // dissolves into the sky instead of fogging toward a separate colour.
+    const c = indoor
+      ? this.map.fog.color.clone()
+      : new THREE.Color(k, k, k);
+
+    let near = this.map.fog.near, far = this.map.fog.far;
+    if (!indoor) {
+      const b = this.fogBands();
+      near = b.near; far = Math.min(b.far, 8192);
+    }
+
+    if (!scene.fog) scene.fog = new THREE.Fog(c.getHex(), near, far);
+    scene.fog.color.copy(c);
+    scene.fog.near = near;
+    scene.fog.far = far;
+    this.sprites.setFog(c, near, far);
+    if (this.map.setFogColor) this.map.setFogColor(c, k);
+    this.engine.setIndoor(indoor);
+  }
+
+  /** Retained for callers that want a simple 0..1 darkness value. */
+  nightFactor() { return 1 - this.dayTint(); }
 
   // --- frame ---------------------------------------------------------------
 
@@ -249,11 +279,11 @@ export class Session {
   }
 
   updateTint() {
-    const n = this.map && this.map.indoor ? 0 : this.nightFactor();
-    // Night is a cool desaturating wash, never a pure darkening - MM6's nights
-    // stay legible and blue rather than going black.
-    const r = 1 - n * 0.55, g = 1 - n * 0.50, b = 1 - n * 0.30;
-    this.engine.setTint(r, g, b);
+    // Pure grey, never a blue "movie night" wash - MM6 multiplies all three
+    // channels by the same value, which is why its nights look washed-out dark
+    // rather than moonlit.
+    const k = this.map && this.map.indoor ? 1 : this.dayTint();
+    this.engine.setTint(k, k, k);
     this.engine.setFade(this.transition.alpha);
   }
 

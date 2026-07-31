@@ -222,7 +222,7 @@ export function quantizeImageData(img) {
 // A 32^3 RGB cube where each cell holds the nearest palette colour. Sampled
 // with NEAREST filtering in the post pass, preceded by an ordered dither, this
 // reproduces 8-bit output on the GPU for the cost of one texture fetch.
-export const LUT_SIZE = 32;
+export const LUT_SIZE = 48;
 
 let _lutData = null;
 export function buildPaletteLUT() {

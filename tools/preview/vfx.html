@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>VFX preview</title>
+<style>
+  html, body { margin: 0; background: #14161a; color: #d8c47a; font: 12px/1.4 monospace; }
+  h2 { font: bold 14px monospace; color: #e8d89a; margin: 14px 0 6px 12px; }
+  canvas { display: block; image-rendering: pixelated; }
+  #wrap3d { position: relative; width: 1400px; height: 520px; }
+  #wrap3d canvas { position: absolute; left: 0; top: 0; }
+  #labels { pointer-events: none; }
+  #err { color: #ff8080; white-space: pre-wrap; padding: 8px 12px; }
+</style>
+</head>
+<body>
+<h2>1 &mdash; effect atlases, 2x zoom</h2>
+<canvas id="sheet" width="1400" height="100"></canvas>
+<h2>2 &mdash; world scale, live</h2>
+<div id="wrap3d">
+  <canvas id="gl" width="1400" height="520"></canvas>
+  <canvas id="labels" width="1400" height="520"></canvas>
+</div>
+<div id="err"></div>
+
+<script type="module">
+import * as THREE from 'three';
+import { EFFECT_IDS, getEffectSheet } from '../../src/art/vfxart.js';
+import { SpriteRenderer } from '../../src/ents/billboard.js';
+import { VFXSystem } from '../../src/ents/vfx.js';
+import { Pix, grainFill, blotch, toTexture } from '../../src/art/texcanvas.js';
+
+const errEl = document.getElementById('err');
+window.addEventListener('error', (e) => { errEl.textContent += e.message + '\n'; });
+
+// ---------------------------------------------------------------- contact sheet
+const ZOOM = 2;
+const PAGE = 1400;
+const PAD = 12;
+
+const sheets = EFFECT_IDS.map((id) => getEffectSheet(id));
+
+// Measure first so the canvas can be sized in one go.
+function layout() {
+  let y = PAD;
+  const rowsOut = [];
+  for (const s of sheets) {
+    const cells = s.frames * s.angles;
+    const cw = s.fw * ZOOM + 2, ch = s.fh * ZOOM + 2;
+    const perRow = Math.max(1, Math.floor((PAGE - PAD * 2) / cw));
+    const rows = Math.ceil(cells / perRow);
+    rowsOut.push({ s, cells, cw, ch, perRow, y: y + 16 });
+    y += 16 + rows * ch + 10;
+  }
+  return { rowsOut, height: y };
+}
+const L = layout();
+const sc = document.getElementById('sheet');
+sc.height = L.height;
+const g = sc.getContext('2d');
+g.imageSmoothingEnabled = false;
+// Checkerboard so masked-out pixels are unmistakable.
+for (let yy = 0; yy < sc.height; yy += 8) {
+  for (let xx = 0; xx < sc.width; xx += 8) {
+    g.fillStyle = ((xx / 8 + yy / 8) & 1) ? '#1b1e23' : '#23272e';
+    g.fillRect(xx, yy, 8, 8);
+  }
+}
+for (const r of L.rowsOut) {
+  const s = r.s;
+  g.fillStyle = '#e8d89a';
+  g.font = 'bold 12px monospace';
+  g.fillText(`${s.id}  ${s.frames}f @${s.fps}fps${s.loop ? ' loop' : ''}${s.angles > 1 ? ' x' + s.angles + ' angles' : ''}  ${s.fw}x${s.fh}px  ${s.worldW}x${s.worldH}u`, PAD, r.y - 4);
+  for (let i = 0; i < r.cells; i++) {
+    const col = i % r.perRow, row = (i / r.perRow) | 0;
+    const dx = PAD + col * r.cw, dy = r.y + row * r.ch;
+    g.strokeStyle = '#3a4048';
+    g.strokeRect(dx + 0.5, dy + 0.5, s.fw * ZOOM + 1, s.fh * ZOOM + 1);
+    const sx = (i % s.cols) * s.fw, sy = ((i / s.cols) | 0) * s.fh;
+    g.drawImage(s.canvas, sx, sy, s.fw, s.fh, dx + 1, dy + 1, s.fw * ZOOM, s.fh * ZOOM);
+  }
+}
+
+// ---------------------------------------------------------------- live 3D
+const glCanvas = document.getElementById('gl');
+const renderer = new THREE.WebGLRenderer({ canvas: glCanvas, antialias: false });
+renderer.setPixelRatio(1);
+renderer.setSize(1400, 520, false);
+const scene = new THREE.Scene();
+const SKY = 0x6a7d94;
+scene.background = new THREE.Color(SKY);
+scene.fog = new THREE.Fog(SKY, 3000, 14000);
+
+const camera = new THREE.PerspectiveCamera(55, 1400 / 520, 10, 30000);
+camera.position.set(0, 330, 2050);
+camera.lookAt(0, 240, -400);
+
+const gp = new Pix(64, 64);
+grainFill(gp, 'grass', { period: 10, octaves: 5, seed: 12, lo: 0.22, hi: 0.7, contrast: 1.15 });
+blotch(gp, { period: 3, seed: 40, amount: 0.3 });
+const gtex = toTexture(gp, { dither: 12 });
+gtex.repeat.set(80, 80);
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(40000, 40000), new THREE.MeshBasicMaterial({ map: gtex, fog: true }));
+ground.rotation.x = -Math.PI / 2;
+scene.add(ground);
+
+const sr = new SpriteRenderer(scene);
+sr.setFog(new THREE.Color(SKY), 4000, 16000);
+const vfx = new VFXSystem(sr);
+
+// 3 rows x 12 columns, one effect each, so a still frame shows the lot.
+const COLS = 12;
+const ROW_Z = [500, -350, -1200];
+const slots = [];
+EFFECT_IDS.forEach((id, i) => {
+  const row = (i / COLS) | 0;
+  const col = i % COLS;
+  const x = (col - (COLS - 1) / 2) * 340;
+  const z = ROW_Z[Math.min(ROW_Z.length - 1, row)];
+  slots.push({ id, x, y: 240, z, handle: null, wait: i * 0.11 });
+});
+
+const loopIds = new Set(['flame_pillar', 'immolation_aura', 'buff_shimmer', 'portal',
+  'torch_flame', 'campfire', 'wisp_glow', 'fire_bolt', 'fireball', 'ice_shard',
+  'rock_shard', 'blades', 'meteor', 'dark_ray', 'arrow']);
+
+const projCtx = {
+  drawDistance: 20000,
+  groundAt: (x, z, y) => 0,
+  hitEntity: () => null,
+};
+
+let shotTimer = 0;
+let shotIdx = 0;
+const PROJ = [
+  { id: 'fireball', impact: 'fire_burst', speed: 1500 },
+  { id: 'ice_shard', impact: 'ice_burst', speed: 1800 },
+  { id: 'arrow', impact: 'spark_hit', speed: 2200 },
+  { id: 'rock_shard', impact: 'earth_burst', speed: 1300 },
+];
+
+function spawn(s) {
+  if (loopIds.has(s.id)) {
+    s.handle = vfx.ambient(s.id, s.x, s.y, s.z, { phase: Math.random() * 3 });
+    s.wait = 1e9;
+  } else {
+    s.handle = vfx.burst(s.id, s.x, s.y, s.z, {});
+    const sh = getEffectSheet(s.id);
+    s.wait = sh.frames / sh.fps + 0.35;
+  }
+}
+
+const labels = document.getElementById('labels');
+const lg = labels.getContext('2d');
+const v3 = new THREE.Vector3();
+
+let last = performance.now();
+let frames = 0;
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+
+  for (const s of slots) {
+    s.wait -= dt;
+    if (s.wait <= 0) spawn(s);
+  }
+
+  shotTimer -= dt;
+  if (shotTimer <= 0) {
+    shotTimer = 0.55;
+    const p = PROJ[shotIdx % PROJ.length]; shotIdx++;
+    const fromX = -1800, toX = 1800;
+    const zz = 1300;
+    vfx.projectile(p.id, { x: fromX, y: 220, z: zz }, { x: toX - fromX, y: 0, z: 0 }, {
+      speed: p.speed, range: 1400 + Math.random() * 1600, impactId: p.impact,
+    });
+  }
+
+  vfx.update(dt, projCtx);
+  sr.begin();
+  vfx.render(sr, camera, projCtx);
+  sr.end();
+  renderer.render(scene, camera);
+
+  lg.clearRect(0, 0, 1400, 520);
+  lg.font = '10px monospace';
+  lg.textAlign = 'center';
+  for (const s of slots) {
+    v3.set(s.x, s.y - 190, s.z).project(camera);
+    if (v3.z > 1) continue;
+    const sx = (v3.x * 0.5 + 0.5) * 1400, sy = (-v3.y * 0.5 + 0.5) * 520;
+    lg.fillStyle = '#000';
+    lg.fillText(s.id, sx + 1, sy + 1);
+    lg.fillStyle = '#ffe98a';
+    lg.fillText(s.id, sx, sy);
+  }
+  lg.textAlign = 'left';
+  lg.fillStyle = '#ffe98a';
+  lg.fillText(`live effects ${vfx.count}  drawn ${vfx.drawn}  batches ${sr.drawCalls}`, 8, 14);
+
+  frames++;
+  if (frames === 3) window.__ready = true;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

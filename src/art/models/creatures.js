@@ -420,9 +420,11 @@ function buildBipedRig(H, P, C, rnd) {
   const torsoD = H * P.torsoD;
   const armUp = H * P.armLen * 0.52, armFo = H * P.armLen * 0.48, armR = H * P.armR;
   const thighL = legLen * 0.52, shinL = legLen * 0.48, legR = H * P.legR;
-  const serpentLower = P.lower === 'serpent';
+  const lowerKind = P.lower || 'legs';
+  const serpentLower = lowerKind === 'serpent';
+  const floatLower = lowerKind === 'none' || lowerKind === 'smoke';
 
-  const bodyY = serpentLower ? H * 0.42 : legLen;
+  const bodyY = serpentLower ? H * 0.42 : floatLower ? H * 0.50 : legLen;
   const body = grp(0, bodyY, 0);
   root.add(body);
   const torso = grp(0, 0, 0);
@@ -506,6 +508,17 @@ function buildBipedRig(H, P, C, rnd) {
     coil.add(tip);
     tip.add(box(H * 0.05, H * 0.05, H * 0.26, C.skin2, { taper: 0.2, taperZ: 0.2, z: -H * 0.13 }));
     legs.tailTip = tip;
+  } else if (floatLower) {
+    // Ghosts, wraiths and genies taper into smoke instead of standing on legs.
+    const col = lowerKind === 'smoke' ? C.cloth2 : C.cloth;
+    const tail = grp(0, 0, 0);
+    body.add(tail);
+    tail.add(box(hipW * 1.25, bodyY * 1.02, torsoD * 1.25, col, { pivot: 'top', taper: 0.22, taperZ: 0.22 }));
+    for (let i = 0; i < 4; i++) {
+      tail.add(box(hipW * 0.34, bodyY * (0.45 + i * 0.12), torsoD * 0.34, mulHex(col, 0.85 + i * 0.08),
+        { pivot: 'top', x: (i - 1.5) * hipW * 0.30, z: ((i % 2) - 0.5) * torsoD * 0.5, taper: 0.15, rz: (i - 1.5) * 0.12 }));
+    }
+    legs.tailTip = tail;
   } else {
     for (const [key, s] of [['L', -1], ['R', 1]]) {
       const hip = grp(s * H * P.stance, 0, 0);
@@ -662,6 +675,29 @@ function poseBiped(r, action, t) {
         r.shinL.rotation.x += e * 0.9; r.shinR.rotation.x += e * 0.5;
       }
       if (r.wingL) { r.wingL.rotation.z += e * 0.9; r.wingR.rotation.z += -e * 0.9; }
+      break;
+    }
+    case 'bored': {
+      // A fidget: shift weight, glance around, roll the shoulders. Idle
+      // monsters play this between stands, which is what stops a room full of
+      // goblins from looking like statues.
+      const p = t * PI * 2;
+      const sw = Math.sin(p), sh2 = Math.sin(p * 2);
+      r.body.position.x += sw * H * 0.020;
+      r.body.rotation.z += -sw * 0.05;
+      r.body.position.y += -Math.abs(sw) * H * 0.010;
+      r.torso.rotation.y += sw * 0.16;
+      r.torso.rotation.x += sh2 * 0.05;
+      r.head.rotation.y += Math.sin(p + 1.2) * 0.55;
+      r.head.rotation.x += Math.sin(p * 2 + 0.5) * 0.14;
+      r.armL.rotation.x += -0.22 * Math.max(0, sh2) + sw * 0.10;
+      r.armR.rotation.x += -0.22 * Math.max(0, -sh2) - sw * 0.10;
+      r.foreL.rotation.x += -0.45 * Math.max(0, sh2);
+      r.foreR.rotation.x += -0.45 * Math.max(0, -sh2);
+      if (hasLegs) { r.legL.rotation.x += -sw * 0.12; r.legR.rotation.x += sw * 0.12; }
+      if (r.tail0) r.tail0.rotation.y += sw * 0.6;
+      if (r.wingL) { r.wingL.rotation.z += Math.max(0, sh2) * 0.55; r.wingR.rotation.z += -Math.max(0, sh2) * 0.55; }
+      if (r.tailTip) r.tailTip.rotation.z += sw * 0.10;
       break;
     }
     default: { // stand
@@ -866,6 +902,19 @@ function poseQuad(r, action, t) {
       for (let i = 0; i < r.tails.length; i++) r.tails[i].rotation.x += e * 0.4;
       break;
     }
+    case 'bored': {
+      // sniff the ground, shake, flick the tail
+      const p = t * PI * 2, sw = Math.sin(p);
+      const dip = Math.max(0, Math.sin(p - 0.6));
+      r.neck.rotation.x += dip * 0.75;
+      r.head.rotation.x += dip * 0.35;
+      r.head.rotation.y += Math.sin(p * 2) * 0.30;
+      r.body.rotation.z += sw * 0.07;
+      r.body.position.y += -dip * H * 0.03;
+      for (let i = 0; i < r.tails.length; i++) r.tails[i].rotation.y += Math.sin(p * 2 - i * 0.6) * 0.45;
+      if (r.wingL) { r.wingL.rotation.z += Math.max(0, sw) * 0.5; r.wingR.rotation.z += -Math.max(0, sw) * 0.5; }
+      break;
+    }
     default: {
       const s = Math.sin(t * PI * 2);
       r.body.position.y += s * H * 0.008;
@@ -1022,6 +1071,16 @@ function poseInsect(r, action, t) {
       for (const a of r.claws) a.rotation.x += e * 1.0;
       break;
     }
+    case 'bored': {
+      const p = t * PI * 2, s = Math.sin(p);
+      r.body.position.y += Math.abs(Math.sin(p * 2)) * H * 0.03;
+      r.body.rotation.z += s * 0.10;
+      r.head.rotation.y += Math.sin(p * 2) * 0.35;
+      for (const L of r.legs) { L.hip.rotation.y += Math.sin(p * 2 + L.i) * 0.22; L.knee.rotation.x += Math.max(0, Math.sin(p * 2 + L.i)) * 0.3; }
+      if (r.root.userData.stinger) r.root.userData.stinger.rotation.x += -Math.max(0, s) * 0.5;
+      for (const a of r.claws) a.rotation.x += -Math.max(0, Math.sin(p * 2)) * 0.4;
+      break;
+    }
     default: {
       const s = Math.sin(t * PI * 2);
       r.body.position.y += s * H * 0.008;
@@ -1125,6 +1184,15 @@ function poseSerpent(r, action, t) {
       r.head.rotation.x += e * 0.9;
       r.root.scale.y *= 1 - e * 0.45;
       r.coil.scale.set(1 + e * 0.25, 1, 1 + e * 0.25);
+      break;
+    }
+    case 'bored': {
+      // tongue-flick sway: bigger amplitude than stand, plus a head dip
+      wave(0.30, 1, 0);
+      r.head.rotation.y += Math.sin(t * PI * 2 - 1.5) * 0.55;
+      r.head.rotation.x += Math.sin(t * PI * 4) * 0.22;
+      r.segs[0].rotation.x += Math.sin(t * PI * 2) * 0.14;
+      r.coil.rotation.y += Math.sin(t * PI * 2) * 0.35;
       break;
     }
     default: {
@@ -1242,6 +1310,13 @@ function poseBlob(r, action, t) {
         r.lobes[i].scale.set(1 + e * (0.5 + k * 0.9), 1 - e * 0.82, 1 + e * (0.5 + k * 0.9));
       }
       for (const a of r.arms) { a.rotation.z += (a.position.x < 0 ? -1 : 1) * e * 0.9; a.position.y -= e * H * 0.45; }
+      break;
+    }
+    case 'bored': {
+      wob(0.075, 1);
+      r.body.position.y += Math.abs(Math.sin(t * PI * 2)) * H * 0.045;
+      r.body.rotation.z += Math.sin(t * PI * 2) * 0.10;
+      for (const a of r.arms) a.rotation.x += Math.sin(t * PI * 4) * 0.5;
       break;
     }
     default: {
@@ -1423,6 +1498,15 @@ function poseDragon(r, action, t) {
       if (r.wingL) { r.wingL.rotation.z += e * 1.0; r.wingR.rotation.z += -e * 1.0; }
       break;
     }
+    case 'bored': {
+      const p = t * PI * 2, s = Math.sin(p);
+      allNecks((g, i, k) => { g.rotation.y += Math.sin(p + k * 1.7 - i * 0.5) * 0.30; g.rotation.x += Math.sin(p * 2) * 0.10; });
+      for (const h of r.heads) { h.rotation.y += Math.sin(p * 2) * 0.4; h.rotation.x += Math.sin(p * 2 + 1) * 0.2; }
+      for (let i = 0; i < r.tails.length; i++) r.tails[i].rotation.y += Math.sin(p - i * 0.5) * 0.35;
+      if (r.wingL) { r.wingL.rotation.z += Math.max(0, s) * 0.85; r.wingR.rotation.z += -Math.max(0, s) * 0.85; }
+      r.body.position.y += Math.abs(s) * H * 0.012;
+      break;
+    }
     default: {
       const s = Math.sin(t * PI * 2);
       r.body.position.y += s * H * 0.008;
@@ -1490,7 +1574,162 @@ function poseWisp(r, action, t) {
       r.body.position.y -= e * H * 0.25;
       break;
     }
+    case 'bored':
+      r.body.position.y += Math.sin(spin) * H * 0.07;
+      r.body.position.x += Math.sin(spin * 2) * H * 0.05;
+      r.body.scale.setScalar(1 + Math.sin(spin * 3) * 0.12);
+      break;
     default: r.body.position.y += Math.sin(spin) * H * 0.02; r.body.scale.setScalar(1 + Math.sin(spin * 2) * 0.05); break;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Archetype: floating eye (Beholder family) and static machine (Reactor)
+// ---------------------------------------------------------------------------
+
+function buildEyeRig(H, P, C, rnd) {
+  const root = new THREE.Group();
+  const body = grp(0, H * 0.52, 0);
+  root.add(body);
+  const R = H * 0.34;
+  body.add(sph(R, C.body, { detail: 1, sy: 0.94 }));
+  // one huge iris facing forward - the whole silhouette hangs off this
+  body.add(sph(R * 0.62, C.skin, { z: R * 0.62, sz: 0.55, detail: 1 }));
+  body.add(sph(R * 0.36, C.glow, { z: R * 0.92, sz: 0.4, emissive: 0.5, detail: 1 }));
+  body.add(sph(R * 0.16, 0x08080c, { z: R * 1.02, sz: 0.4 }));
+  const lids = [];
+  for (const s of [-1, 1]) {
+    const l = sph(R * 0.72, mulHex(C.body, 0.8), { z: R * 0.55, y: s * R * 0.52, sz: 0.45, sy: 0.55 });
+    body.add(l);
+    lids.push(l);
+  }
+  const stalks = [];
+  const n = P.stalks === undefined ? 5 : P.stalks;
+  for (let i = 0; i < n; i++) {
+    const a = -0.9 + (i / Math.max(1, n - 1)) * 1.8;
+    const g = grp(Math.sin(a) * R * 0.55, R * 0.72, -Math.cos(a) * R * 0.25);
+    g.rotation.z = -Math.sin(a) * 0.8;
+    g.rotation.x = -0.25;
+    body.add(g);
+    const len = H * 0.30 * (0.7 + 0.3 * Math.cos(a));
+    g.add(box(H * 0.035, len, H * 0.035, C.skin2, { pivot: 'bottom', taper: 0.6 }));
+    const tip = grp(0, len, 0);
+    g.add(tip);
+    tip.add(sph(H * 0.055, C.body, {}));
+    tip.add(sph(H * 0.032, C.glow, { z: H * 0.04, emissive: 0.7 }));
+    stalks.push(g);
+  }
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * PI * 2;
+    body.add(box(H * 0.028, H * 0.16, H * 0.028, C.skin2,
+      { pivot: 'top', x: Math.cos(a) * R * 0.5, z: Math.sin(a) * R * 0.5, y: -R * 0.75, taper: 0.2 }));
+  }
+  const rig = { root, body, torso: body, head: body, stalks, lids, arch: 'eye', b: { H, bodyY: H * 0.52 } };
+  rig.snap = snapshot(root);
+  return rig;
+}
+
+function poseEye(r, action, t) {
+  restore(r.snap);
+  const H = r.b.H, p = t * PI * 2;
+  const stalkWave = (amp, sp) => {
+    for (let i = 0; i < r.stalks.length; i++) {
+      r.stalks[i].rotation.x += Math.sin(p * sp - i * 0.8) * amp;
+      r.stalks[i].rotation.z += Math.cos(p * sp - i * 0.8) * amp * 0.6;
+    }
+  };
+  switch (action) {
+    case 'walk':
+      r.body.position.y += Math.sin(p) * H * 0.045;
+      r.body.rotation.z += Math.sin(p) * 0.08;
+      stalkWave(0.28, 1);
+      break;
+    case 'attack': {
+      const u = t < 0.4 ? -ez(t / 0.4) * 0.5 : t < 0.6 ? -0.5 + ez((t - 0.4) / 0.2) * 1.7 : 1.2 * (1 - ez((t - 0.6) / 0.4));
+      r.body.position.z += u * H * 0.14;
+      r.body.scale.set(1 - u * 0.06, 1 - u * 0.06, 1 + u * 0.14);
+      stalkWave(0.18, 3);
+      break;
+    }
+    case 'cast': {
+      const u = t < 0.5 ? ez(t / 0.5) : 1 - ez((t - 0.5) / 0.5) * 0.5;
+      r.body.position.y += u * H * 0.07;
+      for (let i = 0; i < r.stalks.length; i++) r.stalks[i].rotation.x += -u * 0.75;
+      for (const l of r.lids) l.position.y *= 1 + u * 0.5;
+      break;
+    }
+    case 'hit': {
+      const u = t < 0.5 ? t * 2 : 2 - t * 2;
+      r.body.scale.set(1 + u * 0.18, 1 - u * 0.2, 1 + u * 0.18);
+      r.body.position.z += -H * 0.04 * u;
+      stalkWave(0.4 * u, 5);
+      break;
+    }
+    case 'die': case 'dead': {
+      const e = action === 'dead' ? 1 : ez(t);
+      r.body.position.y -= e * H * 0.44;
+      r.body.scale.set(1 + e * 0.35, 1 - e * 0.62, 1 + e * 0.35);
+      for (let i = 0; i < r.stalks.length; i++) { r.stalks[i].rotation.x += e * 1.4; r.stalks[i].rotation.z += (i - 2) * e * 0.4; }
+      for (const l of r.lids) l.position.y *= 1 - e * 0.85;
+      break;
+    }
+    case 'bored':
+      r.body.position.y += Math.sin(p) * H * 0.03;
+      r.body.rotation.y += Math.sin(p) * 0.35;
+      stalkWave(0.35, 2);
+      for (const l of r.lids) l.position.y *= 1 - Math.max(0, Math.sin(p * 2)) * 0.55;
+      break;
+    default:
+      r.body.position.y += Math.sin(p) * H * 0.018;
+      stalkWave(0.12, 1);
+      break;
+  }
+}
+
+function buildMachineRig(H, P, C, rnd) {
+  const root = new THREE.Group();
+  const body = grp(0, 0, 0);
+  root.add(body);
+  body.add(box(H * 0.85, H * 0.14, H * 0.85, mulHex(C.metal, 0.7), { pivot: 'bottom' }));
+  body.add(cyl(H * 0.30, H * 0.38, H * 0.72, C.metal, { seg: 9, pivot: 'bottom', y: H * 0.14 }));
+  const core = grp(0, H * 0.86, 0);
+  body.add(core);
+  core.add(cyl(H * 0.24, H * 0.24, H * 0.02, mulHex(C.metal, 1.3), { seg: 9 }));
+  core.add(sph(H * 0.22, C.glow, { y: H * 0.22, emissive: 1, detail: 1 }));
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * PI * 2;
+    core.add(box(H * 0.07, H * 0.55, H * 0.07, C.metal,
+      { pivot: 'bottom', x: Math.cos(a) * H * 0.30, z: Math.sin(a) * H * 0.30, rz: -Math.cos(a) * 0.22, rx: Math.sin(a) * 0.22 }));
+  }
+  body.add(cyl(H * 0.20, H * 0.26, H * 0.16, mulHex(C.metal, 1.15), { seg: 9, y: H * 1.36 }));
+  for (let i = 0; i < 3; i++) {
+    body.add(box(H * 0.90, H * 0.05, H * 0.90, mulHex(C.metal, 1.2 - i * 0.15), { y: H * (0.24 + i * 0.24) }));
+  }
+  for (const s of [-1, 1]) {
+    body.add(box(H * 0.10, H * 0.60, H * 0.10, mulHex(C.metal, 0.85), { pivot: 'bottom', x: s * H * 0.44, y: H * 0.14 }));
+    body.add(sph(H * 0.07, C.glow, { x: s * H * 0.44, y: H * 0.78, emissive: 0.9 }));
+  }
+  const rig = { root, body, torso: body, head: core, core, arch: 'machine', b: { H, bodyY: 0 } };
+  rig.snap = snapshot(root);
+  return rig;
+}
+
+function poseMachine(r, action, t) {
+  restore(r.snap);
+  const p = t * PI * 2;
+  const pulse = 1 + Math.sin(p) * 0.09;
+  r.core.scale.setScalar(pulse);
+  r.core.rotation.y += p * 0.5;
+  if (action === 'die' || action === 'dead') {
+    const e = action === 'dead' ? 1 : ez(t);
+    r.core.scale.setScalar(Math.max(0.05, 1 - e * 0.95));
+    r.body.rotation.z += e * 0.12;
+    r.body.position.y -= e * r.b.H * 0.06;
+  } else if (action === 'attack' || action === 'cast') {
+    const u = t < 0.5 ? ez(t / 0.5) : 1 - ez((t - 0.5) / 0.5);
+    r.core.scale.setScalar(1 + u * 0.5);
+  } else if (action === 'hit') {
+    r.body.rotation.z += (t < 0.5 ? t * 2 : 2 - t * 2) * 0.05;
   }
 }
 

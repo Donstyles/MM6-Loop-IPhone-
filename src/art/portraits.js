@@ -91,20 +91,21 @@ function bl(b, i, c, a) {
 // colours ever reaches the framebuffer.
 
 const SKIN_TONES = {
-  pale: { t: 0.86, tint: [1.00, 0.97, 0.96], ruddy: 0.34 },
-  fair: { t: 0.78, tint: [1.00, 0.96, 0.90], ruddy: 0.30 },
-  tan: { t: 0.66, tint: [0.99, 0.90, 0.78], ruddy: 0.26 },
-  olive: { t: 0.60, tint: [0.93, 0.92, 0.72], ruddy: 0.20 },
-  brown: { t: 0.46, tint: [0.90, 0.76, 0.60], ruddy: 0.18 },
-  dark: { t: 0.34, tint: [0.84, 0.66, 0.50], ruddy: 0.14 },
+  pale: { t: 0.74, tint: [1.00, 0.98, 0.98], ruddy: 0.34 },
+  fair: { t: 0.66, tint: [1.00, 0.97, 0.93], ruddy: 0.30 },
+  tan: { t: 0.55, tint: [1.00, 0.94, 0.84], ruddy: 0.26 },
+  olive: { t: 0.48, tint: [0.94, 0.94, 0.78], ruddy: 0.20 },
+  brown: { t: 0.36, tint: [0.94, 0.82, 0.68], ruddy: 0.18 },
+  dark: { t: 0.25, tint: [0.90, 0.74, 0.58], ruddy: 0.14 },
 };
 
 function skinRamp(tone) {
   const s = SKIN_TONES[tone];
-  const mid = [rs('flesh', s.t)[0] * s.tint[0], rs('flesh', s.t)[1] * s.tint[1], rs('flesh', s.t)[2] * s.tint[2]];
+  const f = rs('flesh', s.t);
+  const mid = [f[0] * s.tint[0], f[1] * s.tint[1], f[2] * s.tint[2]];
   // Shadows go warm and red (blood under the skin), highlights go pale and warm.
-  const deep = mixC(scl(mid, 0.30), rs('blood', 0.30), s.ruddy);
-  const lite = mixC(scl(mid, 1.16), rs('sand', 0.92), 0.30);
+  const deep = mixC(scl(mid, 0.26), rs('blood', 0.26), s.ruddy);
+  const lite = mixC(scl(mid, 1.42), rs('sand', 0.86), 0.26);
   return { mid, deep, lite, ruddy: s.ruddy };
 }
 
@@ -550,9 +551,12 @@ function paint(face, ex, W, H) {
       nx *= nl; ny *= nl;
       const nzc = nl;
 
+      // A face turned to camera barely varies its normal, so the modelling has
+      // to be exaggerated the way a painter does it: low ambient, and the key
+      // term pushed through a curve that opens up the mid-tones.
       const diff = Math.max(0, nx * LX + ny * LY + nzc * LZ);
-      const ambSky = 0.245 + 0.115 * Math.max(0, -ny);
-      let sh = (ambSky * ex.amb + diff * 0.90) * ex.key;
+      const ambSky = 0.155 + 0.085 * Math.max(0, -ny);
+      let sh = (ambSky * ex.amb + Math.pow(diff, 1.35) * 0.82) * ex.key;
 
       // --- occlusion -------------------------------------------------------
       const dxf = X - fx;
@@ -983,7 +987,7 @@ function hairParams(face, g, hairlineY, hcx, hcy, rx, ry) {
   const st = face.hairStyle;
   const r = new Rand((face.noiseSeed ^ 0x77) >>> 0);
   const p = {
-    style: st, hcx, hcy, rx, ry,
+    style: st, hcx, hcy, rx, ry, g,
     hairlineY,
     capRX: rx * 1.10, capRY: ry * 1.13,
     capCY: hcy - ry * 0.14,
@@ -1041,51 +1045,58 @@ function hairlineAt(p, X) {
 }
 
 function hairCov(p, X, Y, sd) {
+  // Everything except the fringe is cut against a slightly shrunk copy of the
+  // head, so hanging hair sits beside and behind the face instead of over it.
+  const vv = clamp((Y - p.hcy) / p.ry, -1, 1);
+  const wp = widthProfile(vv, p.g);
+  const hm = Math.pow(Math.abs((X - p.hcx) / (p.rx * wp * 0.90)), 2)
+    + Math.pow(Math.abs((Y - p.hcy) / (p.ry * 0.95)), 2.35);
+  const outside = 1 - cov(hm, 0.18);
+
   if (p.bald) {
-    // A fringe of hair around the back of the skull only.
-    const ring = ell(X - p.hcx, Y - p.hcy, p.rx * 1.06, p.ry * 1.06);
-    const inner = ell(X - p.hcx, Y - p.hcy, p.rx * 0.985, p.ry * 0.985);
-    const band = cov(ring, 0.12) * (1 - cov(inner, 0.12));
-    return band * smoothstep(p.hcy - p.ry * 0.05, p.hcy + p.ry * 0.12, Y)
+    const ring = ell(X - p.hcx, Y - p.hcy, p.rx * 1.08, p.ry * 1.06);
+    const band = cov(ring, 0.12) * outside;
+    return band * smoothstep(p.hcy - p.ry * 0.10, p.hcy + p.ry * 0.10, Y)
       * (1 - smoothstep(p.sideEndY, p.sideEndY + 2.5, Y));
   }
   const rough = (fb(X * 0.55, Y * 0.55, 3, sd + 200) - 0.5) * p.rough
     + (fb(X * 1.6, Y * 1.6, 2, sd + 201) - 0.5) * p.rough * 0.6;
 
-  // cap: the mass over the skull, bounded below by the hairline
+  // cap: mass over the skull, bounded below by the hairline (this one is
+  // allowed over the face - it is the fringe)
   const e = ell(X - p.hcx, Y - p.capCY, p.capRX, p.capRY);
-  let a = cov(e + rough * 0.20, 0.16);
+  const capE = cov(e + rough * 0.20, 0.16);
   const hl = hairlineAt(p, X);
   const below = smoothstep(hl + 0.9, hl - 0.9, Y);   // 1 above the hairline
-  // sides: hair continues down past the hairline along the head edges
-  const sideT = smoothstep(p.rx * 0.60, p.rx * 0.90, Math.abs(X - p.hcx));
-  const sideLive = sideT * (1 - smoothstep(p.sideEndY - 3, p.sideEndY + 1.5, Y));
-  a *= clamp(below + sideLive, 0, 1);
+  let a = capE * below;
+
+  // the same mass continuing down beside the face
+  a = Math.max(a, capE * outside * (1 - smoothstep(p.sideEndY - 3, p.sideEndY + 1.5, Y)));
 
   // back mass hanging outside the head silhouette
   if (p.backW > 0) {
-    const w = p.rx * 1.02 + p.backW * (0.4 + 0.9 * smoothstep(p.hcy - p.ry * 0.3, p.backEndY, Y));
+    const w = p.rx * 1.00 + p.backW * (0.4 + 0.9 * smoothstep(p.hcy - p.ry * 0.3, p.backEndY, Y));
     const inX = smoothstep(w + 1.0, w - 0.6, Math.abs(X - p.hcx) - rough * 1.4);
-    const inY = smoothstep(p.hcy - p.ry * 0.85, p.hcy - p.ry * 0.55, Y)
+    const inY = smoothstep(p.hcy - p.ry * 0.90, p.hcy - p.ry * 0.60, Y)
       * (1 - smoothstep(p.backEndY - 5, p.backEndY, Y));
-    a = Math.max(a, inX * inY);
+    a = Math.max(a, inX * inY * outside);
   }
   if (p.tail) {
     const s = p.tail.side;
-    const tx = p.hcx + s * (p.rx * 0.90);
-    const ty = p.hcy - p.ry * 0.15;
-    const d = segDist(X, Y, tx, ty, tx + s * 3.0, ty + p.ry * 1.15 * p.tail.len);
-    a = Math.max(a, smoothstep(2.6, 1.4, d + rough * 1.5));
+    const tx = p.hcx + s * (p.rx * 0.92);
+    const ty = p.hcy - p.ry * 0.20;
+    const d = segDist(X, Y, tx, ty, tx + s * 3.2, ty + p.ry * 1.15 * p.tail.len);
+    a = Math.max(a, smoothstep(2.8, 1.5, d + rough * 1.5) * outside);
   }
   if (p.braid) {
     const s = p.braid.side;
-    const bx = p.hcx + s * (p.rx * 0.86);
-    const by = p.hcy + p.ry * 0.25;
+    const bx = p.hcx + s * (p.rx * 0.90);
+    const by = p.hcy + p.ry * 0.20;
     const t = clamp((Y - by) / (DH - by), 0, 1);
     const cxp = bx + s * 1.8 * Math.sin(t * 3.0);
-    const w = 2.4 * (1 - t * 0.35) * (0.85 + 0.25 * Math.sin(t * 11));
+    const w = 2.6 * (1 - t * 0.30) * (0.85 + 0.25 * Math.sin(t * 11));
     a = Math.max(a, smoothstep(w + 0.8, w - 0.4, Math.abs(X - cxp))
-      * smoothstep(by - 1, by + 1.5, Y));
+      * smoothstep(by - 1, by + 1.5, Y) * outside);
   }
   return clamp(a, 0, 1);
 }

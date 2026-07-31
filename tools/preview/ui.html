@@ -1,0 +1,239 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>MM6 UI art preview</title>
+<style>
+  body { background:#15171a; color:#c8c0a8; font:12px monospace; margin:12px; }
+  h2 { color:#ffd84a; font-size:13px; margin:14px 0 6px; }
+  canvas { image-rendering: pixelated; display:block; background:#000; margin-bottom:6px; }
+  .row { display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap; }
+</style>
+</head>
+<body>
+<div id="out"></div>
+<script type="module">
+import { FACES, drawText, drawTextWrapped, measure, TEXT_NORMAL, TEXT_HILITE, TEXT_HEADER,
+         TEXT_GOOD, TEXT_BAD, TEXT_RED, TEXT_LEARN, TEXT_NPC, TEXT_DARK, TEXT_HUD,
+         TEXT_HUD_SHADOW, TEXT_DIM, TEXT_GOLD } from '/src/art/font.js';
+import * as UI from '/src/art/uiart.js';
+
+const out = document.getElementById('out');
+function head(t) { const h = document.createElement('h2'); h.textContent = t; out.appendChild(h); return h; }
+function row() { const d = document.createElement('div'); d.className = 'row'; out.appendChild(d); return d; }
+function cv(w, h, zoom = 1, parent = out) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  c.style.width = (w * zoom) + 'px'; c.style.height = (h * zoom) + 'px';
+  parent.appendChild(c);
+  const g = c.getContext('2d');
+  g.imageSmoothingEnabled = false;
+  return g;
+}
+
+const PANGRAM = 'The quick brown fox jumps over the lazy dog';
+const PANGRAM2 = 'PACK MY BOX WITH FIVE DOZEN LIQUOR JUGS';
+const DIGITS = '0123456789';
+const PUNCT = '!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~';
+const EXTRA = '© • → ← ↑ ↓ ★ ♦';
+
+// --- (a) fonts -------------------------------------------------------------
+function fontBlock(face, w) {
+  const lh = FACES[face].lineHeight + 2;
+  const lines = [PANGRAM, PANGRAM2, DIGITS + '  ' + EXTRA, PUNCT];
+  const h = lh * (lines.length + 2) + 6;
+  return { lines, lh, h, w };
+}
+
+for (const face of ['small', 'normal', 'button', 'title']) {
+  head(`face: ${face}  (cell ${FACES[face].cellW}x${FACES[face].cellH})`);
+  const b = fontBlock(face, 660);
+  for (const zoom of [1, 3]) {
+    const g = cv(b.w, b.h, zoom);
+    g.fillStyle = '#2a2f2a'; g.fillRect(0, 0, b.w, b.h);
+    let y = 3;
+    for (const l of b.lines) { drawText(g, l, 3, y, { face }); y += b.lh; }
+    drawText(g, 'hover', 3, y, { face, color: TEXT_HILITE });
+    drawText(g, 'header', 70, y, { face, color: TEXT_HEADER });
+    drawText(g, 'buff', 150, y, { face, color: TEXT_GOOD });
+    drawText(g, 'drain', 210, y, { face, color: TEXT_BAD });
+    drawText(g, 'broken', 280, y, { face, color: TEXT_RED });
+    drawText(g, 'learn', 360, y, { face, color: TEXT_LEARN });
+    drawText(g, 'NPC', 430, y, { face, color: TEXT_NPC });
+    y += b.lh;
+    g.fillStyle = '#c8b48c'; g.fillRect(0, y - 2, b.w, b.lh + 2);
+    drawText(g, 'book text on page', 3, y, { face, color: TEXT_DARK, shadow: null });
+    drawText(g, 'HUD status line', 200, y, { face, color: TEXT_HUD, shadow: TEXT_HUD_SHADOW });
+    drawText(g, 'outlined', 400, y, { face, color: TEXT_HILITE, outline: '#000000', shadow: null });
+  }
+}
+
+// --- (b) icons -------------------------------------------------------------
+head(`icons (${UI.ICONS.length})`);
+for (const [sz, zoom] of [[16, 1], [16, 3]]) {
+  const cols = 16, cell = sz + 6;
+  const rows = Math.ceil(UI.ICONS.length / cols);
+  const g = cv(cols * cell, rows * cell, zoom);
+  g.fillStyle = '#3a3f38'; g.fillRect(0, 0, cols * cell, rows * cell);
+  UI.ICONS.forEach((id, i) => {
+    const x = (i % cols) * cell + 3, y = Math.floor(i / cols) * cell + 3;
+    UI.drawIcon(g, id, x, y, sz);
+  });
+}
+{
+  head('icon labels');
+  const cols = 8, cw = 130, ch = 22;
+  const rows = Math.ceil(UI.ICONS.length / cols);
+  const g = cv(cols * cw, rows * ch, 1);
+  g.fillStyle = '#2a2f2a'; g.fillRect(0, 0, cols * cw, rows * ch);
+  UI.ICONS.forEach((id, i) => {
+    const x = (i % cols) * cw + 2, y = Math.floor(i / cols) * ch + 2;
+    UI.drawIcon(g, id, x, y, 16);
+    drawText(g, id, x + 20, y + 4, { face: 'small', color: TEXT_NORMAL });
+  });
+}
+
+// --- (c) chrome samples ----------------------------------------------------
+head('panels / buttons / bars / parchment');
+{
+  const g = cv(1360, 340, 1);
+  g.fillStyle = '#101210'; g.fillRect(0, 0, 1360, 340);
+
+  UI.drawStonePanel(g, 8, 8, 180, 120, { seed: 3 });
+  drawText(g, 'plain', 12, 12, { face: 'small', color: TEXT_DIM });
+
+  UI.drawStonePanel(g, 198, 8, 180, 120, { seed: 4, gold: true });
+  drawText(g, 'gold', 202, 12, { face: 'small', color: TEXT_DIM });
+
+  UI.drawStonePanel(g, 388, 8, 180, 120, { seed: 5, gold: true, rivets: true });
+  drawText(g, 'gold+rivets', 392, 12, { face: 'small', color: TEXT_DIM });
+
+  UI.drawFrame(g, 578, 8, 200, 120, { thickness: 10 });
+  drawText(g, 'frame', 640, 56, { face: 'normal', color: TEXT_GOLD });
+
+  const p = UI.parchment(160, 120, 9);
+  g.drawImage(p, 788, 8);
+  drawTextWrapped(g, 'Aged parchment for scrolls and quest notes.', 796, 16, 144, 12,
+    { face: 'small', color: TEXT_DARK, shadow: null });
+
+  const bp = UI.bookPage(160, 120, 4);
+  g.drawImage(bp, 958, 8);
+  drawText(g, 'Spellbook', 984, 14, { face: 'normal', color: TEXT_DARK, shadow: null });
+
+  UI.drawInset(g, 1128, 8, 160, 120);
+  drawText(g, 'inset well', 1136, 16, { face: 'small', color: TEXT_DIM });
+
+  // buttons
+  let bx = 8;
+  for (const st of ['up', 'down', 'disabled']) {
+    UI.drawButton(g, bx, 144, 90, 22, 'Rest', st);
+    bx += 100;
+  }
+  UI.drawButton(g, bx, 144, 120, 22, 'Cast Spell', 'up'); bx += 130;
+  for (const id of ['rest', 'castspell', 'book', 'map', 'quest', 'torch']) {
+    g.drawImage(UI.iconButton(26, id, 'up'), bx, 142); bx += 30;
+  }
+  g.drawImage(UI.iconButton(26, 'options', 'down'), bx, 142); bx += 40;
+
+  // bars: authentic 5 x 49 vertical tubes at every threshold, plus horizontals
+  const fr = [1, 0.75, 0.5, 0.4, 0.25, 0.1, 0];
+  fr.forEach((f, i) => {
+    UI.drawStatBar(g, 10 + i * 14, 176, 5, 49, f, 'hp');
+    UI.drawStatBar(g, 17 + i * 14, 176, 5, 49, f, 'sp');
+  });
+  drawText(g, '5x49 tubes', 10, 228, { face: 'small', color: TEXT_NORMAL });
+  UI.drawStatBar(g, 116, 180, 100, 6, 0.65, 'hp');
+  UI.drawStatBar(g, 116, 190, 100, 6, 0.35, 'sp');
+
+  UI.drawScrollbar(g, 240, 176, 100, 0.3, 0.35);
+  UI.drawCheck(g, 264, 176, true);
+  UI.drawCheck(g, 264, 192, false);
+  UI.drawSlider(g, 290, 176, 100, 0.65);
+
+  UI.drawPortraitFrame(g, 420, 176, 60, 70, 'normal');
+  UI.drawPortraitFrame(g, 490, 176, 60, 70, 'active');
+  UI.drawPortraitFrame(g, 560, 176, 60, 70, 'dead');
+
+  UI.drawGoldFiligree(g, 640, 180, 200, 14, 5);
+  UI.drawDivider(g, 640, 210, 200);
+  UI.drawScrollEnds(g, 640, 224, 200, 16);
+  for (let i = 0; i < 5; i++) UI.drawGem(g, 860 + i * 12, 180, 7, ['blood', 'water', 'foliage', 'gold', 'arcane'][i]);
+  UI.drawCorner(g, 860, 200, 16, 0);
+  UI.drawCorner(g, 880, 200, 16, 1);
+  UI.drawCorner(g, 900, 200, 16, 2);
+  UI.drawCorner(g, 920, 200, 16, 3);
+  UI.drawRivets(g, 960, 176, 120, 70, 20);
+
+  UI.drawStonePanel(g, 1100, 176, 240, 150, { seed: 8, gold: true });
+  drawText(g, 'Sir Caneghem', 1220, 186, { face: 'normal', color: TEXT_GOLD, align: 'center' });
+  UI.drawDivider(g, 1112, 200, 216);
+  drawTextWrapped(g,
+    'You have entered the town of New Sorpigal. The mayor wishes to speak with you about the goblins.',
+    1114, 208, 212, 12, { face: 'small', color: TEXT_NORMAL });
+}
+
+// --- (d) mock 640x480 composition -----------------------------------------
+head('mock 640x480 frame');
+for (const zoom of [1, 2]) {
+  const g = cv(640, 480, zoom);
+  g.fillStyle = '#000'; g.fillRect(0, 0, 640, 480);
+
+  // 3D window stand-in
+  const grad = g.createLinearGradient(0, 8, 0, 360);
+  grad.addColorStop(0, '#4a6a86'); grad.addColorStop(0.55, '#7c8d6a'); grad.addColorStop(1, '#3c4432');
+  g.fillStyle = grad; g.fillRect(8, 8, 458, 352);
+
+  // side panel + hud
+  UI.drawStonePanel(g, 466, 0, 174, 352, { seed: 12, gold: true, rivets: true });
+  UI.drawStonePanel(g, 0, 352, 640, 128, { seed: 13, gold: true });
+  UI.drawFrame(g, 0, 0, 468, 362, { thickness: 8, corners: true });
+
+  // automap well
+  UI.drawInset(g, 476, 10, 154, 130);
+  drawText(g, 'New Sorpigal', 553, 144, { face: 'small', color: TEXT_GOLD, align: 'center' });
+
+  // side buttons
+  const ids = ['rest', 'quickref', 'options', 'castspell', 'book', 'map', 'quest', 'autonotes'];
+  ids.forEach((id, i) => {
+    g.drawImage(UI.iconButton(34, id, i === 3 ? 'down' : 'up'), 478 + (i % 4) * 38, 162 + Math.floor(i / 4) * 38);
+  });
+  UI.drawDivider(g, 476, 242, 154);
+  drawText(g, 'Torch Light', 553, 248, { face: 'small', color: TEXT_LINK, align: 'center' });
+  UI.drawStatBar(g, 480, 262, 146, 5, 0.7, 'sp');
+  UI.drawGoldFiligree(g, 476, 274, 154, 12, 2);
+  drawText(g, '2 Feb 1165', 553, 292, { face: 'small', color: TEXT_DIM, align: 'center' });
+  UI.drawScrollbar(g, 616, 306, 40, 0.2, 0.4);
+
+  // party bar
+  for (let i = 0; i < 4; i++) {
+    const px = 12 + i * 100;
+    UI.drawPortraitFrame(g, px, 362, 76, 88, i === 0 ? 'active' : 'normal');
+    g.fillStyle = ['#8a6a4a', '#6a5a7a', '#4a6a5a', '#7a5a4a'][i];
+    g.fillRect(px + 4, 366, 68, 80);
+    UI.drawStatBar(g, px, 452, 76, 5, [0.9, 0.5, 0.25, 1][i], 'hp');
+    UI.drawStatBar(g, px, 460, 76, 5, [0.4, 0.8, 0.6, 0.1][i], 'sp');
+    drawText(g, ['Zoltan', 'Maryn', 'Cassie', 'Roderic'][i], px + 38, 468, {
+      face: 'small', align: 'center', color: i === 0 ? TEXT_GOLD : TEXT_NORMAL,
+    });
+    UI.drawIcon(g, ['cond_good', 'cond_poison', 'cond_afraid', 'cond_asleep'][i], px + 58, 366, 16);
+  }
+  // right side of hud
+  UI.drawInset(g, 424, 362, 150, 74);
+  drawTextWrapped(g, 'You found 240 gold and a Ring of Fire.', 428, 366, 142, 12,
+    { face: 'small', color: TEXT_NORMAL });
+  UI.drawIcon(g, 'gold', 428, 440, 16);
+  drawText(g, '1,240', 448, 444, { face: 'small', color: TEXT_GOLD });
+  UI.drawIcon(g, 'food', 500, 440, 16);
+  drawText(g, '12', 520, 444, { face: 'small', color: TEXT_NORMAL });
+  for (let i = 0; i < 4; i++) {
+    g.drawImage(UI.iconButton(30, ['turnbased', 'zoom_in', 'zoom_out', 'history'][i], 'up'), 582, 362 + i * 30);
+  }
+
+  // title text over the frame
+  drawText(g, 'MIGHT AND MAGIC', 234, 150, { face: 'title', color: TEXT_GOLD, align: 'center', outline: '#1a1208' });
+}
+
+window.__ready = true;
+</script>
+</body>
+</html>

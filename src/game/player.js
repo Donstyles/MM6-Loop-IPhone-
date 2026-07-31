@@ -8,19 +8,23 @@ import * as THREE from 'three';
 // yaw-only; pitch is clamped and does not affect movement direction.
 // ---------------------------------------------------------------------------
 
+// Vanilla values, in world units and seconds. A tile is 512 units, so walking
+// crosses about three quarters of a tile per second and the party can outrun
+// every monster in the game - which is true of the original.
 export const PLAYER = {
   eyeHeight: 160,
-  radius: 90,
-  height: 190,
-  walkSpeed: 520,
-  runSpeed: 1040,
-  swimSpeed: 300,
-  gravity: 5200,
-  jumpVel: 1050,
-  stepUp: 130,
-  maxPitch: 1.05,
+  radius: 37,
+  height: 192,
+  walkSpeed: 384,
+  runSpeed: 768,
+  strafeSpeed: 288,     // three quarters of walk
+  swimSpeed: 288,
+  gravity: 1280,
+  jumpVel: 480,         // apex is 90 units, about half a step up
+  stepUp: 96,
+  maxPitch: 0.3927,     // the engine clamps pitch to +/-22.5 degrees
   turnSpeed: 2.6,
-  flySpeed: 900,
+  flySpeed: 1536,
 };
 
 export class PlayerController {
@@ -58,9 +62,11 @@ export class PlayerController {
     let speed = (run ? PLAYER.runSpeed : PLAYER.walkSpeed) * this.speedScale;
     if (this.inWater && !this.waterWalk) speed = PLAYER.swimSpeed;
     if (this.flying) speed = PLAYER.flySpeed;
+    // Strafing is deliberately slower than walking forward, as in the original.
+    const strafeK = PLAYER.strafeSpeed / PLAYER.walkSpeed;
 
-    let wishX = fx * axes.forward + rx * axes.strafe;
-    let wishZ = fz * axes.forward + rz * axes.strafe;
+    let wishX = fx * axes.forward + rx * axes.strafe * strafeK;
+    let wishZ = fz * axes.forward + rz * axes.strafe * strafeK;
     const wishLen = Math.hypot(wishX, wishZ);
     if (wishLen > 1) { wishX /= wishLen; wishZ /= wishLen; }
     const moving = wishLen > 0.02;

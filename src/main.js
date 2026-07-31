@@ -3,8 +3,6 @@ import { Engine } from './core/engine.js';
 import { computeLayout, layout, inView } from './core/layout.js';
 import { Input } from './core/input.js';
 import { UIContext, ScreenStack } from './ui/uikit.js';
-import { Session } from './game/session.js';
-import { HUD } from './ui/hud.js';
 import { Boot } from './boot.js';
 
 // ---------------------------------------------------------------------------
@@ -200,9 +198,17 @@ window.__openScreen = openScreen;
 
 async function enterTitle() {
   state = 'title';
-  const mod = await import('./bootstrap.js');
-  await mod.startGame({ engine, input, ui, screens, uiCtx, registerScreen, openScreen,
-    setSession: (s, h) => { session = s; hud = h; window.__session = s; } });
+  try {
+    const mod = await import('./bootstrap.js');
+    await mod.startGame({
+      engine, input, ui, screens, uiCtx, registerScreen, openScreen,
+      setSession: (s, h) => { session = s; hud = h; window.__session = s; },
+    });
+    window.__gameReady = true;
+  } catch (e) {
+    console.error('start failed', e);
+    window.__startError = String(e && e.stack || e);
+  }
 }
 
 // --- go --------------------------------------------------------------------

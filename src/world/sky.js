@@ -1,384 +1,399 @@
 import * as THREE from 'three';
 import { Pix, toTexture, rampSample, mixC, scaleC } from '../art/texcanvas.js';
-import { Rand, clamp, smoothstep, tileFbm2, valueNoise2, lerpN } from '../core/rng.js';
+import { Rand, clamp, smoothstep, tileFbm2, tileNoise2, valueNoise2, lerpN } from '../core/rng.js';
 
 // ---------------------------------------------------------------------------
 // Sky.
 //
-// MM6's sky is a big textured dome with one scrolling cloud layer and a strong
-// horizon band, and the single most important property is that the band matches
-// the fog colour *exactly*. The terrain fades into fog at ~6000 units and if the
-// two colours disagree you get a visible ring at the world's edge, which is the
-// most obvious "not MM6" tell there is. Everything here exists to keep those in
-// lockstep.
+// MM6 does NOT draw a skybox or a dome. `OpenGLRenderer::DrawOutdoorSky` emits a
+// single screen-space quad running from the top of the viewport down to the
+// projected horizon line, and textures it through an inverse-perspective
+// "infinite ceiling plane" mapping. That mapping is the whole look: clouds
+// compress into a fine striated band at the horizon and stretch into streaks
+// radiating from the zenith. A dome gets neither of those and reads instantly
+// as not-MM6.
+//
+// Below the horizon the engine paints a 39px fade band into the haze colour
+// and then a solid haze fill, which is what the world's far edge dissolves
+// into. We keep that colour identical to the scene fog target, because the
+// seam between them is the most visible tell there is.
+//
+// There is no sun disc, no moon, no stars and no gradient. Night is the same
+// cloud texture multiplied down to #272727.
 // ---------------------------------------------------------------------------
 
-// Zenith / mid / horizon colours through the day. sRGB, palette-snapped later.
-const DAY_KEYS = [
-  { t: 0.00, zen: [0x0a, 0x0e, 0x22], mid: [0x0d, 0x14, 0x2c], hor: [0x16, 0x1e, 0x38], sun: 0.0 },
-  { t: 0.19, zen: [0x1c, 0x24, 0x46], mid: [0x4a, 0x3c, 0x54], hor: [0x8a, 0x54, 0x48], sun: 0.15 },
-  { t: 0.26, zen: [0x37, 0x55, 0x87], mid: [0x86, 0x7e, 0x8e], hor: [0xd8, 0x94, 0x58], sun: 0.55 },
-  { t: 0.34, zen: [0x40, 0x70, 0xa8], mid: [0x86, 0xa8, 0xc6], hor: [0xbe, 0xd2, 0xdf], sun: 0.9 },
-  { t: 0.50, zen: [0x3a, 0x6c, 0xa8], mid: [0x82, 0xa6, 0xc8], hor: [0xb8, 0xcd, 0xdf], sun: 1.0 },
-  { t: 0.66, zen: [0x40, 0x6e, 0xa4], mid: [0x8e, 0xa8, 0xc0], hor: [0xc6, 0xcc, 0xcc], sun: 0.9 },
-  { t: 0.76, zen: [0x3a, 0x44, 0x74], mid: [0x8e, 0x6a, 0x6c], hor: [0xd4, 0x74, 0x40], sun: 0.45 },
-  { t: 0.84, zen: [0x18, 0x1e, 0x3e], mid: [0x2c, 0x2a, 0x44], hor: [0x54, 0x36, 0x3c], sun: 0.1 },
-  { t: 1.00, zen: [0x0a, 0x0e, 0x22], mid: [0x0d, 0x14, 0x2c], hor: [0x16, 0x1e, 0x38], sun: 0.0 },
-];
+export const FOG_HORIZON_PX = 39;
+export const FAR_CLIP = 8192;
+export const NEAR_CLIP = 32;
+export const SHADE_DIST = 2048;      // shading_dist_shade
+export const SHADEMIST_DIST = 4096;  // shading_dist_shademist
 
-function sampleDay(t) {
-  t = ((t % 1) + 1) % 1;
-  let a = DAY_KEYS[0], b = DAY_KEYS[DAY_KEYS.length - 1];
-  for (let i = 0; i < DAY_KEYS.length - 1; i++) {
-    if (t >= DAY_KEYS[i].t && t <= DAY_KEYS[i + 1].t) { a = DAY_KEYS[i]; b = DAY_KEYS[i + 1]; break; }
-  }
-  const f = b.t === a.t ? 0 : (t - a.t) / (b.t - a.t);
-  return {
-    zen: mixC(a.zen, b.zen, f),
-    mid: mixC(a.mid, b.mid, f),
-    hor: mixC(a.hor, b.hor, f),
-    sun: lerpN(a.sun, b.sun, f),
-  };
-}
-
-const _gradCache = new Map();
+/** Per-map fog classes (Outdoor.cpp fog_probability_table / SetFog). */
+export const FOG_CLASSES = {
+  none: { weak: 0, strong: 0, on: false },
+  light: { weak: 4096, strong: 8192, on: true },
+  medium: { weak: 0, strong: 4096, on: true },
+  dense: { weak: 0, strong: 2048, on: true },
+  underwater: { weak: 50, strong: 2000, on: true, color: 0x218e5a },
+};
 
 /**
- * Vertical sky gradient. Cached per (quantised time, tint, weather) so the
- * expensive palettise runs a couple of dozen times per session at most.
+ * MM6's time-of-day grey. `minutes` counted from 05:00; 0 at dawn, 960 at 21:00.
+ * Returns a 0..1 multiplier: 1.0 at 13:00, 0.372 at dawn/dusk, 0.153 at night.
  */
-function gradientTexture(tKey, tint, gloom) {
-  const key = `${tKey}|${tint[0]},${tint[1]},${tint[2]}|${gloom}`;
-  const hit = _gradCache.get(key);
-  if (hit) return hit;
+export function timeTint(hours) {
+  const h = ((hours % 24) + 24) % 24;
+  const night = h < 5 || h >= 21;
+  if (night) return 0x27 / 255;
+  const minutes = (h - 5) * 60;
+  const v = minutes >= 480 ? 960 - minutes : minutes;
+  const level = 20 - (v / 480) * 20;
+  const dim = Math.min(216, 8 * level);
+  return (255 - dim) / 255;
+}
 
-  const c = sampleDay(tKey / 48);
-  const W = 32, H = 128;
-  const p = new Pix(W, H);
-  const grey = [0x9a, 0x9e, 0xa2];
-  for (let y = 0; y < H; y++) {
-    const v = y / (H - 1);                    // 0 = zenith, 1 = below horizon
-    // Two-segment ramp with the join at 62% - MM6 skies are mostly flat colour
-    // near the top and then band hard into the horizon haze.
-    let col = v < 0.62
-      ? mixC(c.zen, c.mid, smoothstep(0, 0.62, v))
-      : mixC(c.mid, c.hor, smoothstep(0.62, 0.94, v));
-    col = [col[0] * tint[0], col[1] * tint[1], col[2] * tint[2]];
-    if (gloom > 0) col = mixC(col, scaleC(grey, 0.55 + c.sun * 0.45), gloom);
-    for (let x = 0; x < W; x++) {
-      // Slight horizontal noise stops the dome banding into perfect stripes.
-      const n = 1 + (valueNoise2(x * 0.7, y * 0.35, 7) - 0.5) * 0.05;
-      p.setArr(x, y, scaleC(col, n));
+/** Ambient / diffuse curve (OpenGLRenderer.cpp:1204). */
+export function sunTerms(hours) {
+  const h = ((hours % 24) + 24) % 24;
+  const t = h * 60;
+  const ambient = 0.15 + (Math.sin((t - 360) * Math.PI * 2 / 1440) + 1) * 0.27;
+  const night = h < 5 || h >= 21;
+  return { ambient, diffuse: night ? 0 : ambient + 0.3, night };
+}
+
+/**
+ * Sun direction. MM6's sun rides the E-W great circle only - it never has a
+ * north/south component, which is why outdoor shading in MM6 is always an
+ * east/west split and never a north-face-is-dark landscape.
+ * Returned in our Y-up convention: +X east, +Y up.
+ */
+export function sunDirection(hours) {
+  const h = ((hours % 24) + 24) % 24;
+  const minutes = clamp((h - 5) * 60, 0, 960);
+  const a = minutes * Math.PI / 960;
+  return new THREE.Vector3(Math.cos(a), Math.sin(a), 0);
+}
+
+/** Quantise a 0..1 shade to MM6's 32 grey levels: 8*(31-dim) / 255. */
+export function quantiseShade(v) {
+  const dim = clamp(Math.round(31 - clamp(v, 0, 1) * 255 / 8), 0, 31);
+  return (8 * (31 - dim)) / 255;
+}
+
+// --- cloud plate -----------------------------------------------------------
+
+const _skyTexCache = new Map();
+/**
+ * A `plansky`-style 256x256 tiling cloud plate: low contrast, high frequency,
+ * no hero feature. Everything colourful about the sky comes from this texture
+ * and the grey tint applied over it, exactly as in the original.
+ */
+export function skyTexture(kind = 'plansky3') {
+  const hit = _skyTexCache.get(kind);
+  if (hit) return hit;
+  const S = 256;
+  const p = new Pix(S, S);
+  const seed = kind.length * 977 + 3;
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const u = x / S, v = y / S;
+      // Two cloud scales plus a stretched streak term - clouds in the MM6
+      // plate are drawn as long soft banks, not fluffy puffs.
+      const big = tileFbm2(u * 3, v * 3, 3, 4, 0.55, seed);
+      const streak = tileFbm2(u * 2.2, v * 7.0, 7, 4, 0.5, seed + 11);
+      const fine = tileFbm2(u * 9, v * 9, 9, 3, 0.5, seed + 29);
+      let n = big * 0.52 + streak * 0.30 + fine * 0.18;
+      const cloud = smoothstep(0.44, 0.72, n);
+      // Base sky is a mid blue; clouds ride up toward off-white. Total value
+      // range stays narrow so the grey multiply has room to darken 32 steps.
+      const base = rampSample('sky', 0.46 + fine * 0.10);
+      const lit = mixC(base, [232, 233, 230], cloud);
+      // Underside shading of each bank.
+      const under = smoothstep(0.40, 0.62, tileFbm2(u * 3 + 0.05, v * 3 + 0.09, 3, 4, 0.55, seed));
+      p.setArr(x, y, scaleC(lit, 0.90 + 0.14 * under));
     }
   }
-  const tex = toTexture(p, { dither: 16, repeat: false, mips: false, magNearest: false });
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.ClampToEdgeWrapping;
-  _gradCache.set(key, tex);
+  const tex = toTexture(p, { dither: 12, repeat: true, mips: true, magNearest: false });
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  _skyTexCache.set(kind, tex);
   return tex;
 }
 
-let _cloudTex = null;
-function cloudTexture() {
-  if (_cloudTex) return _cloudTex;
-  const S = 128;
-  const p = new Pix(S, S);
-  for (let y = 0; y < S; y++) {
-    for (let x = 0; x < S; x++) {
-      const n = tileFbm2(x / S * 5, y / S * 5, 5, 5, 0.55, 404);
-      const a = smoothstep(0.50, 0.74, n);
-      // Lit tops, shadowed undersides, exactly like the painted MM6 cloud sheet.
-      const shade = 0.72 + 0.28 * smoothstep(0.5, 0.8, tileFbm2(x / S * 5 + 0.3, y / S * 5 - 0.3, 5, 5, 0.55, 404));
-      p.setArr(x, y, scaleC([255, 252, 246], shade), Math.round(a * 235));
-    }
-  }
-  _cloudTex = toTexture(p, { dither: 8, repeat: true, mips: true, magNearest: false });
-  return _cloudTex;
+/** Mean colour of the cloud plate, used for the sub-horizon haze fill. */
+function plateMean() {
+  return new THREE.Color(0.62, 0.67, 0.73);
 }
 
-let _discTex = null;
-function discTexture() {
-  if (_discTex) return _discTex;
-  const S = 32;
-  const p = new Pix(S, S);
-  for (let y = 0; y < S; y++) {
-    for (let x = 0; x < S; x++) {
-      const d = Math.hypot(x - S / 2 + 0.5, y - S / 2 + 0.5) / (S / 2);
-      const core = 1 - smoothstep(0.42, 0.52, d);
-      const halo = (1 - smoothstep(0.0, 1.0, d)) * 0.55;
-      const a = clamp(core + halo, 0, 1);
-      if (a <= 0.02) { p.set(x, y, 0, 0, 0, 0); continue; }
-      p.setArr(x, y, mixC([255, 220, 150], [255, 255, 244], core), Math.round(a * 255));
-    }
+// --- snow ------------------------------------------------------------------
+//
+// MM6's snow is not a particle sprite system: it is 1000 solid white
+// axis-aligned rectangles drawn in 2D inside the 3D viewport, in three size
+// classes, and the whole field scrolls horizontally with camera yaw so it feels
+// world-locked when you turn. Reproduced literally.
+
+const SNOW_N = 1000;
+
+function buildSnow() {
+  const geo = new THREE.InstancedBufferGeometry();
+  const quad = new THREE.PlaneGeometry(1, 1);
+  quad.translate(0.5, -0.5, 0);
+  geo.index = quad.index;
+  geo.attributes.position = quad.attributes.position;
+  geo.instanceCount = SNOW_N;
+
+  const px = new Float32Array(SNOW_N * 2);
+  const sz = new Float32Array(SNOW_N);
+  const rnd = new Rand(20241);
+  for (let i = 0; i < SNOW_N; i++) {
+    px[i * 2] = rnd.float(0, 1);
+    px[i * 2 + 1] = rnd.float(0, 1);
+    sz[i] = i < 700 ? 1 : i < 950 ? 2 : 4;
   }
-  _discTex = toTexture(p, { dither: 0, quantise: false, repeat: false, mips: false, magNearest: false });
-  return _discTex;
+  geo.setAttribute('iPos', new THREE.InstancedBufferAttribute(px, 2));
+  geo.setAttribute('iSize', new THREE.InstancedBufferAttribute(sz, 1));
+  geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e9);
+
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uViewport: { value: new THREE.Vector2(461, 345) } },
+    vertexShader: /* glsl */`
+      attribute vec2 iPos;
+      attribute float iSize;
+      uniform vec2 uViewport;
+      void main() {
+        // iPos is normalised viewport space; snap to whole pixels so the flakes
+        // stay crisp axis-aligned rectangles like the original blitter.
+        vec2 p = floor(iPos * uViewport) + position.xy * iSize;
+        vec2 ndc = (p / uViewport) * 2.0 - 1.0;
+        gl_Position = vec4(ndc.x, -ndc.y, -0.999, 1.0);
+      }`,
+    fragmentShader: 'void main() { gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0); }',
+    depthTest: false, depthWrite: false, fog: false,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.frustumCulled = false;
+  mesh.renderOrder = 5000;
+  mesh.visible = false;
+  return { mesh, px, sz, rnd, mat };
 }
 
-let _flakeTex = null;
-function flakeTexture() {
-  if (_flakeTex) return _flakeTex;
-  const S = 8;
-  const p = new Pix(S, S);
-  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
-    const d = Math.hypot(x - 3.5, y - 3.5) / 4;
-    const a = 1 - smoothstep(0.4, 1.0, d);
-    p.set(x, y, 240, 246, 252, Math.round(a * 255));
-  }
-  _flakeTex = toTexture(p, { dither: 0, quantise: false, repeat: false, mips: false, magNearest: false });
-  return _flakeTex;
-}
+// --- sky quad --------------------------------------------------------------
+
+const SKY_VERT = /* glsl */`
+  uniform mat4 uInvProj;
+  uniform mat3 uCamRot;
+  varying vec3 vRay;
+  varying vec2 vScreen;
+  void main() {
+    vScreen = position.xy;
+    vec4 p = uInvProj * vec4(position.xy, 1.0, 1.0);
+    vRay = uCamRot * (p.xyz / p.w);
+    gl_Position = vec4(position.xy, 0.0, 1.0);
+  }`;
+
+const SKY_FRAG = /* glsl */`
+  precision highp float;
+  uniform sampler2D uSky;
+  uniform vec3 uTint;        // time-of-day grey multiply
+  uniform vec3 uHaze;        // sub-horizon fill / fog target
+  uniform vec2 uDrift;       // self-scroll of the cloud plate
+  uniform vec2 uCamXZ;
+  uniform float uScale;      // world units per texture repeat
+  uniform float uHeight;     // notional plane height above the eye
+  uniform float uBandPx;     // 39px fade band, expressed in NDC below
+  uniform float uViewportH;
+  varying vec3 vRay;
+  varying vec2 vScreen;
+
+  void main() {
+    vec3 d = normalize(vRay);
+    // Screen-space distance to the horizon, in pixels, for the fade band.
+    float horizonPx = (d.y / max(1e-4, length(d.xz))) * uViewportH * 0.5;
+
+    if (d.y > 0.0004) {
+      // Inverse-perspective plane hit. t blows up at the horizon, which is
+      // exactly what compresses the cloud plate into a striated band there.
+      float t = uHeight / d.y;
+      vec2 uv = (uCamXZ + d.xz * t) / uScale + uDrift;
+      vec3 c = texture2D(uSky, uv).rgb * uTint;
+      // Blend into the haze across the last few pixels so the horizon line is
+      // hard but not aliased, matching the engine's fade band.
+      float f = 1.0 - smoothstep(0.0, uBandPx, horizonPx);
+      gl_FragColor = vec4(mix(c, uHaze, f * 0.97), 1.0);
+    } else {
+      // Below the horizon: solid haze fill. Terrain covers most of it; what is
+      // left is the colour the world dissolves into.
+      gl_FragColor = vec4(uHaze, 1.0);
+    }
+  }`;
 
 /**
  * @param {THREE.Scene} scene
- * @param {object} opts { camera, radius, fogNear, fogFar, tint, region }
+ * @param {object} opts { camera, region, sky:'plansky3', fogClass, timeOfDay }
  */
 export function buildSky(scene, opts = {}) {
   const camera = opts.camera || null;
-  const R = opts.radius || 7600;
   const group = new THREE.Group();
   group.name = 'sky';
-  group.renderOrder = -1000;
-  group.matrixAutoUpdate = true;
 
-  // --- dome ---------------------------------------------------------------
-  // A hemisphere plus a skirt below the horizon so the fogged-out world edge
-  // never reveals the clear colour behind it.
-  const domeGeo = new THREE.SphereGeometry(R, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.60);
-  const domeMat = new THREE.MeshBasicMaterial({
-    map: gradientTexture(24, [1, 1, 1], 0),
-    side: THREE.BackSide,
-    fog: false,
-    depthWrite: false,
+  const geo = new THREE.PlaneGeometry(2, 2);
+  const mat = new THREE.ShaderMaterial({
+    uniforms: {
+      uSky: { value: skyTexture(opts.sky || 'plansky3') },
+      uTint: { value: new THREE.Color(1, 1, 1) },
+      uHaze: { value: new THREE.Color(0.62, 0.67, 0.73) },
+      uDrift: { value: new THREE.Vector2() },
+      uCamXZ: { value: new THREE.Vector2() },
+      uScale: { value: 3400 },
+      uHeight: { value: 900 },
+      uBandPx: { value: FOG_HORIZON_PX },
+      uViewportH: { value: 345 },
+      uInvProj: { value: new THREE.Matrix4() },
+      uCamRot: { value: new THREE.Matrix3() },
+    },
+    vertexShader: SKY_VERT,
+    fragmentShader: SKY_FRAG,
     depthTest: false,
+    depthWrite: false,
+    fog: false,
   });
-  const dome = new THREE.Mesh(domeGeo, domeMat);
-  dome.renderOrder = -1000;
-  dome.frustumCulled = false;
-  group.add(dome);
+  const quad = new THREE.Mesh(geo, mat);
+  quad.frustumCulled = false;
+  quad.renderOrder = -10000;
+  group.add(quad);
 
-  // --- stars --------------------------------------------------------------
-  const starCount = 420;
-  const starPos = new Float32Array(starCount * 3);
-  const starCol = new Float32Array(starCount * 3);
-  const srnd = new Rand(90210);
-  for (let i = 0; i < starCount; i++) {
-    const a = srnd.float(0, Math.PI * 2);
-    const e = Math.acos(srnd.float(0.04, 1));
-    const r = R * 0.92;
-    starPos[i * 3] = Math.cos(a) * Math.sin(e) * r;
-    starPos[i * 3 + 1] = Math.cos(e) * r;
-    starPos[i * 3 + 2] = Math.sin(a) * Math.sin(e) * r;
-    const b = srnd.float(0.55, 1);
-    starCol[i * 3] = b; starCol[i * 3 + 1] = b; starCol[i * 3 + 2] = b * srnd.float(0.9, 1.1);
-  }
-  const starGeo = new THREE.BufferGeometry();
-  starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
-  starGeo.setAttribute('color', new THREE.BufferAttribute(starCol, 3));
-  const starMat = new THREE.PointsMaterial({
-    size: 2.5, sizeAttenuation: false, vertexColors: true,
-    fog: false, transparent: true, opacity: 0, depthWrite: false, depthTest: false,
-  });
-  const stars = new THREE.Points(starGeo, starMat);
-  stars.renderOrder = -999;
-  stars.frustumCulled = false;
-  group.add(stars);
-
-  // --- sun / moon ---------------------------------------------------------
-  const discGeo = new THREE.PlaneGeometry(1, 1);
-  const sunMat = new THREE.MeshBasicMaterial({
-    map: discTexture(), transparent: true, fog: false, depthWrite: false,
-    depthTest: false, blending: THREE.AdditiveBlending,
-  });
-  const sun = new THREE.Mesh(discGeo, sunMat);
-  sun.scale.setScalar(760);
-  sun.renderOrder = -998;
-  sun.frustumCulled = false;
-  group.add(sun);
-
-  const moonMat = new THREE.MeshBasicMaterial({
-    map: discTexture(), transparent: true, fog: false, depthWrite: false,
-    depthTest: false, color: 0xc8d4e4, opacity: 0,
-  });
-  const moon = new THREE.Mesh(discGeo, moonMat);
-  moon.scale.setScalar(520);
-  moon.renderOrder = -998;
-  moon.frustumCulled = false;
-  group.add(moon);
-
-  // --- cloud sheet --------------------------------------------------------
-  const cloudGeo = new THREE.CircleGeometry(R * 1.05, 28);
-  cloudGeo.rotateX(Math.PI / 2);
-  {
-    // Fade the sheet out at its rim so it dissolves into the horizon band
-    // instead of ending in a visible circular edge.
-    const pos = cloudGeo.attributes.position;
-    const col = new Float32Array(pos.count * 4);
-    for (let i = 0; i < pos.count; i++) {
-      const d = Math.hypot(pos.getX(i), pos.getZ(i)) / (R * 1.05);
-      col[i * 4] = 1; col[i * 4 + 1] = 1; col[i * 4 + 2] = 1;
-      col[i * 4 + 3] = 1 - smoothstep(0.42, 0.98, d);
-    }
-    cloudGeo.setAttribute('color', new THREE.BufferAttribute(col, 4));
-    const uvs = cloudGeo.attributes.uv;
-    for (let i = 0; i < uvs.count; i++) uvs.setXY(i, pos.getX(i) / 2600, pos.getZ(i) / 2600);
-    uvs.needsUpdate = true;
-  }
-  const cloudMat = new THREE.MeshBasicMaterial({
-    map: cloudTexture(), transparent: true, vertexColors: true, fog: false,
-    depthWrite: false, depthTest: false, opacity: 0.55, side: THREE.DoubleSide,
-  });
-  const clouds = new THREE.Mesh(cloudGeo, cloudMat);
-  clouds.position.y = 1500;
-  clouds.renderOrder = -997;
-  clouds.frustumCulled = false;
-  group.add(clouds);
-
-  // --- precipitation ------------------------------------------------------
-  const PCOUNT = 900;
-  const pPos = new Float32Array(PCOUNT * 3);
-  const pVel = new Float32Array(PCOUNT * 3);
-  const prnd = new Rand(1337);
-  const BOX = 2400, BOXY = 2000;
-  for (let i = 0; i < PCOUNT; i++) {
-    pPos[i * 3] = prnd.float(-BOX, BOX);
-    pPos[i * 3 + 1] = prnd.float(-400, BOXY);
-    pPos[i * 3 + 2] = prnd.float(-BOX, BOX);
-  }
-  const precipGeo = new THREE.BufferGeometry();
-  precipGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
-  precipGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 6000);
-  const precipMat = new THREE.PointsMaterial({
-    size: 3, sizeAttenuation: false, color: 0xc8d8e8,
-    transparent: true, opacity: 0.7, fog: false, depthWrite: false,
-    map: flakeTexture(), alphaTest: 0.12,
-  });
-  const precip = new THREE.Points(precipGeo, precipMat);
-  precip.visible = false;
-  precip.frustumCulled = false;
-  precip.renderOrder = 900;
-  group.add(precip);
+  const snow = buildSnow();
+  group.add(snow.mesh);
 
   scene.add(group);
 
-  // --- state --------------------------------------------------------------
   const state = {
-    tint: [1, 1, 1],
-    fogNear: opts.fogNear || 1400,
-    fogFar: opts.fogFar || 6000,
-    weather: 'clear',
-    tod: 0.5,
-    horizon: new THREE.Color(0xb8cddf),
-    ambient: 1,
+    tod: 10,
+    weather: opts.weather || 'clear',
+    fogClass: opts.fogClass || 'none',
+    haze: new THREE.Color(),
+    tint: 1,
+    ambient: 0.5,
+    diffuse: 0.8,
+    night: false,
+    plate: plateMean(),
+    skyTintRGB: [1, 1, 1],
+    drift: opts.drift === undefined ? 0.016 : opts.drift,
   };
-  if (!scene.fog) scene.fog = new THREE.Fog(0xb8cddf, state.fogNear, state.fogFar);
-  const fog = scene.fog;
 
-  let lastKey = -1, cloudPhase = 0, elapsed = 0;
+  if (!scene.fog) scene.fog = new THREE.Fog(0x9aa4ac, SHADE_DIST, FAR_CLIP);
+  const fog = scene.fog;
 
   function setRegion(def) {
     if (!def) return;
-    state.tint = def.skyTint || [1, 1, 1];
-    state.fogNear = def.fogNear || 1400;
-    state.fogFar = def.fogFar || 6000;
-    if (def.cloudiness !== undefined) cloudMat.opacity = def.cloudiness;
-    lastKey = -1;
+    state.skyTintRGB = def.skyTint || [1, 1, 1];
+    state.plate = def.hazeTint
+      ? new THREE.Color(def.hazeTint[0], def.hazeTint[1], def.hazeTint[2])
+      : plateMean();
+    if (def.sky) mat.uniforms.uSky.value = skyTexture(def.sky);
+    if (def.fogClass) state.fogClass = def.fogClass;
+    if (def.weather) state.weather = def.weather;
   }
   setRegion(opts.region);
+
+  let elapsed = 0;
+  let lastYaw = 0;
+  const _m3 = new THREE.Matrix3();
 
   function update(dt, timeOfDay, weather, cam) {
     const c = cam || camera;
     elapsed += dt;
-    if (timeOfDay !== undefined) state.tod = timeOfDay > 1 ? (timeOfDay / 24) : timeOfDay;
-    if (weather) state.weather = weather;
-    const tod = state.tod;
+    if (timeOfDay !== undefined) state.tod = timeOfDay <= 1 ? timeOfDay * 24 : timeOfDay;
+    if (weather) state.weather = weather === 'rain' ? 'fog' : weather;   // MM6 has no rain
 
-    const wet = state.weather === 'rain' || state.weather === 'snow';
-    const gloom = state.weather === 'fog' ? 0.75
-      : state.weather === 'cloudy' ? 0.35
-        : wet ? 0.62 : 0;
+    const g = timeTint(state.tod);
+    const st = sunTerms(state.tod);
+    state.tint = g;
+    state.ambient = st.ambient;
+    state.diffuse = st.diffuse;
+    state.night = st.night;
 
-    // Rebuilding the gradient is the only expensive part, so quantise time into
-    // half-hour steps (48 keys) and only repaint when it actually changes.
-    const key = Math.round(tod * 48) % 48;
-    const gk = key * 8 + Math.round(gloom * 4);
-    if (gk !== lastKey) {
-      lastKey = gk;
-      domeMat.map = gradientTexture(key, state.tint, gloom);
-      domeMat.needsUpdate = true;
-      const d = sampleDay(key / 48);
-      let hor = [d.hor[0] * state.tint[0], d.hor[1] * state.tint[1], d.hor[2] * state.tint[2]];
-      if (gloom > 0) hor = mixC(hor, scaleC([0x9a, 0x9e, 0xa2], 0.55 + d.sun * 0.45), gloom);
-      state.horizon.setRGB(hor[0] / 255, hor[1] / 255, hor[2] / 255, THREE.SRGBColorSpace);
-      state.ambient = 0.30 + d.sun * 0.70;
-      // The whole point: fog is the horizon band, to the byte.
-      fog.color.copy(state.horizon);
-      if (scene.background && scene.background.isColor) scene.background.copy(state.horizon);
-    }
-
-    const far = state.fogFar * (state.weather === 'fog' ? 0.42 : wet ? 0.68 : state.weather === 'cloudy' ? 0.9 : 1);
-    fog.near = Math.min(state.fogNear, far * 0.25);
-    fog.far = far;
-
-    // Sun arc: rises east (+X) at 06:00, sets west at 18:00, tilted south so it
-    // matches the sun direction the terrain lighting was baked with.
-    const ang = (tod - 0.25) * Math.PI * 2;
-    const sx = Math.cos(ang), sy = Math.sin(ang), sz = 0.32;
-    const inv = 1 / Math.hypot(sx, sy, sz);
-    const dist = R * 0.90;
-    sun.position.set(sx * inv * dist, sy * inv * dist, sz * inv * dist);
-    moon.position.set(-sx * inv * dist, -sy * inv * dist, -sz * inv * dist);
-    const dayness = clamp(sy * 3 + 0.35, 0, 1);
-    sunMat.opacity = dayness * (1 - gloom * 0.85);
-    sun.visible = sunMat.opacity > 0.02;
-    moonMat.opacity = (1 - dayness) * 0.9 * (1 - gloom * 0.6);
-    moon.visible = moonMat.opacity > 0.02;
-    starMat.opacity = clamp(1 - dayness * 1.6, 0, 1) * (1 - gloom);
-    stars.visible = starMat.opacity > 0.02;
-    if (c) { sun.quaternion.copy(c.quaternion); moon.quaternion.copy(c.quaternion); }
-
-    // Clouds scroll; heavier weather thickens them.
-    cloudPhase += dt * (state.weather === 'clear' ? 0.004 : 0.010);
-    cloudMat.map.offset.set(cloudPhase, cloudPhase * 0.35);
-    const targetOpacity = state.weather === 'clear' ? 0.42
-      : state.weather === 'cloudy' ? 0.82 : wet ? 0.9 : state.weather === 'fog' ? 0.5 : 0.42;
-    cloudMat.opacity += (targetOpacity - cloudMat.opacity) * Math.min(1, dt * 2);
-    cloudMat.color.setRGB(
-      0.55 + dayness * 0.45, 0.55 + dayness * 0.45, 0.60 + dayness * 0.40, THREE.SRGBColorSpace,
+    // Sky tint: the region's colour cast times the time-of-day grey, capped at
+    // 248/255 the way the engine pins sky fog.
+    const skyCap = 248 / 255;
+    mat.uniforms.uTint.value.setRGB(
+      Math.min(skyCap, g * state.skyTintRGB[0]),
+      Math.min(skyCap, g * state.skyTintRGB[1]),
+      Math.min(skyCap, g * state.skyTintRGB[2]),
     );
 
-    // Precipitation, camera-locked so a fixed particle budget always fills view.
-    precip.visible = wet;
-    if (wet) {
-      const arr = precipGeo.attributes.position.array;
-      const fall = state.weather === 'rain' ? -3200 : -420;
-      const drift = state.weather === 'rain' ? 240 : 150;
-      for (let i = 0; i < PCOUNT; i++) {
-        const k = i * 3;
-        arr[k + 1] += fall * dt;
-        arr[k] += Math.sin(elapsed * 0.8 + i) * drift * dt;
-        if (arr[k + 1] < -600) {
-          arr[k + 1] = BOXY;
-          arr[k] = prnd.float(-BOX, BOX);
-          arr[k + 2] = prnd.float(-BOX, BOX);
-        }
-      }
-      precipGeo.attributes.position.needsUpdate = true;
-      precipMat.size = state.weather === 'rain' ? 2 : 3.5;
-      precipMat.opacity = state.weather === 'rain' ? 0.5 : 0.8;
+    // Haze colour. On a foggy day it is the engine's neutral grey ramp; on a
+    // clear day the world simply darkens toward the tinted plate colour, so we
+    // use the plate mean and let sky and fog agree exactly.
+    const foggy = state.weather === 'fog' || state.weather === 'cloudy' || state.fogClass !== 'none';
+    const density = state.night ? 1 : (state.tod < 6 ? 6 - state.tod : state.tod >= 20 ? state.tod - 20 : 0);
+    if (foggy) {
+      const v = ((1 - clamp(density, 0, 1)) * 200 + clamp(density, 0, 1) * 31) / 255 * g;
+      state.haze.setRGB(v * 1.0, v * 1.0, v * 1.02);
+    } else {
+      state.haze.setRGB(state.plate.r * g, state.plate.g * g, state.plate.b * g);
+    }
+    mat.uniforms.uHaze.value.copy(state.haze);
+
+    // Fog: linear toward the haze colour, capped at 216/255 on geometry by
+    // pushing `far` out past the clip plane.
+    const cls = FOG_CLASSES[state.fogClass] || FOG_CLASSES.none;
+    let weak, strong;
+    if (cls.on) { weak = cls.weak; strong = cls.strong; }
+    else if (state.weather === 'fog') { weak = 0; strong = 3000; }
+    else if (state.weather === 'cloudy') { weak = SHADE_DIST; strong = FAR_CLIP; }
+    else { weak = SHADE_DIST; strong = FAR_CLIP; }
+    const cap = 216 / 255;
+    fog.color.copy(state.haze);
+    fog.near = weak;
+    fog.far = weak + Math.max(1, (strong - weak)) / cap;
+
+    // Cloud plate self-drift; MM6's sky moves even when you stand still.
+    mat.uniforms.uDrift.value.set(elapsed * state.drift, elapsed * state.drift * 0.42);
+
+    if (c) {
+      mat.uniforms.uCamXZ.value.set(c.position.x, c.position.z);
+      mat.uniforms.uInvProj.value.copy(c.projectionMatrixInverse);
+      _m3.setFromMatrix4(c.matrixWorld);
+      mat.uniforms.uCamRot.value.copy(_m3);
+      group.position.copy(c.position);
     }
 
-    if (c) group.position.copy(c.position);
+    // --- snow -------------------------------------------------------------
+    const snowing = state.weather === 'snow';
+    snow.mesh.visible = snowing;
+    if (snowing && c) {
+      // Yaw delta scrolls the whole field, so it reads as world-locked.
+      const yaw = Math.atan2(-c.matrixWorld.elements[8], -c.matrixWorld.elements[10]);
+      let dyaw = yaw - lastYaw;
+      while (dyaw > Math.PI) dyaw -= Math.PI * 2;
+      while (dyaw < -Math.PI) dyaw += Math.PI * 2;
+      lastYaw = yaw;
+      const vw = snow.mat.uniforms.uViewport.value;
+      const shift = (dyaw / (Math.PI * 2)) * vw.x * 3.2 / vw.x;
+      const p = snow.px, sz = snow.sz, rnd = snow.rnd;
+      const frames = clamp(dt * 60, 0.2, 3);
+      for (let i = 0; i < SNOW_N; i++) {
+        const s = sz[i];
+        p[i * 2] += (rnd.float(-1, 1) * s) / vw.x * frames - shift;
+        p[i * 2 + 1] += ((rnd.float(0, s) + s) / vw.y) * frames;
+        if (p[i * 2 + 1] > 1) { p[i * 2 + 1] = 0; p[i * 2] = rnd.float(0, 1); }
+        if (p[i * 2] < 0) p[i * 2] += 1;
+        else if (p[i * 2] > 1) p[i * 2] -= 1;
+      }
+      snow.mesh.geometry.attributes.iPos.needsUpdate = true;
+    }
+  }
+
+  function setViewport(w, h) {
+    mat.uniforms.uViewportH.value = h;
+    snow.mat.uniforms.uViewport.value.set(w, h);
   }
 
   function dispose() {
     scene.remove(group);
-    domeGeo.dispose(); domeMat.dispose();
-    starGeo.dispose(); starMat.dispose();
-    discGeo.dispose(); sunMat.dispose(); moonMat.dispose();
-    cloudGeo.dispose(); cloudMat.dispose();
-    precipGeo.dispose(); precipMat.dispose();
+    geo.dispose(); mat.dispose();
+    snow.mesh.geometry.dispose(); snow.mat.dispose();
   }
 
-  return { group, update, setRegion, dispose, state, dome, clouds, sun, moon };
+  return { group, update, setRegion, setViewport, dispose, state, quad };
 }

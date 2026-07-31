@@ -114,7 +114,13 @@ export class Boot {
       const m = await safeImport('./art/portraits.js');
       if (!m) return null;
       this.assets.portraits = m;
-      if (m.buildPortraits) return m.buildPortraits();
+      // Warm a spread of faces so the first HUD frame does not stall; the rest
+      // are rendered on demand and cached.
+      if (m.buildPortraits) {
+        const seeds = [];
+        for (let i = 0; i < 8; i++) seeds.push(1000 + i * 7717);
+        return m.buildPortraits(seeds);
+      }
       return null;
     }
     if (id === 'sprites') {

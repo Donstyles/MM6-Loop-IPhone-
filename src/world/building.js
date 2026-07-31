@@ -71,10 +71,12 @@ export class MeshBuilder {
     const uvs = o.uvs || [[0, 0], [uu, 0], [uu, vv], [0, vv]];
     const base = p.n;
     const verts = [a, b, c, d];
+    const vc = o.colors || null;   // per-vertex, for baked point lighting
     for (let i = 0; i < 4; i++) {
       p.pos.push(verts[i][0], verts[i][1], verts[i][2]);
       p.uv.push(uvs[i][0], uvs[i][1]);
-      p.col.push(col[0], col[1], col[2]);
+      if (vc) p.col.push(vc[i][0], vc[i][1], vc[i][2]);
+      else p.col.push(col[0], col[1], col[2]);
     }
     p.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
     p.n += 4;

@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MM6 Loop - audio preview</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 12px 14px 60px;
+    background: #191512; color: #d9cfbe;
+    font: 12px/1.45 ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    -webkit-text-size-adjust: 100%;
+  }
+  h1 { font-size: 15px; margin: 0 0 2px; letter-spacing: .06em; color: #e8dcc4; }
+  h2 { font-size: 11px; margin: 16px 0 6px; letter-spacing: .18em; text-transform: uppercase; color: #a4926f; }
+  .sub { color: #8b7d68; margin: 0 0 12px; }
+  .bar {
+    position: sticky; top: 0; z-index: 5; margin: 0 -14px 10px; padding: 8px 14px;
+    background: #221d18; border-bottom: 2px solid #3a3128;
+    display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center;
+  }
+  button {
+    font: inherit; color: #e6dcc8; background: #33291f;
+    border: 1px solid #55452f; border-top-color: #7a6444; border-left-color: #7a6444;
+    border-radius: 2px; padding: 5px 8px; cursor: pointer; min-height: 30px;
+    touch-action: manipulation;
+  }
+  button:hover { background: #423428; }
+  button:active { background: #241c14; border-top-color: #55452f; border-left-color: #55452f; }
+  button.on { background: #6b4f22; border-color: #a8874a; }
+  button.big { padding: 9px 16px; font-size: 13px; background: #5c3f1c; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 5px; }
+  label { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  input[type=range] { width: 118px; vertical-align: middle; }
+  .stat { color: #cbb98f; }
+  .stat b { color: #f0e4c8; font-weight: normal; }
+  .warn { color: #d98a5a; }
+  .good { color: #90b06a; }
+  #log {
+    margin-top: 14px; white-space: pre; overflow-x: auto; color: #9c8f78;
+    background: #14110e; border: 1px solid #2e2721; padding: 8px; max-height: 260px; overflow-y: auto;
+  }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+</style>
+</head>
+<body>
+<h1>MM6 Loop &mdash; procedural audio preview</h1>
+<p class="sub">Everything below is synthesised at runtime. Tap <b>Start audio</b> first (iOS needs the gesture).</p>
+
+<div class="bar">
+  <button id="start" class="big">Start audio</button>
+  <label>master <input id="vmaster" type="range" min="0" max="100" value="90"><span id="vmasterV">0.90</span></label>
+  <label>sfx <input id="vsfx" type="range" min="0" max="100" value="100"><span id="vsfxV">1.00</span></label>
+  <label>music <input id="vmusic" type="range" min="0" max="100" value="70"><span id="vmusicV">0.70</span></label>
+  <label>intensity <input id="vint" type="range" min="0" max="100" value="0"><span id="vintV">0.00</span></label>
+  <span class="stat">voices <b id="sVoices">0</b> &middot; music <b id="sMVoices">0</b> &middot; sched <b id="sSched">0.00</b>ms &middot; load <b id="sLoad">0.0</b>% &middot; baked <b id="sBaked">0</b> &middot; init <b id="sInit">-</b>ms</span>
+  <button id="stopAll">stop all</button>
+  <button id="bake">bake all</button>
+  <button id="audit">self-audit</button>
+</div>
+
+<h2>Music</h2>
+<div class="row" style="margin-bottom:6px">
+  <button id="musicStop">stop music</button>
+  <span class="stat">now playing: <b id="nowPlaying">-</b></span>
+</div>
+<div class="grid" id="tracks"></div>
+
+<h2>Ambience beds</h2>
+<div class="row" style="margin-bottom:6px"><button id="ambOff">ambience off</button></div>
+<div class="grid" id="amb"></div>
+
+<div id="sfx"></div>
+
+<pre id="log"></pre>
+
+<script type="module">
+import { Audio, SFX_GROUPS } from '../../src/core/audio.js';
+import { Music, TRACKS, TRACK_IDS, debugEvents, renderTrackOffline, midiName } from '../../src/core/music.js';
+
+const audio = new Audio();
+let music = null;
+const log = (s) => { const el = document.getElementById('log'); el.textContent += s + '\n'; el.scrollTop = el.scrollHeight; };
+
+window.__audio = audio;
+window.__debugEvents = debugEvents;
+window.__renderTrackOffline = renderTrackOffline;
+window.__midiName = midiName;
+window.__ready = false;
+
+// ---------------------------------------------------------------------------
+// Numeric analysis - the same maths the offline audit reports.
+// ---------------------------------------------------------------------------
+function statsOf(buf) {
+  if (!buf) return { error: 'no buffer' };
+  let peak = 0, sum = 0, sq = 0, n = 0, clipped = 0;
+  for (let c = 0; c < buf.numberOfChannels; c++) {
+    const d = buf.getChannelData(c);
+    for (let i = 0; i < d.length; i++) {
+      const v = d[i], a = v < 0 ? -v : v;
+      if (a > peak) peak = a;
+      if (a > 0.99) clipped++;
+      sum += v; sq += v * v; n++;
+    }
+  }
+  const rms = Math.sqrt(sq / Math.max(1, n));
+  return {
+    duration: +buf.duration.toFixed(3),
+    channels: buf.numberOfChannels,
+    sampleRate: buf.sampleRate,
+    peak: +peak.toFixed(4),
+    rms: +rms.toFixed(5),
+    dc: +(sum / Math.max(1, n)).toFixed(6),
+    clippedSamples: clipped,
+    clips: peak > 0.99,
+    silent: rms < 0.001,
+  };
+}
+window.__statsOf = statsOf;
+window.__sfxStats = async (id) => statsOf(await audio.renderToBuffer(id));
+window.__trackStats = async (id, bars = 16, sr = 22050, intensity = 0.35) =>
+  statsOf(await renderTrackOffline(id, bars, sr, intensity));
+
+// ---------------------------------------------------------------------------
+// UI
+// ---------------------------------------------------------------------------
+const $ = (id) => document.getElementById(id);
+
+function mkButton(parent, label, fn) {
+  const b = document.createElement('button');
+  b.textContent = label;
+  b.addEventListener('click', fn);
+  parent.appendChild(b);
+  return b;
+}
+
+// music track buttons
+const trackWrap = $('tracks');
+const trackBtns = {};
+for (const id of TRACK_IDS) {
+  trackBtns[id] = mkButton(trackWrap, `${id}  ${TRACKS[id].bpm}bpm`, () => {
+    if (!music) return log('! start audio first');
+    music.play(id);
+    for (const k in trackBtns) trackBtns[k].classList.toggle('on', k === id);
+    $('nowPlaying').textContent = id;
+  });
+}
+
+// ambience buttons
+const ambWrap = $('amb');
+const ambBtns = {};
+for (const id of SFX_GROUPS.ambience) {
+  ambBtns[id] = mkButton(ambWrap, id, () => {
+    audio.setAmbience(id);
+    for (const k in ambBtns) ambBtns[k].classList.toggle('on', k === id);
+  });
+}
+
+// one section per sfx group
+const sfxWrap = $('sfx');
+for (const [group, ids] of Object.entries(SFX_GROUPS)) {
+  if (group === 'ambience') continue;
+  const h = document.createElement('h2');
+  h.textContent = group;
+  sfxWrap.appendChild(h);
+  const g = document.createElement('div');
+  g.className = 'grid';
+  sfxWrap.appendChild(g);
+  for (const id of ids) mkButton(g, id, () => audio.play(id));
+}
+
+// -- transport --------------------------------------------------------------
+
+$('start').addEventListener('click', async () => {
+  const okay = await audio.init();
+  if (!okay) { log('!! Web Audio unavailable - the game will run silently'); return; }
+  music = new Music(audio.ctx, audio.musicBus);
+  window.__music = music;
+  await music.ready();
+  audio.setVolume(+$('vmaster').value / 100, +$('vsfx').value / 100, +$('vmusic').value / 100);
+  music.setIntensity(+$('vint').value / 100);
+  $('sInit').textContent = audio.initMs.toFixed(0);
+  $('start').textContent = 'audio running';
+  $('start').classList.add('on');
+  window.__ready = true;
+  log(`audio ready: ctx ${audio.ctx.sampleRate}Hz, init ${audio.initMs.toFixed(1)}ms, ${audio.buffers.size} sounds baked eagerly`);
+});
+
+$('stopAll').addEventListener('click', () => {
+  audio.stopAll();
+  for (const k in ambBtns) ambBtns[k].classList.remove('on');
+});
+$('ambOff').addEventListener('click', () => {
+  audio.setAmbience(null);
+  for (const k in ambBtns) ambBtns[k].classList.remove('on');
+});
+$('musicStop').addEventListener('click', () => {
+  if (music) music.stop(400);
+  for (const k in trackBtns) trackBtns[k].classList.remove('on');
+  $('nowPlaying').textContent = '-';
+});
+
+$('bake').addEventListener('click', async () => {
+  const t0 = performance.now();
+  await audio.prerenderAll((p) => { $('sBaked').textContent = `${audio.buffers.size}`; });
+  log(`baked all ${audio.buffers.size} sounds in ${(performance.now() - t0).toFixed(0)}ms`);
+});
+
+function bindSlider(id, fn) {
+  const el = $(id);
+  const out = $(id + 'V');
+  const apply = () => { const v = +el.value / 100; out.textContent = v.toFixed(2); fn(v); };
+  el.addEventListener('input', apply);
+  return apply;
+}
+bindSlider('vmaster', (v) => audio.setVolume(v, null, null));
+bindSlider('vsfx', (v) => audio.setVolume(null, v, null));
+bindSlider('vmusic', (v) => audio.setVolume(null, null, v));
+bindSlider('vint', (v) => { if (music) music.setIntensity(v); });
+
+// -- live meters ------------------------------------------------------------
+
+let frames = 0, lastT = performance.now(), busy = 0;
+function meter() {
+  const t0 = performance.now();
+  $('sVoices').textContent = audio.voiceCount;
+  $('sMVoices').textContent = music ? music.voiceCount : 0;
+  $('sSched').textContent = music ? music.schedMs.toFixed(2) : '0.00';
+  $('sBaked').textContent = audio.buffers.size;
+  frames++;
+  busy += performance.now() - t0;
+  const now = performance.now();
+  if (now - lastT > 500) {
+    // Rough proxy: scheduler cost + UI cost against wall clock.
+    const sched = music ? music.schedMs / 50 * 100 : 0;
+    const load = Math.min(100, sched + (busy / (now - lastT)) * 100);
+    $('sLoad').textContent = load.toFixed(1);
+    frames = 0; busy = 0; lastT = now;
+  }
+  requestAnimationFrame(meter);
+}
+requestAnimationFrame(meter);
+
+// -- in-page self audit -----------------------------------------------------
+
+$('audit').addEventListener('click', async () => {
+  log('--- sfx audit ---');
+  const ids = Object.values(SFX_GROUPS).flat();
+  let bad = 0;
+  for (const id of ids) {
+    const s = await window.__sfxStats(id);
+    const flags = [];
+    if (s.silent) flags.push('SILENT');
+    if (s.clips) flags.push('CLIP');
+    if (Math.abs(s.dc) > 0.01) flags.push('DC');
+    if (s.duration > 8) flags.push('LONG');
+    if (flags.length) bad++;
+    log(`${id.padEnd(18)} ${s.duration.toFixed(2)}s peak ${s.peak.toFixed(3)} rms ${s.rms.toFixed(4)} dc ${s.dc.toFixed(5)} ${flags.join(' ')}`);
+  }
+  log(`--- ${bad} problem(s) ---`);
+});
+
+// -- iOS lifecycle ----------------------------------------------------------
+document.addEventListener('visibilitychange', () => {
+  if (!music) return;
+  if (document.hidden) music.suspend(); else music.resume();
+});
+</script>
+</body>
+</html>

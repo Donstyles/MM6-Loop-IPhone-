@@ -15,14 +15,19 @@
 export const BASE_W = 640;
 export const BASE_H = 480;
 
-// Authentic 4:3 metrics. The 3D window sits at (8,8) and is 460x352; the right
-// panel carries the automap and buttons; the party bar fills the last 120 rows.
-export const HUD_H = 120;         // bottom party bar height
-export const SIDE_W = 172;        // right panel width (automap + buttons)
+// Authentic metrics, taken from the engine's own constants: the 3D window is
+// x 8..468, y 8..352 (461x345), the right panel is 172 wide starting at x 468,
+// and the party bar is the bottom 128 rows. Every full-screen panel in the game
+// is drawn into the 3D window's rect, which is why PANEL is exported here too.
+export const HUD_H = 128;         // bottom party bar height
+export const SIDE_W = 172;        // right panel width (automap, compass, buttons)
 export const VIEW_X = 8;
 export const VIEW_Y = 8;
-export const VIEW_W = 460;        // 3D window width in 4:3 mode
-export const VIEW_H = 352;        // 3D window height
+export const VIEW_W = 461;        // 3D window width in 4:3 mode
+export const VIEW_H = 345;        // 3D window height
+
+/** Full-screen panels replace exactly the 3D window; chrome stays visible. */
+export const PANEL = { x: VIEW_X, y: VIEW_Y, w: VIEW_W, h: VIEW_H };
 
 export const layout = {
   /** Logical frame size. Height is always 480; width grows in wide mode. */
@@ -75,8 +80,11 @@ export function computeLayout(cw, ch, allowWide = true) {
 
   layout.view.x = VIEW_X;
   layout.view.y = VIEW_Y;
-  layout.view.w = logicalW - SIDE_W - VIEW_X * 2;
+  layout.view.w = logicalW - SIDE_W - VIEW_X;
   layout.view.h = VIEW_H;
+
+  PANEL.x = layout.view.x; PANEL.y = layout.view.y;
+  PANEL.w = layout.view.w; PANEL.h = layout.view.h;
 
   layout.screen.w = Math.round(logicalW * scale);
   layout.screen.h = Math.round(BASE_H * scale);

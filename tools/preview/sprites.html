@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>MM6 sprite bake preview</title>
+<style>
+  body { margin: 0; background: #14151a; color: #d8c47a; font: 12px/1.4 monospace; }
+  h2 { color: #f0e0a0; font-size: 14px; margin: 14px 0 6px 8px; }
+  #info { padding: 8px; color: #9fd6a0; white-space: pre; }
+  canvas.sheet { display: block; margin: 0 0 2px 0; image-rendering: pixelated; }
+  #gl { display: none; }
+</style>
+</head>
+<body>
+<canvas id="gl" width="64" height="64"></canvas>
+<div id="info">baking...</div>
+<div id="out"></div>
+<script type="module">
+import * as THREE from 'three';
+import { getSheet, bakeSheet, ANGLES } from '/src/art/spritebake.js';
+import { CREATURE_DEFS, NPC_ARCHETYPES, ACTIONS, buildNPC } from '/src/art/models/creatures.js';
+import { FLORA_KINDS } from '/src/art/models/flora.js';
+import { PROP_KINDS } from '/src/art/models/props.js';
+
+const qs = new URLSearchParams(location.search);
+const page = qs.get('page') || 'angles';
+const from = +(qs.get('from') || 0);
+const count = +(qs.get('count') || 28);
+
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('gl'), alpha: true, antialias: false });
+renderer.setPixelRatio(1);
+renderer.setSize(64, 64, false);
+
+const out = document.getElementById('out');
+const info = document.getElementById('info');
+const log = [];
+
+function makeCv(w, h) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h; c.className = 'sheet';
+  const g = c.getContext('2d');
+  g.imageSmoothingEnabled = false;
+  return { c, g };
+}
+
+/** Checkerboard so a soft/grey halo around a sprite is impossible to miss. */
+function checker(g, x, y, w, h, a = '#2a2c34', b = '#3a3d47') {
+  for (let yy = 0; yy < h; yy += 8) {
+    for (let xx = 0; xx < w; xx += 8) {
+      g.fillStyle = (((xx / 8) + (yy / 8)) & 1) ? a : b;
+      g.fillRect(x + xx, y + yy, 8, 8);
+    }
+  }
+}
+
+function label(g, text, x, y, col = '#f0e0a0') {
+  g.font = '11px monospace';
+  g.fillStyle = col;
+  g.fillText(text, x, y);
+}
+
+/** Draw one strip of cells from a sheet. */
+function strip(g, sheet, cells, x, y, zoom, bg) {
+  const w = sheet.cellW * zoom, h = sheet.cellH * zoom;
+  if (bg === 'checker') checker(g, x, y, w * cells.length, h);
+  else { g.fillStyle = bg; g.fillRect(x, y, w * cells.length, h); }
+  cells.forEach((c, i) => {
+    const r = sheet.rect(c[0], c[1], c[2]);
+    g.drawImage(sheet.canvas, r.x, r.y, r.w, r.h, x + i * w, y, w, h);
+  });
+  return { w: w * cells.length, h };
+}
+
+function heading(text) {
+  const h = document.createElement('h2');
+  h.textContent = text;
+  out.appendChild(h);
+}
+
+// ---------------------------------------------------------------------------
+
+const t0 = performance.now();
+let baked = 0;
+
+function sheetOf(cat, kind, seed = 3) {
+  const s = getSheet(renderer, cat, kind, seed);
+  baked++;
+  return s;
+}
+
+function pageAngles(kinds, cat) {
+  heading(`${cat}: 8 angles (stand frame 0) at 2x  -  angle 0 = facing camera, 4 = back`);
+  for (const kind of kinds) {
+    const sh = sheetOf(cat, kind);
+    const zoom = Math.max(1, Math.min(3, Math.floor(120 / sh.cellH) || 1));
+    const cells = [];
+    for (let a = 0; a < ANGLES; a++) cells.push(['stand', 0, a]);
+    const { c, g } = makeCv(1390, sh.cellH * zoom + 16);
+    g.fillStyle = '#14151a'; g.fillRect(0, 0, c.width, c.height);
+    label(g, `${kind}  ${sh.atlasW}x${sh.atlasH}  cell ${sh.cellW}x${sh.cellH}  frames ${sh.frames}`, 4, 11);
+    strip(g, sh, cells, 4, 14, zoom, 'checker');
+    // the same 8 angles on magenta: any soft edge shows up instantly
+    strip(g, sh, cells, 4 + sh.cellW * zoom * 8 + 12, 14, zoom, '#c0208c');
+    out.appendChild(c);
+  }
+}
+
+function pageAnim(kinds) {
+  heading('walk (8) / attack (6) / cast (6) / die (8), viewed at angle 2 and angle 0, 2x');
+  for (const kind of kinds) {
+    const sh = sheetOf('creature', kind);
+    const zoom = 2;
+    const rows = [
+      ['walk a2', Array.from({ length: 8 }, (_, i) => ['walk', i, 2])],
+      ['walk a0', Array.from({ length: 8 }, (_, i) => ['walk', i, 0])],
+      ['attack a2', Array.from({ length: 6 }, (_, i) => ['attack', i, 2])],
+      ['cast a2', Array.from({ length: 6 }, (_, i) => ['cast', i, 2])],
+      ['die a2', Array.from({ length: 8 }, (_, i) => ['die', i, 2])],
+    ];
+    const h = 16 + rows.length * (sh.cellH * zoom + 4);
+    const { c, g } = makeCv(1390, h);
+    g.fillStyle = '#14151a'; g.fillRect(0, 0, c.width, c.height);
+    label(g, `${kind}`, 4, 11);
+    rows.forEach((r, i) => {
+      const y = 14 + i * (sh.cellH * zoom + 4);
+      strip(g, sh, r[1], 90, y, zoom, 'checker');
+      label(g, r[0], 4, y + 14, '#9fd6a0');
+    });
+    out.appendChild(c);
+  }
+}
+
+function pageGame(kinds) {
+  heading('in-game size: a 176-unit creature at ~1000 units is about 62px tall on a 460x352 buffer');
+  const { c, g } = makeCv(1390, 620);
+  g.fillStyle = '#5a6a4a'; g.fillRect(0, 0, c.width, 300);
+  g.fillStyle = '#7c8fa8'; g.fillRect(0, 0, c.width, 120);
+  g.fillStyle = '#3a4a30'; g.fillRect(0, 300, c.width, 320);
+  let x = 8;
+  for (const kind of kinds) {
+    const sh = sheetOf('creature', kind);
+    const px = Math.round(352 * sh.worldH / 1041);   // 55 deg vfov, 1000 units away
+    const w = Math.round(px * sh.cellW / sh.cellH);
+    g.drawImage(sh.canvas, sh.rect('stand', 0, 1).x, sh.rect('stand', 0, 1).y, sh.cellW, sh.cellH, x, 290 - px, w, px);
+    // and again at 3x so the pixels are inspectable
+    g.drawImage(sh.canvas, sh.rect('stand', 0, 1).x, sh.rect('stand', 0, 1).y, sh.cellW, sh.cellH, x, 320, w * 3, px * 3);
+    label(g, kind.slice(0, 14), x, 300);
+    x += Math.max(w * 3, 70) + 10;
+    if (x > 1300) break;
+  }
+  out.appendChild(c);
+}
+
+function pageAtlas(kinds) {
+  heading('full atlases at 1x (rows = frames, columns = 8 angles per block)');
+  for (const kind of kinds) {
+    const sh = sheetOf('creature', kind);
+    const { c, g } = makeCv(Math.max(400, sh.atlasW + 8), sh.atlasH + 18);
+    g.fillStyle = '#14151a'; g.fillRect(0, 0, c.width, c.height);
+    label(g, `${kind}  ${sh.atlasW}x${sh.atlasH}  blocks/row ${sh.blocks}  rows ${sh.rows}`, 4, 11);
+    checker(g, 4, 14, sh.atlasW, sh.atlasH);
+    g.drawImage(sh.canvas, 4, 14);
+    out.appendChild(c);
+  }
+}
+
+const CREATURES = Object.keys(CREATURE_DEFS);
+
+try {
+  if (page === 'angles') pageAngles(CREATURES.slice(from, from + count), 'creature');
+  else if (page === 'anim') pageAnim(CREATURES.slice(from, from + count));
+  else if (page === 'flora') pageAngles(FLORA_KINDS.slice(from, from + count), 'flora');
+  else if (page === 'props') pageAngles(PROP_KINDS.slice(from, from + count), 'prop');
+  else if (page === 'npc') pageAngles(NPC_ARCHETYPES.slice(from, from + count), 'npc');
+  else if (page === 'game') pageGame(CREATURES.slice(from, from + count));
+  else if (page === 'atlas') pageAtlas(CREATURES.slice(from, from + count));
+  else if (page === 'bench') {
+    // 40 creatures, cold cache, for the timing number in the report
+    const list = CREATURES.slice(0, 40);
+    const b0 = performance.now();
+    let px = 0;
+    for (const k of list) { const s = getSheet(renderer, 'creature', k, 99); px += s.atlasW * s.atlasH; baked++; }
+    const b1 = performance.now();
+    log.push(`bench: ${list.length} creature sheets in ${(b1 - b0).toFixed(0)} ms  (${((b1 - b0) / list.length).toFixed(1)} ms each), ${(px / 1e6).toFixed(2)} Mpx of atlas`);
+    pageAngles(list.slice(0, 6), 'creature');
+  }
+} catch (e) {
+  log.push('ERROR: ' + (e && e.stack || e));
+  console.error(e);
+}
+
+const t1 = performance.now();
+info.textContent = [`page=${page} from=${from} count=${count}`,
+  `${baked} sheets baked in ${(t1 - t0).toFixed(0)} ms`, ...log].join('\n');
+window.__ready = true;
+</script>
+</body>
+</html>

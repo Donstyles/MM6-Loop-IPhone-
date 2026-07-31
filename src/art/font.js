@@ -16,17 +16,28 @@
 import { snap } from '../core/palette.js';
 import { makeCanvas, ctx2d } from './texcanvas.js';
 
-// MM6's text palette. Interactive text is bright green, headings gold, body a
-// warm parchment cream. These go through snap() at atlas-build time so the font
-// never emits a colour outside the game palette.
-export const TEXT_NORMAL = '#e8dcb0';
-export const TEXT_DIM = '#a89870';
-export const TEXT_GOLD = '#ffd84a';
-export const TEXT_LINK = '#4de84d';
-export const TEXT_DARK = '#241c10';
-export const TEXT_RED = '#e04030';
-export const TEXT_BLUE = '#78b8ff';
+// MM6's text palette, verbatim from the engine colour table. Default UI text is
+// plain white; the colour you remember as "the MM6 highlight" is Sunflower gold,
+// and green appears ONLY on a buffed stat. Everything is snapped to the game
+// palette at atlas-build time so the font can never emit an off-palette pixel.
+export const TEXT_NORMAL = '#FFFFFF';   // White - default UI text
+export const TEXT_HILITE = '#E1CD23';   // Sunflower - hovered / clickable
+export const TEXT_HEADER = '#FFFF9B';   // PaleCanary - section headers, tooltips
+export const TEXT_GOOD = '#00E100';     // Green - buffed stat only
+export const TEXT_BAD = '#FF2300';      // Scarlet - drained stat
+export const TEXT_RED = '#FF0000';      // Red - broken item / severe condition
+export const TEXT_LEARN = '#00AFFF';    // BoltBlue - learnable skill
+export const TEXT_NPC = '#1699E9';      // EasternBlue - NPC name in dialogue
+export const TEXT_DARK = '#4B4B4B';     // Tundora - book/calendar body text
+export const TEXT_HUD = '#0A0000';      // Diesel - status bar main
+export const TEXT_HUD_SHADOW = '#E6D6C1'; // StarkWhite - status bar shadow
 export const TEXT_SHADOW = '#000000';
+
+// Aliases kept so older call sites keep working; gold is the real highlight.
+export const TEXT_LINK = TEXT_HILITE;
+export const TEXT_GOLD = TEXT_HILITE;
+export const TEXT_DIM = '#A0A0A0';
+export const TEXT_BLUE = TEXT_LEARN;
 
 // --- small: 5x7 cap box, 2px descender, ~6px advance -----------------------
 // Rows 0-6 sit above the baseline, rows 7-8 are the descender.
@@ -210,35 +221,69 @@ function snapColor(css) {
 
 const _atlas = new Map();
 
-function atlasFor(faceName, color) {
+/**
+ * Build the two-channel glyph atlas.
+ *
+ * MM6's .fnt glyphs are 1 byte per pixel with 0 = transparent, 1 = SHADOW and
+ * 255 = TEXT: the drop shadow is *baked into the glyph bitmap* as a second
+ * colour index and the engine tints the two channels independently. That is why
+ * the shadow is perfectly consistent everywhere and never doubles up between
+ * adjacent letters. We do the same - the shadow mask is computed once per face
+ * and both channels are painted into a single cell - so a string is one blit
+ * per glyph rather than two passes.
+ *
+ * Cells are (cellW+1) x (cellH+1) so the +1,+1 shadow has somewhere to live.
+ */
+function atlasFor(faceName, color, shadow) {
   const face = FACES[faceName] || FACES.normal;
-  const key = face.name + '|' + color;
+  const key = face.name + '|' + color + '|' + (shadow || '-');
   let a = _atlas.get(key);
   if (a) return a;
 
-  const { cellW, cellH, cols, rows } = face;
-  const canvas = makeCanvas(cols * cellW, rows * cellH);
+  const cw = face.cellW + 1, chh = face.cellH + 1;
+  const { cols, rows } = face;
+  const canvas = makeCanvas(cols * cw, rows * chh);
   const g = ctx2d(canvas);
   const img = g.createImageData(canvas.width, canvas.height);
   const d = img.data;
   const main = snapColor(color);
-  // '+' is the secondary tone: a darkened version of the ink used for the
-  // inner shading strokes on the title face.
+  // '+' is the secondary tone: a darkened ink used for inner shading strokes.
   const sec = snap(main[0] * 0.55, main[1] * 0.55, main[2] * 0.55);
+  const sh = shadow ? snapColor(shadow) : null;
+
+  const put = (x, y, c) => {
+    const p = (y * canvas.width + x) * 4;
+    d[p] = c[0]; d[p + 1] = c[1]; d[p + 2] = c[2]; d[p + 3] = 255;
+  };
 
   face.order.forEach((chr, i) => {
     const gl = face.glyphs[chr];
-    if (!gl) return;
-    const ox = (i % cols) * cellW;
-    const oy = Math.floor(i / cols) * cellH;
+    if (!gl || gl.ink <= 0) return;
+    const ox = (i % cols) * cw;
+    const oy = Math.floor(i / cols) * chh;
+    const isInk = (x, y) => {
+      const row = gl.rows[y];
+      if (!row) return false;
+      const c = row[x];
+      return c !== undefined && c !== '.' && c !== ' ';
+    };
+    // SHADOW channel first: every ink pixel offset +1,+1 that is not itself ink.
+    if (sh) {
+      for (let y = 0; y < gl.rows.length; y++) {
+        const row = gl.rows[y];
+        for (let x = 0; x < row.length; x++) {
+          if (!isInk(x, y) || isInk(x + 1, y + 1)) continue;
+          put(ox + x + 1, oy + y + 1, sh);
+        }
+      }
+    }
+    // TEXT channel on top.
     for (let y = 0; y < gl.rows.length; y++) {
       const row = gl.rows[y];
       for (let x = 0; x < row.length; x++) {
         const ch = row[x];
-        if (ch === '.' || ch === ' ') continue;
-        const c = ch === '+' ? sec : main;
-        const p = ((oy + y) * canvas.width + (ox + x)) * 4;
-        d[p] = c[0]; d[p + 1] = c[1]; d[p + 2] = c[2]; d[p + 3] = 255;
+        if (ch === '.' || ch === ' ' || ch === undefined) continue;
+        put(ox + x, oy + y, ch === '+' ? sec : main);
       }
     }
   });
@@ -248,23 +293,11 @@ function atlasFor(faceName, color) {
 }
 
 /**
- * Pre-rendered glyph atlas. With `shadow` given the returned atlas has the
- * drop shadow composited into each cell (handy for one-shot blits); without it
- * you get the plain single-colour atlas that drawText uses for its two passes.
+ * The pre-rendered atlas for a (face, colour, shadow) triple. 16 columns of
+ * (cellW+1) x (cellH+1) cells in the face's `order`.
  */
-export function glyphCanvas(face = 'normal', color = TEXT_NORMAL, shadow = null) {
-  if (!shadow) return atlasFor(face, color);
-  const key = face + '|' + color + '|' + shadow;
-  let a = _atlas.get(key);
-  if (a) return a;
-  const base = atlasFor(face, color);
-  const sh = atlasFor(face, shadow);
-  const c = makeCanvas(base.width, base.height);
-  const g = ctx2d(c);
-  g.drawImage(sh, 1, 1);
-  g.drawImage(base, 0, 0);
-  _atlas.set(key, c);
-  return c;
+export function glyphCanvas(face = 'normal', color = TEXT_NORMAL, shadow = TEXT_SHADOW) {
+  return atlasFor(face, color, shadow);
 }
 
 // --- measuring -------------------------------------------------------------
@@ -511,6 +544,11 @@ const TITLE = {
 
 FACES.title = buildFace('title', TITLE, 12, 16, 12, 1, 5);
 
+// create.fnt is the button-label face: the same serif skeleton as Lucida but set
+// a touch looser so short labels fill a key evenly. It shares the glyph table
+// and only differs in fitting, which is exactly how the two originals relate.
+FACES.button = buildFace('button', NORMAL, 8, 11, 8, 2, 5);
+
 // --- drawing ---------------------------------------------------------------
 
 const OUTLINE_OFFSETS = [
@@ -520,16 +558,16 @@ const OUTLINE_OFFSETS = [
 ];
 
 function blitLine(ctx, atlas, f, s, x, y, tracking) {
-  const { cellW, cellH, cols } = f;
+  const cw = f.cellW + 1, ch = f.cellH + 1, cols = f.cols;
   let pen = x;
   for (let i = 0; i < s.length; i++) {
     const chr = s[i];
     const gl = f.glyphs[chr] || f.glyphs['?'];
     if (gl.ink > 0) {
       const idx = f.index.has(chr) ? f.index.get(chr) : f.index.get('?');
-      const sx = (idx % cols) * cellW;
-      const sy = Math.floor(idx / cols) * cellH;
-      ctx.drawImage(atlas, sx, sy, cellW, cellH, pen, y, cellW, cellH);
+      const sx = (idx % cols) * cw;
+      const sy = Math.floor(idx / cols) * ch;
+      ctx.drawImage(atlas, sx, sy, cw, ch, pen, y, cw, ch);
     }
     pen += gl.adv + tracking;
   }
@@ -573,11 +611,12 @@ export function drawText(ctx, text, x, y, opts = {}) {
   ctx.imageSmoothingEnabled = false;
 
   if (outline) {
-    const oa = atlasFor(f.name, outline);
+    const oa = atlasFor(f.name, outline, null);
     for (const [dx, dy] of OUTLINE_OFFSETS) blitLine(ctx, oa, f, s, px + dx, py + dy, tracking);
   }
-  if (shadow) blitLine(ctx, atlasFor(f.name, shadow), f, s, px + 1, py + 1, tracking);
-  blitLine(ctx, atlasFor(f.name, color), f, s, px, py, tracking);
+  // One blit per glyph: the shadow travels inside the cell, exactly as the
+  // engine's two-index glyph bitmaps do.
+  blitLine(ctx, atlasFor(f.name, color, shadow), f, s, px, py, tracking);
 
   ctx.imageSmoothingEnabled = smooth;
   return { x: px, y: py, w, h: f.cellH };

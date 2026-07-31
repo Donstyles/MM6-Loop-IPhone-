@@ -63,7 +63,10 @@ in float vFogDepth;
 void main() {
   vec4 c = texture(map, vUv);
   if (c.a < alphaTest) discard;
-  c.rgb *= vTint.rgb;
+  // Sprites take the same 32-step greyscale multiply the world does; the
+  // banding that produces is authentic, not an artefact.
+  vec3 t = floor(clamp(vTint.rgb, 0.0, 1.0) * 31.0 + 0.5) * (8.0 / 248.0);
+  c.rgb *= t;
   float f = smoothstep(fogNear, fogFar, vFogDepth);
   c.rgb = mix(c.rgb, fogColor, f);
   pc_fragColor = vec4(c.rgb, vTint.a);

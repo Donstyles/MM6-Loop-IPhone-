@@ -6,6 +6,7 @@ import {
 import {
   fbm2, ridged2, gradNoise2, valueNoise2, hash2, Rand, clamp, smoothstep, lerpN,
 } from '../core/rng.js';
+import { quantiseShade, sunDirection, sunTerms, timeTint, FAR_CLIP } from './sky.js';
 
 // ---------------------------------------------------------------------------
 // Outdoor terrain.
@@ -23,6 +24,10 @@ import {
 
 export const TILE = 512;
 export const MAP_TILES = 128;
+/** MM6 stores height as a byte scaled by 32, so terrain steps in 32-unit rungs. */
+export const HEIGHT_QUANTUM = 32;
+/** maxPartyAxisDistance: the outer ring of the 128x128 grid is unreachable. */
+export const PLAYABLE_EXTENT = 22528;
 
 // --- texture access with a permanent local fallback ------------------------
 //
@@ -360,6 +365,11 @@ export function generateHeightmap(seed, opts = {}) {
       const c = coastAt(u, v);
       if (c > 0) h = lerpN(h, water - 900 - c * 700, c * c);
 
+      // Snap to the 32-unit height quantum. This is not a rounding detail: it
+      // is why MM6 terrain visibly stair-steps and why flat-shaded facets read
+      // as facets instead of as a smooth field.
+      h = Math.round(h / HEIGHT_QUANTUM) * HEIGHT_QUANTUM;
+
       height[j * N + i] = h;
       if (h < min) min = h;
       if (h > max) max = h;
@@ -375,7 +385,7 @@ export function generateHeightmap(seed, opts = {}) {
     seed: rs,
   };
 
-  paintTiles(hm, opts);
+  if (opts.paint !== false) paintTiles(hm, opts);
   return hm;
 }
 
@@ -476,19 +486,24 @@ export function flattenArea(hm, wx, wz, radius, targetY, feather = 1.6) {
       const t = 1 - smoothstep(radius, radius * feather, d);
       if (t <= 0) continue;
       const k = j * N + i;
-      hm.height[k] = lerpN(hm.height[k], targetY, t);
+      hm.height[k] = Math.round(lerpN(hm.height[k], targetY, t) / HEIGHT_QUANTUM) * HEIGHT_QUANTUM;
     }
   }
 }
 
 /**
- * Carve a road along a polyline: flatten the corridor and stamp the road
- * texture into the tile map. Roads are what make a generated world read as
- * designed rather than sampled.
+ * Paint a road along a polyline.
+ *
+ * MM6 roads are *transition tiles laid over the terrain*, not cut geometry,
+ * which is exactly why they always look painted on rather than sunk in. So the
+ * default here only stamps tiles; `heights:true` is available for the rare case
+ * (town shelves, dungeon forecourts) where the ground really must be levelled.
  */
 export function carveRoad(hm, points, opts = {}) {
   const width = opts.width || 700;
   const tex = opts.tex || 'road_dirt';
+  const doHeights = opts.heights === true;
+  const doTiles = opts.tiles !== false;
   const N = hm.size + 1;
   let texIndex = hm.texIds.indexOf(tex);
   if (texIndex < 0) { texIndex = hm.texIds.length; hm.texIds.push(tex); }
@@ -505,6 +520,7 @@ export function carveRoad(hm, points, opts = {}) {
       const x = a.x + (b.x - a.x) * t, z = a.z + (b.z - a.z) * t;
       const y = heightAt(hm, x, z);
       const r = width * 0.5;
+      if (doHeights) {
       const i0 = Math.max(0, Math.floor((x - r * 2 - hm.origin) / hm.tile));
       const i1 = Math.min(hm.size, Math.ceil((x + r * 2 - hm.origin) / hm.tile));
       const j0 = Math.max(0, Math.floor((z - r * 2 - hm.origin) / hm.tile));
@@ -520,6 +536,8 @@ export function carveRoad(hm, points, opts = {}) {
           }
         }
       }
+      }
+      if (!doTiles) continue;
       // Tile stamping uses tile centres so the road is a solid ribbon.
       const ti0 = Math.max(0, Math.floor((x - r - hm.origin) / hm.tile));
       const ti1 = Math.min(hm.size - 1, Math.floor((x + r - hm.origin) / hm.tile));

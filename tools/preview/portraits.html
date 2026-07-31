@@ -4,92 +4,112 @@
 <meta charset="utf-8" />
 <title>MM6 portraits preview</title>
 <style>
-  body { margin: 0; background: #0b0b0d; color: #c8b98a; font: 11px/1.35 monospace; padding: 12px; }
-  h2 { color: #e0c878; font-size: 13px; margin: 18px 0 8px; border-bottom: 1px solid #3a3324; padding-bottom: 3px; }
+  body { margin: 0; background: #0b0b0d; color: #c8b98a; font: 11px/1.35 monospace; padding: 10px; }
+  h2 { color: #e0c878; font-size: 13px; margin: 14px 0 6px; border-bottom: 1px solid #3a3324; padding-bottom: 3px; }
   canvas { image-rendering: pixelated; display: block; }
-  .row { display: flex; flex-wrap: wrap; gap: 10px; }
-  .cell { border: 1px solid #2a2620; padding: 3px; background: #141210; }
-  .cell .lbl { text-align: center; color: #8d8266; font-size: 9px; margin-top: 2px; white-space: pre; }
-  .pair { display: flex; gap: 4px; align-items: flex-start; }
-  .bar { background: #2b241a; border: 2px solid #6b5a3a; padding: 6px; display: inline-flex; gap: 4px; }
 </style>
 </head>
 <body>
-<h2>A. 24 faces &mdash; 1:1 and 4&times;</h2>
-<div class="row" id="faces"></div>
-
-<h2>B. every expression, 3&times;</h2>
-<div class="row" id="exprs"></div>
-
-<h2>B2. second face, every expression, 3&times;</h2>
-<div class="row" id="exprs2"></div>
-
-<h2>C. mock party bar, 1:1</h2>
-<div class="bar" id="bar"></div>
-<div class="bar" id="bar2" style="margin-left:10px"></div>
-
+<h2>A. 24 faces &mdash; 1:1 and 4&times;</h2><div id="a"></div>
+<h2>B. every expression, 3&times; (knight m) </h2><div id="b"></div>
+<h2>B2. every expression, 3&times; (sorcerer f)</h2><div id="c"></div>
+<h2>C. mock party bar, 1:1</h2><div id="d"></div>
 <script type="module">
-import { makeFace, renderPortrait, PORTRAIT_W, PORTRAIT_H, EXPRESSIONS, portraitSheet } from '/src/art/portraits.js';
+import { makeFace, renderPortrait, PORTRAIT_W as PW, PORTRAIT_H as PH, EXPRESSIONS, portraitSheet }
+  from '/src/art/portraits.js';
 
-function show(canvas, zoom) {
+// ?sec=a|b|c|d renders one section only, so each can be screenshotted at a
+// size the headless compositor is happy with.
+const SEC = new URLSearchParams(location.search).get('sec') || 'all';
+const want = (k) => SEC === 'all' || SEC === k;
+for (const k of ['a', 'b', 'c', 'd']) {
+  if (!want(k)) { const e = document.getElementById(k); e.previousElementSibling.remove(); e.remove(); }
+}
+
+const FONT = '9px monospace';
+function sheetOf(w, h) {
   const c = document.createElement('canvas');
-  c.width = canvas.width * zoom; c.height = canvas.height * zoom;
+  c.width = w; c.height = h;
   const g = c.getContext('2d');
   g.imageSmoothingEnabled = false;
-  g.drawImage(canvas, 0, 0, c.width, c.height);
-  return c;
+  g.fillStyle = '#141210'; g.fillRect(0, 0, w, h);
+  g.font = FONT; g.textBaseline = 'top';
+  return { c, g };
 }
-function cell(canvases, label) {
-  const d = document.createElement('div'); d.className = 'cell';
-  const p = document.createElement('div'); p.className = 'pair';
-  for (const c of canvases) p.appendChild(c);
-  d.appendChild(p);
-  if (label) { const l = document.createElement('div'); l.className = 'lbl'; l.textContent = label; d.appendChild(l); }
-  return d;
+function label(g, x, y, lines, col = '#8d8266') {
+  g.fillStyle = col;
+  lines.forEach((t, i) => g.fillText(t, x, y + i * 10));
 }
 
+// --- A: 24 faces, 1:1 next to 4x ------------------------------------------
 const KL = ['knight', 'paladin', 'archer', 'cleric', 'sorcerer', 'druid'];
-const facesEl = document.getElementById('faces');
 const roster = [];
-let t0 = performance.now();
-for (let i = 0; i < 24; i++) {
-  const klass = KL[i % 6];
-  const sex = i % 12 < 6 ? 'm' : 'f';
-  const age = ['young', 'middle', 'old'][(i * 5) % 3];
-  const f = makeFace(1000 + i * 37, { klass, sex, age });
-  roster.push(f);
-  const c = renderPortrait(f, 'normal');
-  facesEl.appendChild(cell([show(c, 1), show(c, 4)],
-    `${klass.slice(0, 5)} ${sex}/${age.slice(0, 3)}\n${f.hairStyle}/${f.hairName}\n${f.shape} ${f.beard}`));
-}
-const tFaces = performance.now() - t0;
-
-function exprRow(el, f) {
-  for (const e of EXPRESSIONS) {
-    const c = renderPortrait(f, e);
-    el.appendChild(cell([show(c, 3)], e));
+if (true) {
+  const COLS = 4, CW = PW + 6 + PW * 4 + 14, CH = PH * 4 + 44;
+  const { c, g } = sheetOf(COLS * CW + 8, Math.ceil(24 / COLS) * CH + 8);
+  const t0 = performance.now();
+  for (let i = 0; i < 24; i++) {
+    const klass = KL[i % 6];
+    const sex = i % 12 < 6 ? 'm' : 'f';
+    const age = ['young', 'middle', 'old'][(i * 5) % 3];
+    const f = makeFace(1000 + i * 37, { klass, sex, age });
+    roster.push(f);
+    const p = renderPortrait(f, 'normal');
+    const x = 4 + (i % COLS) * CW, y = 4 + Math.floor(i / COLS) * CH;
+    g.drawImage(p, x, y);
+    g.drawImage(p, x + PW + 6, y, PW * 4, PH * 4);
+    label(g, x, y + PH * 4 + 4, [
+      `${klass} ${sex}/${age}`,
+      `${f.hairStyle}/${f.hairName} ${f.shape}`,
+      `${f.beard} skin:${f.toneName} eye:${f.eyeName}`,
+    ]);
   }
+  console.log('A ms', (performance.now() - t0).toFixed(0));
+  if (want('a')) document.getElementById('a').appendChild(c);
 }
-t0 = performance.now();
-exprRow(document.getElementById('exprs'), roster[0]);
-exprRow(document.getElementById('exprs2'), roster[16]);
-const tExpr = performance.now() - t0;
 
-const bar = document.getElementById('bar');
-[['knight', 'm'], ['cleric', 'f'], ['sorcerer', 'm'], ['archer', 'f']].forEach(([k, s], i) => {
-  bar.appendChild(show(renderPortrait(makeFace(4000 + i * 91, { klass: k, sex: s }), 'normal'), 1));
-});
-const bar2 = document.getElementById('bar2');
-[['paladin', 'f'], ['druid', 'm'], ['knight', 'f'], ['sorcerer', 'f']].forEach(([k, s], i) => {
-  bar2.appendChild(show(renderPortrait(makeFace(7100 + i * 53, { klass: k, sex: s }), 'hurt'), 1));
-});
+// --- B: all expressions ----------------------------------------------------
+function exprSheet(face, host) {
+  const Z = 3, COLS = 6, CW = PW * Z + 8, CH = PH * Z + 16;
+  const { c, g } = sheetOf(COLS * CW + 8, Math.ceil(EXPRESSIONS.length / COLS) * CH + 8);
+  EXPRESSIONS.forEach((e, i) => {
+    const p = renderPortrait(face, e);
+    const x = 4 + (i % COLS) * CW, y = 4 + Math.floor(i / COLS) * CH;
+    g.drawImage(p, x, y, PW * Z, PH * Z);
+    label(g, x, y + PH * Z + 3, [e], '#d0bd84');
+  });
+  if (want(host)) document.getElementById(host).appendChild(c);
+}
+const t1 = performance.now();
+if (want('b')) exprSheet(roster[0], 'b');
+if (want('c')) exprSheet(roster[16], 'c');
+console.log('B ms', (performance.now() - t1).toFixed(0));
 
-// sanity: the atlas path works
-t0 = performance.now();
-const sheet = portraitSheet(roster[3]);
-const tSheet = performance.now() - t0;
-console.log('faces ms', tFaces.toFixed(0), 'expr ms', tExpr.toFixed(0), 'sheet ms', tSheet.toFixed(0),
-  'sheet', sheet.canvas.width + 'x' + sheet.canvas.height, 'idx(dead)', sheet.index('dead'));
+// --- C: mock party bar -----------------------------------------------------
+if (want('d')) {
+  const groups = [
+    [['knight', 'm', 'normal'], ['cleric', 'f', 'normal'], ['sorcerer', 'm', 'normal'], ['archer', 'f', 'normal']],
+    [['paladin', 'f', 'normal'], ['druid', 'm', 'normal'], ['knight', 'f', 'normal'], ['sorcerer', 'f', 'normal']],
+    [['knight', 'm', 'hurt'], ['cleric', 'f', 'poisoned'], ['sorcerer', 'm', 'dead'], ['archer', 'f', 'asleep']],
+  ];
+  const BW2 = 4 * (PW + 6) + 18, BH2 = PH + 18;
+  const { c, g } = sheetOf(groups.length * (BW2 + 10) + 8, BH2 + 8);
+  groups.forEach((grp, gi) => {
+    const ox = 4 + gi * (BW2 + 10);
+    g.fillStyle = '#241d14'; g.fillRect(ox, 4, BW2, BH2);
+    g.strokeStyle = '#6b5a3a'; g.lineWidth = 2; g.strokeRect(ox + 1, 5, BW2 - 2, BH2 - 2);
+    grp.forEach(([k, s, e], i) => {
+      const f = makeFace(4000 + gi * 311 + i * 91, { klass: k, sex: s });
+      g.drawImage(renderPortrait(f, e), ox + 9 + i * (PW + 6), 13);
+    });
+  });
+  if (want('d')) document.getElementById('d').appendChild(c);
+}
+
+const t2 = performance.now();
+const sh = SEC === 'all' ? portraitSheet(roster[3]) : { canvas: { width: 0, height: 0 }, index: () => 0, rect: () => ({}) };
+console.log('sheet ms', (performance.now() - t2).toFixed(0),
+  sh.canvas.width + 'x' + sh.canvas.height, 'idx(dead)=' + sh.index('dead'), JSON.stringify(sh.rect('cast')));
 
 window.__ready = true;
 </script>

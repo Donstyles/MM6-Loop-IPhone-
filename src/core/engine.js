@@ -89,11 +89,13 @@ export class Engine {
     this.renderer.toneMapping = THREE.NoToneMapping;
 
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(65, 460 / 352, 0.6, 12000);
+    // Vanilla clip planes. The far plane is exactly 16 map tiles.
+    this.camera = new THREE.PerspectiveCamera(59.73, 461 / 345, 32, 8192);
     this.camera.rotation.order = 'YXZ';
+    this.indoor = false;
 
-    this.width = 460;
-    this.height = 352;
+    this.width = 461;
+    this.height = 345;
 
     this.rt = new THREE.WebGLRenderTarget(this.width, this.height, {
       minFilter: THREE.NearestFilter,
@@ -121,7 +123,10 @@ export class Engine {
       uniforms: {
         tDiffuse: { value: this.rt.texture },
         tLUT: { value: lut },
-        uDither: { value: 0.055 },
+        // MM6's software renderer did not dither - it shaded by swapping to one
+        // of 32 pre-darkened palettes, so gradients band. We keep only enough
+        // dither to break up the lookup cube's own cells.
+        uDither: { value: 0.016 },
         uPalette: { value: 1.0 },
         uResolution: { value: new THREE.Vector2(this.width, this.height) },
         uTint: { value: new THREE.Color(1, 1, 1) },
@@ -153,9 +158,7 @@ export class Engine {
       this.postMaterial.uniforms.uResolution.value.set(w, h);
       this.renderer.setSize(w, h, false);
       this.camera.aspect = w / h;
-      // MM6 keeps a constant vertical FOV and widens horizontally, so wide
-      // screens see more of the world rather than a stretched image.
-      this.camera.fov = vfovForAspect(w / h);
+      this.camera.fov = vfovForAspect(w / h, this.indoor);
       this.camera.updateProjectionMatrix();
     }
     const s = screen.scale;
@@ -164,6 +167,14 @@ export class Engine {
     st.top = `${screen.y + view.y * s}px`;
     st.width = `${view.w * s}px`;
     st.height = `${view.h * s}px`;
+  }
+
+  /** Dungeons use a narrower FOV than the outdoors; the switch is very visible. */
+  setIndoor(indoor) {
+    if (this.indoor === indoor) return;
+    this.indoor = indoor;
+    this.camera.fov = vfovForAspect(this.width / this.height, indoor);
+    this.camera.updateProjectionMatrix();
   }
 
   setTint(r, g, b) { this.postMaterial.uniforms.uTint.value.setRGB(r, g, b); }
@@ -186,15 +197,28 @@ export class Engine {
 }
 
 /**
- * MM6's 3D window is 460x352 (about 1.31:1) with a ~65 degree horizontal FOV.
- * Keep the horizontal FOV fixed and derive vertical, so widening the window on
- * a phone reveals more world instead of distorting it.
+ * MM6 fixes the *horizontal* FOV - 75 degrees outdoors, 60 indoors - and
+ * derives vertical from the 461x345 window, giving 59.73 / 46.74 degrees. The
+ * narrowing on entering a dungeon is very noticeable and worth keeping.
+ * Anchoring to the authentic aspect means a widened phone window reveals more
+ * world horizontally instead of stretching the image.
  */
-export function vfovForAspect(aspect) {
-  const hfov = THREE.MathUtils.degToRad(75);
-  const baseAspect = 460 / 352;
-  // Anchor to the authentic framing, then let extra width add horizontal FOV.
-  const a = Math.max(aspect, baseAspect);
-  const vfov = 2 * Math.atan(Math.tan(hfov / 2) / a);
-  return THREE.MathUtils.radToDeg(vfov);
+export const HFOV_OUTDOOR = 75;
+export const HFOV_INDOOR = 60;
+export const BASE_ASPECT = 461 / 345;
+
+export function vfovForAspect(aspect, indoor = false) {
+  const hfov = THREE.MathUtils.degToRad(indoor ? HFOV_INDOOR : HFOV_OUTDOOR);
+  const a = Math.max(aspect, BASE_ASPECT);
+  return THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(hfov / 2) / a));
+}
+
+/**
+ * Quantise a lighting multiplier to MM6's 32 discrete levels, 8*(31-dim).
+ * Applying this wherever we shade keeps the era-correct banding instead of
+ * smooth modern falloff.
+ */
+export function quantiseLight(v) {
+  const step = Math.round(Math.max(0, Math.min(1, v)) * 31);
+  return (step * 8) / 248;
 }
