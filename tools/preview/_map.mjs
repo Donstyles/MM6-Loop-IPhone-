@@ -6,10 +6,18 @@ const browser = await chromium.launch({
   args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
 });
 const page = await browser.newPage({ viewport: { width: 400, height: 300 } });
-await page.goto('http://127.0.0.1:5173/tools/preview/world.html?region=new_sorpigal', { waitUntil: 'domcontentloaded' });
+await page.goto(process.env.MAPURL || 'http://127.0.0.1:5173/tools/preview/world.html?region=new_sorpigal', { waitUntil: 'domcontentloaded' });
 await page.waitForFunction('window.__ready === true', { timeout: 90000 });
 const b64 = await page.evaluate(() => {
   const w = window.__world;
+  if (!w) {
+    const d = window.__dungeon;
+    const c = document.createElement('canvas'); c.width = 512; c.height = 256;
+    const g = c.getContext('2d');
+    d.drawMinimap(g, { x: 0, y: 0, w: 256, h: 256 }, d.start, 14000);
+    d.drawMinimap(g, { x: 256, y: 0, w: 256, h: 256 }, d.start, 5000);
+    return c.toDataURL().slice(22);
+  }
   const c = document.createElement('canvas'); c.width = 512; c.height = 256;
   const g = c.getContext('2d');
   g.imageSmoothingEnabled = false;

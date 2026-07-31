@@ -50,7 +50,9 @@ function faceShade(nx, ny, nz, tintR = 1, tintG = 1, tintB = 1, extra = 1) {
   // Same sun-elevation-normalised curve the terrain uses, so walls and ground
   // agree exactly and neither goes black when the sun is low.
   const up = Math.max(0.30, SUN.y);
-  const g = quantiseShade(clamp((0.50 + 0.50 * clamp(ndl / up, 0, 1)) * (DIFFUSE > 0 ? 1 : 0.38) * extra, 0, 1));
+  // `extra` is floored: an overhang underside should read as shadow, not as
+  // a hole in the building.
+  const g = quantiseShade(clamp((0.50 + 0.50 * clamp(ndl / up, 0, 1)) * (DIFFUSE > 0 ? 1 : 0.38) * Math.max(0.62, extra), 0, 1));
   const l = SRGB_TO_LIN(g);
   return [l * tintR, l * tintG, l * tintB];
 }
@@ -205,20 +207,20 @@ export function materialFor(texId, opts = {}) {
 // --- style table -----------------------------------------------------------
 
 const STYLE = {
-  cottage: { w: [560, 760], d: [480, 640], storeys: 1, roof: 'pitch', rh: 300, wall: ['wall_plaster', 'wall_timber'], roofTex: ['roof_thatch', 'roof_shingle_red'], chimney: 1, jetty: 0 },
+  cottage: { w: [560, 760], d: [480, 640], storeys: 1, roof: 'pitch', rh: 300, wall: ['wall_plaster', 'wall_timber'], roofTex: ['roof_thatch', 'roof_shingle_red', 'roof_shingle_red'], chimney: 1, jetty: 0 },
   townhouse: { w: [520, 700], d: [460, 600], storeys: 2, roof: 'pitch', rh: 290, wall: ['wall_timber', 'wall_plaster'], roofTex: ['roof_shingle_red', 'roof_shingle_grey'], chimney: 1, jetty: 60 },
   shop: { w: [640, 820], d: [520, 660], storeys: 2, roof: 'pitch', rh: 280, wall: ['wall_shop_front', 'wall_timber'], roofTex: ['roof_shingle_red'], chimney: 1, jetty: 70, sign: 1 },
   tavern: { w: [820, 1000], d: [640, 780], storeys: 2, roof: 'hip', rh: 320, wall: ['wall_timber'], roofTex: ['roof_shingle_red', 'roof_thatch'], chimney: 2, jetty: 80, sign: 1 },
   temple: { w: [900, 1100], d: [700, 900], storeys: 1, storeyH: 460, roof: 'hip', rh: 380, wall: ['wall_temple', 'wall_marble'], roofTex: ['roof_tile_blue', 'roof_slate'], chimney: 0, jetty: 0, columns: 1, steps: 3 },
-  guild: { w: [760, 920], d: [620, 760], storeys: 2, roof: 'hip', rh: 320, wall: ['wall_stone_block', 'wall_marble'], roofTex: ['roof_tile_blue'], chimney: 1, jetty: 0, sign: 1, banner: 1 },
-  smithy: { w: [660, 800], d: [560, 680], storeys: 1, storeyH: 380, roof: 'pitch', rh: 250, wall: ['wall_stone_block', 'wall_brick'], roofTex: ['roof_slate'], chimney: 2, jetty: 0, sign: 1 },
+  guild: { w: [760, 920], d: [620, 760], storeys: 2, roof: 'hip', rh: 320, wall: ['wall_marble', 'wall_plaster'], roofTex: ['roof_tile_blue'], chimney: 1, jetty: 0, sign: 1, banner: 1 },
+  smithy: { w: [660, 800], d: [560, 680], storeys: 1, storeyH: 380, roof: 'pitch', rh: 250, wall: ['wall_plaster', 'wall_brick'], roofTex: ['roof_shingle_red', 'roof_slate'], chimney: 2, jetty: 0, sign: 1 },
   stable: { w: [900, 1150], d: [520, 620], storeys: 1, storeyH: 330, roof: 'pitch', rh: 240, wall: ['wall_wood_plank'], roofTex: ['roof_thatch'], chimney: 0, jetty: 0, openFront: 1 },
   tower: { w: [420, 520], d: [420, 520], storeys: 4, roof: 'pyramid', rh: 380, wall: ['wall_stone_block', 'wall_castle'], roofTex: ['roof_slate', 'roof_tile_blue'], chimney: 0, jetty: 0, crenel: 1 },
   keep: { w: [1200, 1500], d: [1000, 1300], storeys: 3, roof: 'flat', rh: 0, wall: ['wall_castle', 'wall_castle_dark'], roofTex: ['roof_slate'], chimney: 1, jetty: 0, crenel: 1, banner: 1 },
   hut: { w: [400, 500], d: [380, 460], storeys: 1, storeyH: 260, roof: 'pyramid', rh: 260, wall: ['wall_plaster', 'wall_log'], roofTex: ['roof_thatch'], chimney: 0, jetty: 0 },
   longhouse: { w: [1100, 1400], d: [520, 640], storeys: 1, storeyH: 340, roof: 'pitch', rh: 320, wall: ['wall_log', 'wall_timber'], roofTex: ['roof_thatch', 'roof_shingle_grey'], chimney: 1, jetty: 0 },
   manor: { w: [1000, 1250], d: [760, 900], storeys: 2, roof: 'hip', rh: 340, wall: ['wall_plaster', 'wall_timber'], roofTex: ['roof_shingle_red'], chimney: 2, jetty: 70, wings: 1 },
-  warehouse: { w: [1000, 1300], d: [700, 860], storeys: 1, storeyH: 460, roof: 'pitch', rh: 260, wall: ['wall_wood_plank', 'wall_stone_block'], roofTex: ['roof_shingle_grey'], chimney: 0, jetty: 0 },
+  warehouse: { w: [1000, 1300], d: [700, 860], storeys: 1, storeyH: 460, roof: 'pitch', rh: 260, wall: ['wall_plaster', 'wall_timber'], roofTex: ['roof_shingle_grey', 'roof_shingle_red'], chimney: 0, jetty: 0 },
   mill: { w: [560, 660], d: [560, 660], storeys: 2, roof: 'pyramid', rh: 300, wall: ['wall_wood_plank', 'wall_stone_block'], roofTex: ['roof_thatch'], chimney: 0, jetty: 0, sail: 1 },
   lighthouse: { w: [400, 460], d: [400, 460], storeys: 5, roof: 'pyramid', rh: 300, wall: ['wall_plaster'], roofTex: ['roof_slate'], chimney: 0, jetty: 0, lamp: 1 },
 };

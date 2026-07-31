@@ -37,57 +37,57 @@ export const TORCHLIGHT_RADIUS = 800;
 const THEME = {
   cave: {
     wall: 'dun_cave', floor: 'dun_floor_dirt', ceil: 'dun_ceiling_cave',
-    ambDim: 28, torch: [1.00, 0.62, 0.26], torchRange: 1133,
+    ambDim: 27, torch: [1.00, 0.62, 0.26], torchRange: 1133,
     roomH: [560, 1000], corrH: 560, organic: 0.42, liquid: 'water', pillars: 0.15,
   },
   crypt: {
     wall: 'dun_tomb', floor: 'dun_floor_stone', ceil: 'dun_ceiling_stone',
-    ambDim: 27, torch: [0.96, 0.60, 0.30], torchRange: 1025,
+    ambDim: 25, torch: [0.96, 0.60, 0.30], torchRange: 1025,
     roomH: [520, 780], corrH: 512, organic: 0, liquid: 'water', pillars: 0.45,
   },
   sewer: {
     wall: 'dun_sewer', floor: 'dun_floor_stone', ceil: 'dun_ceiling_stone',
-    ambDim: 27, torch: [0.90, 0.68, 0.34], torchRange: 972,
+    ambDim: 26, torch: [0.90, 0.68, 0.34], torchRange: 972,
     roomH: [512, 700], corrH: 512, organic: 0.1, liquid: 'swamp_water', liquidChance: 0.5, pillars: 0.3,
   },
   temple: {
     wall: 'dun_temple', floor: 'dun_floor_tile', ceil: 'dun_ceiling_stone',
-    ambDim: 25, torch: [1.00, 0.80, 0.44], torchRange: 1241,
+    ambDim: 23, torch: [1.00, 0.80, 0.44], torchRange: 1241,
     roomH: [700, 1150], corrH: 620, organic: 0, liquid: 'water', pillars: 0.6,
   },
   mine: {
     wall: 'dun_cave_dark', floor: 'dun_floor_dirt', ceil: 'dun_ceiling_cave',
-    ambDim: 28, torch: [1.00, 0.58, 0.22], torchRange: 972,
+    ambDim: 27, torch: [1.00, 0.58, 0.22], torchRange: 972,
     roomH: [520, 820], corrH: 512, organic: 0.3, liquid: 'water', pillars: 0.35,
   },
   castle: {
     wall: 'dun_brick', floor: 'dun_floor_stone', ceil: 'dun_ceiling_stone',
-    ambDim: 26, torch: [1.00, 0.72, 0.36], torchRange: 1133,
+    ambDim: 24, torch: [1.00, 0.72, 0.36], torchRange: 1133,
     roomH: [620, 1000], corrH: 560, organic: 0, liquid: 'water', pillars: 0.4,
   },
   tower: {
     wall: 'dun_brick_mossy', floor: 'dun_floor_stone', ceil: 'dun_ceiling_stone',
-    ambDim: 26, torch: [0.96, 0.70, 0.38], torchRange: 1080,
+    ambDim: 24, torch: [0.96, 0.70, 0.38], torchRange: 1080,
     roomH: [560, 900], corrH: 512, organic: 0, liquid: 'water', pillars: 0.3,
   },
   lair: {
     wall: 'dun_cave', floor: 'dun_floor_dirt', ceil: 'dun_ceiling_cave',
-    ambDim: 28, torch: [1.00, 0.52, 0.20], torchRange: 1080,
+    ambDim: 27, torch: [1.00, 0.52, 0.20], torchRange: 1080,
     roomH: [700, 1250], corrH: 620, organic: 0.5, liquid: 'lava', liquidChance: 0.25, pillars: 0.2,
   },
   ruins: {
     wall: 'dun_brick_mossy', floor: 'dun_floor_stone', ceil: 'dun_ceiling_stone',
-    ambDim: 27, torch: [0.94, 0.66, 0.34], torchRange: 1080,
+    ambDim: 25, torch: [0.94, 0.66, 0.34], torchRange: 1080,
     roomH: [560, 900], corrH: 520, organic: 0.25, liquid: 'water', liquidChance: 0.35, pillars: 0.5,
   },
   ice: {
     wall: 'dun_ice', floor: 'dun_ice', ceil: 'dun_ice',
-    ambDim: 24, torch: [0.72, 0.86, 1.00], torchRange: 1296,
+    ambDim: 22, torch: [0.72, 0.86, 1.00], torchRange: 1296,
     roomH: [620, 1050], corrH: 560, organic: 0.35, liquid: 'water', pillars: 0.25,
   },
   volcano: {
     wall: 'dun_lava_rock', floor: 'dun_lava_rock', ceil: 'dun_ceiling_cave',
-    ambDim: 27, torch: [1.00, 0.48, 0.16], torchRange: 1188,
+    ambDim: 25, torch: [1.00, 0.48, 0.16], torchRange: 1188,
     roomH: [660, 1200], corrH: 620, organic: 0.4, liquid: 'lava', liquidChance: 0.6, pillars: 0.25,
   },
 };
@@ -760,36 +760,54 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
     const rh = rect.h !== undefined ? rect.h : (rect.height || 0);
     if (rw <= 0 || rh <= 0) return;
     const z = (!zoom || !isFinite(zoom) || zoom <= 0) ? 12000 : zoom;
-    const px = player ? (player.x || 0) : startPos.x;
-    const pz = player ? (player.z !== undefined ? player.z : (player.y || 0)) : startPos.z;
+    const px = player ? (player.x || 0) : 0;
+    const pz = player ? (player.z !== undefined ? player.z : (player.y || 0)) : 0;
     const scale = rw / z;
+    const cx = rx + rw / 2, cy = ry + rh / 2;
     ctx.save();
     ctx.beginPath();
     ctx.rect(rx, ry, rw, rh);
     ctx.clip();
-    const cx = rx + rw / 2, cy = ry + rh / 2;
-    ctx.fillStyle = '#171310';
+    // MM6's indoor automap is navy fill with pure blue wall lines.
+    ctx.fillStyle = '#000030';
     ctx.fillRect(rx, ry, rw, rh);
-    const cs = CELL * scale;
-    ctx.fillStyle = '#8a7c60';
+    const cs = Math.max(1, CELL * scale);
     for (const [k, c] of cells) {
       if (c.seen === false) continue;
-      const x = cx + (c.i * CELL + CELL / 2 - px) * scale;
-      const y = cy + (c.j * CELL + CELL / 2 - pz) * scale;
+      const x = cx + (c.i * CELL + CELL / 2 + OX - px) * scale;
+      const y = cy + (c.j * CELL + CELL / 2 + OZ - pz) * scale;
       if (x < rx - cs || x > rx + rw + cs || y < ry - cs || y > ry + rh + cs) continue;
-      ctx.fillStyle = c.liquid ? '#4a5c6e' : (c.kind === 'corridor' ? '#6e6250' : '#8a7c60');
-      ctx.fillRect(x - cs / 2, y - cs / 2, Math.max(1, cs), Math.max(1, cs));
+      ctx.fillStyle = c.liquid === 'lava' ? '#78200c'
+        : c.liquid ? '#0030a8'
+          : '#000078';
+      ctx.fillRect(x - cs / 2, y - cs / 2, cs + 0.5, cs + 0.5);
     }
-    ctx.fillStyle = '#c8a040';
+    // Outline: any edge onto solid rock gets a pale blue wall line.
+    ctx.strokeStyle = '#0000ff';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (const [k, c] of cells) {
+      if (c.seen === false) continue;
+      const x = cx + (c.i * CELL + OX - px) * scale;
+      const y = cy + (c.j * CELL + OZ - pz) * scale;
+      if (x < rx - cs * 2 || x > rx + rw + cs * 2 || y < ry - cs * 2 || y > ry + rh + cs * 2) continue;
+      if (!cells.has(key(c.i, c.j - 1))) { ctx.moveTo(x, y); ctx.lineTo(x + cs, y); }
+      if (!cells.has(key(c.i, c.j + 1))) { ctx.moveTo(x, y + cs); ctx.lineTo(x + cs, y + cs); }
+      if (!cells.has(key(c.i - 1, c.j))) { ctx.moveTo(x, y); ctx.lineTo(x, y + cs); }
+      if (!cells.has(key(c.i + 1, c.j))) { ctx.moveTo(x + cs, y); ctx.lineTo(x + cs, y + cs); }
+    }
+    ctx.stroke();
+    ctx.fillStyle = '#e0c060';
     for (const d of doorMeshes) {
-      const x = cx + (d.position.x - px) * scale;
-      const y = cy + (d.position.z - pz) * scale;
-      ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
+      if (d.userData.door.secret) continue;
+      const x = cx + (d.position.x + OX - px) * scale;
+      const y = cy + (d.position.z + OZ - pz) * scale;
+      ctx.fillRect(x - 2, y - 2, 4, 4);
     }
     ctx.restore();
   }
 
-  // --- collision / query helpers -------------------------------------------
+  // --- collision / query helpers, all in world space -----------------------
   const cellAt = (x, z) => cells.get(key(Math.floor((x - OX) / CELL), Math.floor((z - OZ) / CELL)));
   const cornerY = (c, x, z) => c.fy
     + c.gx * (x - OX - (c.i * CELL + CELL / 2))
@@ -811,7 +829,7 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
     if (!c) return true;
     if (c.liquid === 'lava') return true;
     for (const p of pillarColliders) {
-      if (Math.abs(x - p.x) < p.hw + 60 && Math.abs(z - p.z) < p.hd + 60) return true;
+      if (Math.abs(x - OX - p.x) < p.hw + 60 && Math.abs(z - OZ - p.z) < p.hd + 60) return true;
     }
     return false;
   }

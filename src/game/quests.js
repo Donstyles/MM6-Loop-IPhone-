@@ -230,13 +230,24 @@ export function generateQuestsForRegion(regionId, seed, count) {
   const out = [];
   const n = count === undefined ? 5 : count;
 
+  // A region's quest board reading "Cull the Large Rats" three times is a
+  // giveaway that the quests were rolled rather than written, so reject a draw
+  // that repeats a title and re-roll it a few times before giving up.
+  const seen = new Set();
   for (let i = 0; i < n; i++) {
-    const type = rand.weighted([
-      { k: 'kill', w: 30 }, { k: 'fetch', w: 20 }, { k: 'clear', w: 12 },
-      { k: 'deliver', w: 12 }, { k: 'bounty', w: 10 }, { k: 'find_person', w: 8 },
-      { k: 'escort', w: 5 }, { k: 'artifact', w: 3 },
-    ]).k;
-    out.push(generateQuest(rand, type, regionId, level, town));
+    let q = null;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const type = rand.weighted([
+        { k: 'kill', w: 30 }, { k: 'fetch', w: 20 }, { k: 'clear', w: 12 },
+        { k: 'deliver', w: 12 }, { k: 'bounty', w: 10 }, { k: 'find_person', w: 8 },
+        { k: 'escort', w: 5 }, { k: 'artifact', w: 3 },
+      ]).k;
+      const candidate = generateQuest(rand, type, regionId, level, town);
+      if (!seen.has(candidate.title)) { q = candidate; break; }
+      q = candidate;
+    }
+    seen.add(q.title);
+    out.push(q);
   }
   return out;
 }

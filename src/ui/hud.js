@@ -2,6 +2,7 @@ import { layout } from '../core/layout.js';
 import * as UI from '../art/uiart.js';
 import * as F from '../art/font.js';
 import { getPortrait, PORTRAIT_W, PORTRAIT_H } from '../art/portraits.js';
+import { maxHP, maxSP } from '../game/stats.js';
 
 // ---------------------------------------------------------------------------
 // The permanent interface.
@@ -335,8 +336,10 @@ export class HUD {
       }
 
       // Vertical tubes: health on the left of the portrait, spell on the right.
-      const hpFrac = ch.maxHP > 0 ? ch.hp / ch.maxHP : 0;
-      const spFrac = ch.maxSP > 0 ? ch.sp / ch.maxSP : 0;
+      // Both maxima are derived from the character, not stored on it.
+      const mh = charMaxHP(ch), ms = charMaxSP(ch);
+      const hpFrac = mh > 0 ? ch.hp / mh : 0;
+      const spFrac = ms > 0 ? ch.sp / ms : 0;
       UI.drawStatBar(ctx, HP_X[i], BAR_Y, BAR_W, BAR_H, hpFrac, 'hp');
       UI.drawStatBar(ctx, SP_X[i], BAR_Y, BAR_W, BAR_H, spFrac, 'sp');
 
@@ -350,8 +353,8 @@ export class HUD {
       const hit = this.ui.region(`hud:char${i}`, px, PORTRAIT_Y, PORTRAIT_W, PORTRAIT_H,
         `${ch.name} the ${ch.klass}`);
       this.buttons.push({ id: `char${i}`, hit });
-      this.ui.region(`hud:hp${i}`, HP_X[i], BAR_Y, BAR_W, BAR_H, `Hit Points: ${ch.hp} / ${ch.maxHP}`);
-      this.ui.region(`hud:sp${i}`, SP_X[i], BAR_Y, BAR_W, BAR_H, `Spell Points: ${ch.sp} / ${ch.maxSP}`);
+      this.ui.region(`hud:hp${i}`, HP_X[i], BAR_Y, BAR_W, BAR_H, `Hit Points: ${ch.hp} / ${mh}`);
+      this.ui.region(`hud:sp${i}`, SP_X[i], BAR_Y, BAR_W, BAR_H, `Spell Points: ${ch.sp} / ${ms}`);
     }
 
     // The four stone buttons in the bottom right corner.
@@ -389,8 +392,9 @@ export class HUD {
     }
     if (ch.justLeveled) return 'level_up';
     if (ch.hp <= 0) return 'unconscious';
-    if (ch.hp < ch.maxHP * 0.25) return 'hurt';
-    if (ch.hp < ch.maxHP * 0.6) return 'angry';
+    const mh = charMaxHP(ch);
+    if (ch.hp < mh * 0.25) return 'dmg_major';
+    if (ch.hp < mh * 0.6) return 'dmg_minor';
     return 'normal';
   }
 
@@ -398,9 +402,12 @@ export class HUD {
 
   /** MM6 keeps one line of status text across the top of the party bar. */
   drawStatusLine(ctx) {
+    // One line, one thing at a time: whatever the cursor is over wins,
+    // otherwise the most recent message while it is still fresh.
+    const recent = this.session.log.recent(1)[0];
     const tip = this.ui.hoverText
       || (this.session.hoverEntity && this.session.hoverEntity.label)
-      || (this.session.log.recent(1)[0] || {}).text
+      || (recent && recent.t < recent.ttl ? recent.text : '')
       || '';
     if (!tip) return;
     F.drawText(ctx, tip, 11 + 225, STATUS_Y, {
@@ -414,17 +421,8 @@ export class HUD {
     const S = this.session;
     const v = layout.view;
 
-    // Recent messages stack up from the bottom of the window.
-    const lines = S.log.recent(4);
-    let y = v.y + v.h - 10 - lines.length * 12;
-    for (const l of lines) {
-      const fade = Math.max(0, Math.min(1, (l.ttl - l.t) / 1.2));
-      ctx.save();
-      ctx.globalAlpha = fade;
-      F.drawText(ctx, l.text, v.x + 6, y, { color: l.color || '#FFFFFF' });
-      ctx.restore();
-      y += 12;
-    }
+    // MM6 has no in-world message log - everything it wants to tell you goes
+    // through the single status line above the party bar, one thing at a time.
 
     // Fly and Water Walk sit in the window's top corners while engaged.
     const buffs = (S.party && S.party.buffs) || {};
@@ -452,16 +450,9 @@ export class HUD {
         v.x + v.w - 52, v.y + v.h - 60, 44);
     }
 
-    // Monster health bar when hovering a monster, as MM6 shows on right-click.
-    const he = S.hoverEntity;
-    if (he && he.category === 'monster' && !he.dead && he.maxHp > 0) {
-      const bw = 100, bx = v.x + (v.w - bw) / 2, by = v.y + 12;
-      const frac = Math.max(0, he.hp / he.maxHp);
-      UI.drawStatBar(ctx, bx, by, bw, 8, frac, 'hp');
-      F.drawText(ctx, he.label || he.kind, v.x + v.w / 2, by + 10, {
-        face: 'small', align: 'center', color: '#FFFFFF',
-      });
-    }
+    // No world-space nameplates and no monster health bars: MM6 puts the
+    // monster's name in the status line on mouse-over and never exposes its
+    // health at all.
   }
 
   drawFloatText(ctx) {
@@ -501,4 +492,14 @@ function fmtNum(n) {
   n = n | 0;
   if (n >= 1000000) return `${(n / 1000000).toPrecision(4)}M`;
   return String(n);
+}
+
+/** Derived maxima, guarded so a stub party object cannot break the gauges. */
+function charMaxHP(ch) {
+  try { const v = maxHP(ch); if (isFinite(v) && v > 0) return v; } catch { /* fall through */ }
+  return ch.maxHP || ch.hp || 1;
+}
+function charMaxSP(ch) {
+  try { const v = maxSP(ch); if (isFinite(v) && v >= 0) return v; } catch { /* fall through */ }
+  return ch.maxSP || ch.sp || 0;
 }

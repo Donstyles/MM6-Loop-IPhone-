@@ -227,10 +227,15 @@ const SKY_FRAG = /* glsl */`
       float t = uHeight / d.y;
       vec2 uv = (uCamXZ + d.xz * t) / uScale + uDrift;
       vec3 c = texture2D(uSky, uv).rgb * uTint;
-      // Blend into the haze across the last few pixels so the horizon line is
-      // hard but not aliased, matching the engine's fade band.
-      float f = 1.0 - smoothstep(0.0, uBandPx, horizonPx);
-      gl_FragColor = vec4(mix(c, uHaze, f * 0.97), 1.0);
+      // Two-stage haze. The engine draws a hard 39px fade band at the horizon;
+      // on its own that leaves the sky above it still fully saturated and the
+      // world ends on a visible line. A broad soft ramp over roughly a quarter
+      // of the sky, with the tight band inside it, is what actually reads as
+      // "the terrain dissolves into the horizon".
+      float band = 1.0 - smoothstep(0.0, uBandPx, horizonPx);
+      float broad = 1.0 - smoothstep(0.0, uBandPx * 4.5, horizonPx);
+      float f = clamp(band * 0.97 + broad * 0.45, 0.0, 1.0);
+      gl_FragColor = vec4(mix(c, uHaze, f), 1.0);
     } else {
       // Below the horizon: solid haze fill. Terrain covers most of it; what is
       // left is the colour the world dissolves into.

@@ -114,35 +114,49 @@ function bl(b, i, c, a) {
 // Everything here is sampled out of the shared ramps so nothing but palette
 // colours ever reaches the framebuffer.
 
+// Nine tones, genuinely spanning porcelain to near-black. A party of four wants
+// to read as four different people from across the continent, and value is the
+// first thing the eye separates at 63 px.
 const SKIN_TONES = {
-  pale: { t: 0.74, tint: [1.00, 0.98, 0.98], ruddy: 0.34 },
-  fair: { t: 0.66, tint: [1.00, 0.97, 0.93], ruddy: 0.30 },
+  porcelain: { t: 0.90, tint: [1.00, 0.99, 1.00], ruddy: 0.42 },
+  pale: { t: 0.78, tint: [1.00, 0.98, 0.96], ruddy: 0.36 },
+  fair: { t: 0.66, tint: [1.00, 0.97, 0.92], ruddy: 0.30 },
   tan: { t: 0.55, tint: [1.00, 0.94, 0.84], ruddy: 0.26 },
-  olive: { t: 0.48, tint: [0.94, 0.94, 0.78], ruddy: 0.20 },
-  brown: { t: 0.36, tint: [0.94, 0.82, 0.68], ruddy: 0.18 },
-  dark: { t: 0.25, tint: [0.90, 0.74, 0.58], ruddy: 0.14 },
+  olive: { t: 0.46, tint: [0.93, 0.94, 0.75], ruddy: 0.20 },
+  bronze: { t: 0.38, tint: [1.00, 0.87, 0.66], ruddy: 0.22 },
+  brown: { t: 0.29, tint: [0.95, 0.80, 0.62], ruddy: 0.17 },
+  dark: { t: 0.22, tint: [0.90, 0.72, 0.55], ruddy: 0.14 },
+  ebony: { t: 0.15, tint: [0.86, 0.66, 0.50], ruddy: 0.11 },
 };
 
 /**
  * Six skin tones from deep shadow to highlight, plus a warm bounce colour for
  * downward-facing surfaces. Two-colour lerps are what make procedural faces
  * look like plastic; a hand-authored ramp with a ruddy terminator does not.
+ *
+ * The shadow and highlight multipliers are pulled towards the middle as the
+ * base darkens. A dark face lit with the same 0.26x deep shadow as a pale one
+ * loses its whole lower half to black at 63 px; real dark skin reads with a
+ * *narrower* value range and a much brighter specular instead.
  */
 function skinRamp(tone) {
   const s = SKIN_TONES[tone];
   const f = rs('flesh', s.t);
   const base = desat([f[0] * s.tint[0], f[1] * s.tint[1], f[2] * s.tint[2]], 0.32);
+  const lift = clamp((118 - lum(base)) / 150, 0, 0.48);
+  const m0 = 0.26 + lift * 0.52, m1 = 0.44 + lift * 0.50, m2 = 0.68 + lift * 0.34;
+  const m4 = 1.12 + lift * 0.24, m5 = 1.24 + lift * 0.52;
   return {
     ramp: [
-      mixC(scl(base, 0.26), rs('blood', 0.18), s.ruddy * 0.7),
-      mixC(scl(base, 0.44), rs('blood', 0.26), s.ruddy * 0.9),
-      mixC(scl(base, 0.68), rs('blood', 0.34), s.ruddy * 0.7),
+      mixC(scl(base, m0), rs('blood', 0.18), s.ruddy * 0.7),
+      mixC(scl(base, m1), rs('blood', 0.26), s.ruddy * 0.9),
+      mixC(scl(base, m2), rs('blood', 0.34), s.ruddy * 0.7),
       base,
-      desat(mixC(scl(base, 1.12), rs('sand', 0.74), 0.13), 0.06),
-      desat(mixC(scl(base, 1.24), rs('sand', 0.84), 0.22), 0.12),
+      desat(mixC(scl(base, m4), rs('sand', 0.74), 0.13 * (1 - lift)), 0.06),
+      desat(mixC(scl(base, m5), rs('sand', 0.84), 0.22 * (1 - lift)), 0.12),
     ],
-    bounce: mixC(scl(base, 0.52), rs('fire', 0.34), 0.30),
-    base, ruddy: s.ruddy,
+    bounce: mixC(scl(base, 0.52 + lift * 0.4), rs('fire', 0.34), 0.30),
+    base, ruddy: s.ruddy, lift,
   };
 }
 
@@ -152,9 +166,10 @@ const HAIR_COLOURS = {
   brown: () => rs('wood', 0.40),
   auburn: () => mixC(rs('wood', 0.38), rs('blood', 0.40), 0.42),
   red: () => mixC(rs('fire', 0.36), rs('wood', 0.38), 0.45),
-  blonde: () => desat(mixC(rs('sand', 0.60), rs('gold', 0.48), 0.30), 0.10),
+  blonde: () => desat(mixC(rs('sand', 0.66), rs('gold', 0.52), 0.30), 0.08),
+  sandy: () => desat(mixC(rs('sand', 0.46), rs('wood', 0.42), 0.42), 0.14),
   grey: () => rs('grey', 0.40),
-  white: () => rs('grey', 0.68),
+  white: () => rs('grey', 0.70),
 };
 
 const EYE_COLOURS = {
@@ -166,11 +181,17 @@ const EYE_COLOURS = {
   amber: () => desat(rs('gold', 0.36), 0.28),
 };
 
+// Seven skulls rather than four, and the spread runs much wider: `heavy` is a
+// genuinely broad, thick-jawed head and `gaunt` a narrow starved one. Face mass
+// is the second thing the eye separates after value.
 const FACE_SHAPES = {
-  round: { rx: 17.2, ry: 21.2, wTop: 0.70, wTemple: 0.94, wCheek: 1.00, wJaw: 0.86, wChin: 0.56 },
-  long: { rx: 15.6, ry: 23.2, wTop: 0.70, wTemple: 0.94, wCheek: 0.98, wJaw: 0.72, wChin: 0.42 },
-  square: { rx: 16.9, ry: 21.8, wTop: 0.73, wTemple: 0.96, wCheek: 1.00, wJaw: 0.94, wChin: 0.70 },
-  gaunt: { rx: 15.4, ry: 22.8, wTop: 0.68, wTemple: 0.91, wCheek: 0.97, wJaw: 0.66, wChin: 0.40 },
+  round: { rx: 17.4, ry: 21.0, wTop: 0.72, wTemple: 0.95, wCheek: 1.00, wJaw: 0.88, wChin: 0.58 },
+  heavy: { rx: 18.5, ry: 20.6, wTop: 0.76, wTemple: 0.98, wCheek: 1.04, wJaw: 1.00, wChin: 0.80 },
+  long: { rx: 15.3, ry: 23.4, wTop: 0.70, wTemple: 0.93, wCheek: 0.97, wJaw: 0.72, wChin: 0.42 },
+  square: { rx: 17.1, ry: 21.6, wTop: 0.75, wTemple: 0.97, wCheek: 1.00, wJaw: 0.97, wChin: 0.74 },
+  gaunt: { rx: 14.7, ry: 23.2, wTop: 0.65, wTemple: 0.88, wCheek: 0.96, wJaw: 0.60, wChin: 0.36 },
+  heart: { rx: 16.8, ry: 21.8, wTop: 0.78, wTemple: 1.02, wCheek: 0.97, wJaw: 0.66, wChin: 0.40 },
+  oval: { rx: 16.2, ry: 22.2, wTop: 0.71, wTemple: 0.94, wCheek: 0.99, wJaw: 0.80, wChin: 0.52 },
 };
 
 // --- face description ------------------------------------------------------
@@ -192,83 +213,128 @@ export function makeFace(seed, opts = {}) {
   const old = age === 'old', young = age === 'young';
 
   const toneName = r.weighted([
-    { v: 'pale', w: 3 }, { v: 'fair', w: 4 }, { v: 'tan', w: 4 },
-    { v: 'olive', w: 3 }, { v: 'brown', w: 2 }, { v: 'dark', w: 2 },
+    { v: 'porcelain', w: 2 }, { v: 'pale', w: 3 }, { v: 'fair', w: 3.5 },
+    { v: 'tan', w: 3.5 }, { v: 'olive', w: 3 }, { v: 'bronze', w: 3 },
+    { v: 'brown', w: 3 }, { v: 'dark', w: 3 }, { v: 'ebony', w: 2 },
   ]).v;
+  const darkSkin = toneName === 'brown' || toneName === 'dark' || toneName === 'ebony';
 
   let hairName = r.weighted([
-    { v: 'black', w: 4 }, { v: 'darkbrown', w: 5 }, { v: 'brown', w: 4 },
-    { v: 'auburn', w: 3 }, { v: 'red', w: 2 }, { v: 'blonde', w: 3 },
-    { v: 'grey', w: old ? 6 : 1 }, { v: 'white', w: old ? 4 : 0.4 },
+    { v: 'black', w: darkSkin ? 9 : 4 }, { v: 'darkbrown', w: 5 }, { v: 'brown', w: 4 },
+    { v: 'auburn', w: darkSkin ? 0.6 : 3 }, { v: 'red', w: darkSkin ? 0.2 : 2.5 },
+    { v: 'blonde', w: darkSkin ? 0.2 : 3.5 }, { v: 'sandy', w: darkSkin ? 0.2 : 2.5 },
+    { v: 'grey', w: old ? 7 : 0.8 }, { v: 'white', w: old ? 5 : 0.3 },
   ]).v;
-  if (old && (hairName === 'black' || hairName === 'darkbrown') && r.bool(0.5)) hairName = 'grey';
+  if (old && (hairName === 'black' || hairName === 'darkbrown') && r.bool(0.55)) {
+    hairName = r.bool(0.6) ? 'grey' : 'white';
+  }
 
   const shapeName = r.weighted([
-    { v: 'round', w: 3 }, { v: 'long', w: 3 },
-    { v: 'square', w: sex === 'm' ? 4 : 2 }, { v: 'gaunt', w: old ? 4 : 2 },
+    { v: 'round', w: 3 }, { v: 'oval', w: 3 }, { v: 'long', w: 3 },
+    { v: 'heart', w: sex === 'f' ? 3.5 : 1.5 },
+    { v: 'heavy', w: sex === 'm' ? 3 : 1.5 },
+    { v: 'square', w: sex === 'm' ? 4 : 1.5 },
+    { v: 'gaunt', w: old ? 4 : 2 },
   ]).v;
 
+  // --- hair ---------------------------------------------------------------
+  // With headgear now rare, the cut carries most of the per-character signal:
+  // length, parting, hairline and whether it hangs in front of the shoulders.
   const hairStyle = r.weighted(sex === 'm' ? [
-    { v: 'short', w: 6 }, { v: 'long', w: 2 }, { v: 'ponytail', w: 2 },
-    { v: 'bald', w: old ? 3 : 1 }, { v: 'receding', w: old ? 4 : 1 },
-    { v: 'braided', w: 1 }, { v: 'wild', w: 2 },
+    { v: 'crop', w: 4 }, { v: 'short', w: 5 }, { v: 'medium', w: 3 },
+    { v: 'long', w: 2.5 }, { v: 'ponytail', w: 2 },
+    { v: 'bald', w: old ? 3.5 : 1 }, { v: 'receding', w: old ? 4.5 : 1.2 },
+    { v: 'braided', w: 1.2 }, { v: 'wild', w: 2.5 },
   ] : [
-    { v: 'short', w: 2 }, { v: 'long', w: 6 }, { v: 'ponytail', w: 3 },
-    { v: 'braided', w: 3 }, { v: 'wild', w: 2 }, { v: 'receding', w: 0 }, { v: 'bald', w: 0.2 },
+    { v: 'crop', w: 1 }, { v: 'short', w: 2.5 }, { v: 'medium', w: 4 },
+    { v: 'long', w: 5 }, { v: 'ponytail', w: 3 },
+    { v: 'braided', w: 3 }, { v: 'wild', w: 2 },
+    { v: 'receding', w: old ? 0.6 : 0 }, { v: 'bald', w: 0.15 },
   ]).v;
+
+  const hairlineShape = hairStyle === 'receding' || hairStyle === 'bald' ? 'receded'
+    : r.weighted([
+      { v: 'peak', w: 3 },      // widow's peak
+      { v: 'straight', w: 3 },
+      { v: 'round', w: 3 },
+      { v: 'high', w: 2 },
+      { v: 'receded', w: old ? 2.5 : (sex === 'm' ? 1.5 : 0.4) },
+    ]).v;
+
+  const longish = hairStyle === 'long' || hairStyle === 'braided'
+    || hairStyle === 'wild' || hairStyle === 'medium';
+  const cut = {
+    style: hairStyle,
+    hairline: hairlineShape,
+    // Parting: which side, and how deep a gap it cuts into the fringe.
+    part: r.weighted([{ v: -1, w: 3 }, { v: 1, w: 3 }, { v: 0, w: 2.5 }]).v,
+    partGap: r.float(0.5, 1.0),
+    // Asymmetry so no two hairlines mirror each other.
+    slant: r.float(-0.9, 0.9),
+    volume: r.float(0.90, 1.16) * (hairStyle === 'wild' ? 1.08 : 1),
+    length: r.float(0.75, 1.30),
+    // Falls in front of the shoulders, or is pushed back behind them.
+    front: longish && r.bool(sex === 'f' ? 0.62 : 0.40),
+    frontSide: r.weighted([{ v: 0, w: 3 }, { v: -1, w: 2 }, { v: 1, w: 2 }]).v,
+    sideburn: sex === 'm' ? r.float(0.0, 1.0) : 0,
+  };
 
   const beard = sex === 'f' ? 'none' : r.weighted([
-    { v: 'none', w: young ? 5 : 3 }, { v: 'stubble', w: 3 },
-    { v: 'moustache', w: 2 }, { v: 'short', w: 3 },
-    { v: 'full', w: old ? 3 : 2 }, { v: 'long', w: old ? 2 : 0.8 },
+    { v: 'none', w: young ? 6 : 3 }, { v: 'stubble', w: 4 },
+    { v: 'moustache', w: 2.5 }, { v: 'chin', w: 1.6 }, { v: 'short', w: 3.5 },
+    { v: 'full', w: old ? 3.5 : 2.5 }, { v: 'long', w: old ? 3 : 1 },
   ]).v;
 
   const shp = FACE_SHAPES[shapeName];
   const fem = sex === 'f';
-  const rx = shp.rx * (fem ? 0.955 : 1) * r.float(0.97, 1.03);
-  const ry = shp.ry * (fem ? 0.985 : 1) * r.float(0.98, 1.02);
+  // Overall head mass, on top of the skull shape: two `round` faces of
+  // different builds should still not be confusable.
+  const mass = r.float(0.92, 1.07);
+  const rx = shp.rx * (fem ? 0.955 : 1) * mass * r.float(0.98, 1.02);
+  const ry = shp.ry * (fem ? 0.985 : 1) * (0.5 + mass * 0.5) * r.float(0.98, 1.02);
 
   // Head sits a touch right of centre and turns to the viewer's left, which is
   // how nearly every portrait in the original is composed.
-  const headCX = DW * 0.5 + r.float(0.3, 1.6);
-  const headTop = 8.6 + r.float(-0.4, 0.8);
-  const turn = -r.float(0.12, 0.20);
+  const headCX = DW * 0.5 + r.float(0.0, 2.0);
+  const headTop = 8.6 + r.float(-1.0, 1.6) + (1 - mass) * 6;
+  const turn = -r.float(0.10, 0.22);
 
   const gear = classGear(klass, r, sex, age, hairStyle);
 
   return {
-    seed: key, sex, klass, age, shape: shapeName,
+    seed: key, sex, klass, age, shape: shapeName, mass,
     toneName, skin: skinRamp(toneName),
-    hairName, hairStyle, hair: buildHairColours(hairName),
+    hairName, hairStyle, cut, hair: buildHairColours(hairName),
     eyeName: r.pick(Object.keys(EYE_COLOURS)),
     beard,
     geom: {
       headCX, headTop, rx, ry, rz: rx * 1.02,
       wTop: shp.wTop, wTemple: shp.wTemple, wCheek: shp.wCheek,
-      wJaw: shp.wJaw * (fem ? 0.93 : 1) * (old ? 1.05 : 1),
-      wChin: shp.wChin * (fem ? 0.92 : 1),
+      wJaw: shp.wJaw * (fem ? 0.93 : 1) * (old ? 1.05 : 1) * r.float(0.94, 1.07),
+      wChin: shp.wChin * (fem ? 0.92 : 1) * r.float(0.90, 1.12),
       turn,
-      browY: headTop + ry * (0.845 + r.float(-0.02, 0.02)),
-      browHeavy: (fem ? 0.45 : 1.0) * (old ? 1.3 : 1) * r.float(0.85, 1.15),
-      browThick: (fem ? 0.60 : 1.0) * r.float(0.85, 1.2) * (old ? 1.25 : 1),
-      browArch: fem ? r.float(0.9, 1.5) : r.float(0.3, 0.9),
-      eyeSep: rx * r.float(0.385, 0.415),
-      eyeW: rx * (fem ? 0.232 : 0.218) * r.float(0.95, 1.05),
-      eyeOpenBase: fem ? 1.06 : 0.98,
-      noseW: rx * (fem ? 0.180 : 0.205) * r.float(0.92, 1.10),
-      noseLen: r.float(0.33, 0.39),
-      noseBulb: r.float(0.7, 1.25) * (fem ? 0.85 : 1),
-      noseHook: r.float(-0.35, 0.9) * (old ? 1.3 : 1),
-      mouthW: rx * (fem ? 0.295 : 0.315) * r.float(0.92, 1.08),
-      lipFull: (fem ? 1.35 : 1.0) * r.float(0.85, 1.15),
-      cheekBone: r.float(0.7, 1.35) + (shapeName === 'gaunt' ? 0.35 : 0) + (old ? 0.25 : 0),
-      hollow: (shapeName === 'gaunt' ? 0.85 : 0.18) + (old ? 0.40 : 0),
-      jowl: old ? r.float(0.4, 0.9) : 0,
-      ears: r.float(0.85, 1.15),
+      browY: headTop + ry * (0.845 + r.float(-0.035, 0.035)),
+      browHeavy: (fem ? 0.40 : 1.0) * (old ? 1.35 : 1) * r.float(0.60, 1.50),
+      browThick: (fem ? 0.55 : 1.0) * r.float(0.70, 1.40) * (old ? 1.30 : 1),
+      browArch: fem ? r.float(0.8, 1.7) : r.float(0.15, 1.0),
+      eyeSep: rx * r.float(0.355, 0.445),
+      eyeW: rx * (fem ? 0.232 : 0.218) * r.float(0.88, 1.12),
+      eyeOpenBase: (fem ? 1.06 : 0.98) * r.float(0.90, 1.10),
+      noseW: rx * (fem ? 0.178 : 0.205) * r.float(0.82, 1.26),
+      noseLen: r.float(0.31, 0.41),
+      noseBulb: r.float(0.5, 1.6) * (fem ? 0.85 : 1),
+      noseHook: r.float(-0.5, 1.15) * (old ? 1.3 : 1),
+      mouthW: rx * (fem ? 0.295 : 0.315) * r.float(0.86, 1.14),
+      lipFull: (fem ? 1.35 : 1.0) * r.float(0.72, 1.30),
+      cheekBone: r.float(0.5, 1.6) + (shapeName === 'gaunt' ? 0.40 : 0) + (old ? 0.30 : 0),
+      hollow: (shapeName === 'gaunt' ? 0.90 : 0.18) + (old ? 0.45 : 0)
+        + (shapeName === 'heavy' ? -0.18 : 0),
+      jowl: (old ? r.float(0.4, 1.0) : 0) + (shapeName === 'heavy' ? 0.45 : 0),
+      ears: r.float(0.75, 1.30),
     },
     marks: {
-      wrinkle: old ? r.float(0.95, 1.25) : (age === 'middle' ? r.float(0.20, 0.50) : 0.06),
-      freckles: r.bool(0.22) && toneName !== 'dark' && toneName !== 'brown' ? r.float(0.4, 1) : 0,
+      wrinkle: old ? r.float(1.00, 1.35) : (age === 'middle' ? r.float(0.18, 0.55) : 0.06),
+      freckles: r.bool(0.24) && !darkSkin ? r.float(0.4, 1) : 0,
       scar: r.bool(0.22) ? { side: r.bool() ? 1 : -1, y: r.float(-0.3, 0.5), len: r.float(0.5, 1) } : null,
       stubbleTone: r.float(0.8, 1.2),
       weather: r.float(0.5, 1.1),
@@ -281,7 +347,7 @@ export function makeFace(seed, opts = {}) {
 
 function buildHairColours(name) {
   const base = HAIR_COLOURS[name]();
-  const light = name === 'white' || name === 'grey' || name === 'blonde';
+  const light = name === 'white' || name === 'grey' || name === 'blonde' || name === 'sandy';
   return {
     base,
     dark: scl(base, light ? 0.34 : 0.26),
@@ -294,48 +360,76 @@ function buildHairColours(name) {
   };
 }
 
+/**
+ * Headgear is the exception, not the rule: roughly a third of faces wear
+ * anything at all, and class only shifts the odds. A row of four adventurers
+ * that is four hoods reads as one adventurer painted four times, which is
+ * exactly the failure this table exists to avoid.
+ */
 function classGear(klass, r, sex, age, hairStyle) {
   const steel = { base: rs('stone', 0.42), dark: rs('stone', 0.09), lite: rs('grey', 0.74) };
   const g = {
     helm: null, coif: false, hood: null, hat: null,
     collar: 'cloth', trim: null, symbol: null, mantle: false, steel,
   };
+  // Cloth colour for whatever the shoulders end up wearing, chosen even when
+  // there is no hood so two bare-headed clerics are not in identical robes.
+  const robeRamps = ['plaster', 'stone', 'dirt', 'wood', 'swamp', 'blood', 'sky'];
+  g.robe = { ramp: r.pick(robeRamps), t: r.float(0.20, 0.42) };
+  const hoodOf = (ramp, t, peak, tight) => ({
+    ramp, t, peak, tight,
+    // Every hood gets its own irregular opening: an off-centre, slightly
+    // rotated hole with a couple of lobes, so the face is never a clean oval
+    // mask set in a clean oval hole.
+    ox: r.float(-1.1, 0.9), oy: r.float(-0.8, 1.0), rot: r.float(-0.28, 0.28),
+    lobe1: r.float(0.05, 0.13), lobe2: r.float(0.03, 0.09), ph: r.float(0, 6.28),
+    drapeL: r.float(0.85, 1.25), drapeR: r.float(0.85, 1.25),
+  });
+
   switch (klass) {
-    case 'knight':
-      if (r.bool(0.55)) g.helm = { kind: 'open', nasal: r.bool(0.85), cheek: r.bool(0.4), gold: 0 };
-      else g.coif = true;
+    case 'knight': {
       g.collar = 'plate';
+      const k = r.float(0, 1);
+      if (k < 0.20) g.helm = { kind: 'open', nasal: r.bool(0.8), cheek: r.bool(0.4), gold: 0 };
+      else if (k < 0.38) g.coif = true;
       break;
-    case 'paladin':
-      if (r.bool(0.5)) g.helm = { kind: 'open', nasal: r.bool(0.8), cheek: r.bool(0.3), gold: 1 };
-      else g.coif = true;
+    }
+    case 'paladin': {
       g.collar = 'plate';
       g.trim = 'gold';
-      g.symbol = r.bool(0.5) ? 'sun' : null;
+      g.symbol = r.bool(0.45) ? 'sun' : null;
+      const k = r.float(0, 1);
+      if (k < 0.18) g.helm = { kind: 'open', nasal: r.bool(0.75), cheek: r.bool(0.3), gold: 1 };
+      else if (k < 0.34) g.coif = true;
       break;
+    }
     case 'archer':
-      g.hood = { ramp: 'foliage', t: 0.40, peak: 0.25, tight: 0.0 };
       g.collar = 'leather';
+      if (r.bool(0.15)) g.hood = hoodOf('foliage', r.float(0.30, 0.46), 0.25, 0.0);
       break;
     case 'cleric':
-      g.hood = { ramp: r.bool(0.5) ? 'plaster' : 'stone', t: r.float(0.32, 0.44), peak: 0.1, tight: 0.05 };
       g.collar = 'robe';
       g.symbol = 'cross';
+      if (r.bool(0.42)) g.hood = hoodOf(r.bool(0.5) ? 'plaster' : 'stone', r.float(0.26, 0.46), 0.10, 0.05);
       break;
-    case 'sorcerer':
-      if (r.bool(0.5)) g.hat = { tilt: r.float(-1.5, -0.5), len: r.float(0.9, 1.15) };
-      else g.hood = { ramp: 'sky', t: 0.18, peak: 0.5, tight: 0.02 };
+    case 'sorcerer': {
       g.collar = 'arcane';
-      g.mantle = true;
+      g.mantle = r.bool(0.55);
+      const k = r.float(0, 1);
+      if (k < 0.11) g.hat = { tilt: r.float(-1.5, -0.5), len: r.float(0.9, 1.15) };
+      else if (k < 0.20) g.hood = hoodOf('sky', r.float(0.14, 0.26), 0.5, 0.02);
       break;
+    }
     case 'druid':
-      g.hood = { ramp: 'grass', t: r.float(0.28, 0.40), peak: 0.42, tight: -0.03 };
       g.collar = 'robe';
+      if (r.bool(0.36)) g.hood = hoodOf('grass', r.float(0.24, 0.42), 0.42, -0.03);
       break;
   }
-  g.hairVisible = g.hood ? 0.55 : 1;
-  if (g.helm) g.hairVisible = 0.7;
-  if (g.coif) g.hairVisible = 0.18;
+  // A hood no longer flattens the hair to a stub: the cut still shows through
+  // the opening and escapes at the temples.
+  g.hairVisible = g.hood ? 1 : 1;
+  if (g.helm) g.hairVisible = 0.85;
+  if (g.coif) g.hairVisible = 0.16;
   if (hairStyle === 'bald') g.hairVisible = 0;
   return g;
 }

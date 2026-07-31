@@ -109,26 +109,25 @@ async function boot() {
     dungeon = generateDungeon({ theme, rooms: 16, levels: 3, difficulty: 4, name: theme }, seed);
     genMs = performance.now() - t0;
     scene.add(dungeon.group);
+    window.__dungeon = dungeon;
     scene.fog = new THREE.Fog(0x000000, DUNGEON_FOG_NEAR, DUNGEON_FOG_FAR);
     scene.background = new THREE.Color(0x000000);
-    // Frame the signature image: stand back from a torch so its pool of light
-    // sits in surrounding black, rather than pointing at a random wall.
-    const s = dungeon.start;
-    let t = null;
-    for (const w of dungeon.torches) {
-      const d = Math.hypot(w.x - s.x, w.z - s.z);
-      if (d > 300 && (!t || d < t.d)) t = { ...w, d };
-    }
-    if (t) {
-      const back = 1250 / Math.max(1, t.d);
-      const x = t.x + (s.x - t.x) * back * 1.0;
-      const z = t.z + (s.z - t.z) * back * 1.0;
-      camera.position.set(x, t.y - 170, z);
-      camera.rotation.y = Math.atan2(t.x - x, t.z - z) + Math.PI;
-      camera.rotation.x = -0.04;
-    } else {
-      camera.position.set(s.x, s.y + 160, s.z);
-      camera.rotation.x = -0.06;
+    // Spawn exactly where a host would: at `start`, facing `startYaw`. If the
+    // level only looks right from a hand-picked camera it is not working.
+    camera.position.copy(dungeon.start);
+    camera.rotation.y = dungeon.startYaw;
+    camera.rotation.x = -0.02;
+    if (shot === 'torch') {
+      let t = null;
+      for (const w of dungeon.torches) {
+        const d = Math.hypot(w.x, w.z);
+        if (d > 300 && (!t || d < t.d)) t = { ...w, d };
+      }
+      if (t) {
+        const back = 1250 / Math.max(1, t.d);
+        camera.position.set(t.x * (1 - back), t.y - 170, t.z * (1 - back));
+        camera.rotation.y = Math.atan2(t.x - camera.position.x, t.z - camera.position.z) + Math.PI;
+      }
     }
   } else {
     const stages = []; let tPrev = performance.now();

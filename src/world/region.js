@@ -707,7 +707,7 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
   // `opts.flora: false` skips our billboard stand-ins entirely, for a shell
   // that spawns real baked sprites from region.props / region.def.flora itself.
   const flora = opts.flora === false
-    ? { group: new THREE.Group(), batches: [], state: { drawn: 0, total: 0 }, update() {}, dispose() {} }
+    ? { group: new THREE.Group(), batches: [], plan: [], state: { drawn: 0, total: 0 }, update() {}, dispose() {} }
     : scatterFlora(hm, sdef, r, townSites, { fogNear: SHADE_DIST, fogFar: FAR_CLIP });
   group.add(flora.group);
   await yieldNow();
@@ -743,14 +743,31 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
 
   const water = [{ level: hm.water, tex: def.waterTex || 'water', mesh: terrain.water }];
 
+  // Where a host should drop the party: on the road outside the first town's
+  // gate, facing in, so the town is the first thing they see.
+  let spawnPoint;
+  if (towns.length) {
+    const t = towns[0];
+    const e = t.entrances[0] || { x: t.x + t.radius, z: t.z };
+    const d = Math.hypot(e.x - t.x, e.z - t.z) || 1;
+    const sx = t.x + (e.x - t.x) / d * (t.radius + 900);
+    const sz = t.z + (e.z - t.z) / d * (t.radius + 900);
+    spawnPoint = { x: sx, y: heightAt(hm, sx, sz) + 160, z: sz, yaw: Math.atan2(t.x - sx, t.z - sz) + Math.PI };
+  } else {
+    spawnPoint = { x: 0, y: heightAt(hm, 0, 0) + 160, z: 0, yaw: 0 };
+  }
+
   // --- automap plate ------------------------------------------------------
   prog(0.97, 'drawing the map');
   const minimap = buildMinimapPlate(hm, def, towns, dungeons, roads);
 
+  let bakedHour = tod;
+
   prog(1, 'ready');
 
   return {
-    minimap,
+    minimap, spawnPoint,
+    floraPlan: flora.plan,
     /**
      * Blit the pre-rendered top-down plate, MM6-style: outdoors the automap is
      * an image the game samples, not a vector redraw. `zoom` is the world span
@@ -822,6 +839,14 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
       // else has to be told the same numbers or the horizon seam shows.
       if (sky) {
         sky.update(dt, timeOfDay, weather || def.weather, camera);
+        // Terrain light is baked, so it has to be re-baked when the clock
+        // moves or the sky darkens toward dusk while the ground stays at noon
+        // - which is the single loudest way to break the illusion that the
+        // polygons and the sprites are one image.
+        if (Math.abs(sky.state.tod - bakedHour) > 0.25) {
+          bakedHour = sky.state.tod;
+          terrain.setTimeOfDay(bakedHour);
+        }
         const f = opts.scene && opts.scene.fog;
         if (f) {
           // Same curve the terrain and buildings bake with, so billboards sit
@@ -836,7 +861,14 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
       flora.update(camera);
       for (const t of towns) t.update(camera);
     },
-    setTimeOfDay(hours) { terrain.setTimeOfDay(hours); setBuildingLight(hours); },
+    setTimeOfDay(hours) {
+      bakedHour = hours <= 1 ? hours * 24 : hours;
+      terrain.setTimeOfDay(bakedHour);
+      setBuildingLight(bakedHour);
+      sky.update(0, bakedHour);
+    },
+    /** The single grey multiply the whole scene shares. */
+    get lightMultiplier() { return sky.state.tint; },
     dispose() {
       terrain.dispose();
       flora.dispose();
@@ -869,7 +901,10 @@ const SURFACE_OF = {
  * come from the terrain palette, then roads, water and settlements go on top.
  */
 function buildMinimapPlate(hm, def, towns, dungeons, roads) {
-  const S = 256;
+  // 8 pixels per 512-unit tile. The panel is often zoomed to a few tiles, and
+  // at coarse sampling that crop is just flat quadrants of colour - which is
+  // exactly what a schematic-looking automap is.
+  const S = 1024;
   const c = document.createElement('canvas');
   c.width = S; c.height = S;
   const g = c.getContext('2d');
@@ -952,6 +987,9 @@ function scatterFlora(hm, def, rand, townSites, fogOpts) {
   const buckets = Math.ceil(size / FLORA_BUCKET);
   const span = Math.max(1, hm.max - hm.water);
   const batches = [];
+  // Positions handed back so a host with real baked sprites can use our layout
+  // instead of our billboards.
+  const plan = [];
 
   for (const f of (def.flora || [])) {
     if (f.kind.endsWith('_prop')) continue;      // handled by the prop builder
@@ -999,6 +1037,7 @@ function scatterFlora(hm, def, rand, townSites, fogOpts) {
       mesh.frustumCulled = false;
       group.add(mesh);
       batches.push({ mesh, cx, cz, r: maxR, count: list.length });
+      for (const it of list) plan.push({ kind: f.kind, x: it.x, y: it.y, z: it.z, height: it.h });
     }
   }
 
@@ -1009,7 +1048,7 @@ function scatterFlora(hm, def, rand, townSites, fogOpts) {
   const far = fogOpts.fogFar || 6000;
 
   return {
-    group, batches, state,
+    group, batches, state, plan,
     update(camera) {
       mat4.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
       frustum.setFromProjectionMatrix(mat4);
