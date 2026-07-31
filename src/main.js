@@ -127,6 +127,7 @@ function tickGame(dt) {
     if (hud && !top.fullFrame) handleHudButtons();
   } else if (hud) {
     hud.showTouch = input.hasTouch;
+    hud.showReticle = input.hasTouch || input.mouseLook || input.pointer.inView;
     hud.stickDX = input.stick.dx; hud.stickDY = input.stick.dy;
     hud.draw(uiCtx, dt);
     handleWorldInput();

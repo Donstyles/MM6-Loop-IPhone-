@@ -53,24 +53,36 @@ export function paintRestPanel(g, w, h) {
   g.fillStyle = rampCss('wood', 6);
   g.fillRect(SKY.x - PANEL.x - 6, SKY.y - PANEL.y - 6, SKY.w + 12, 4);
 
-  // Campfire on the right, the panel's key light.
-  const fx = w - 128, fy = h - 92;
-  g.fillStyle = rampCss('stone', 5);
-  for (let i = 0; i < 9; i++) {
-    const a = (i / 9) * Math.PI * 2;
-    g.beginPath();
-    g.ellipse(fx + Math.cos(a) * 46, fy + Math.sin(a) * 18, 9, 6, 0, 0, Math.PI * 2);
-    g.fill();
+  // Campfire on the right: a ring of stones, a leaning stack of logs and
+  // tongues of flame. The key light for the whole panel comes off it.
+  const fx = w - 128, fy = h - 84;
+  for (let i = 0; i < 11; i++) {
+    const a = (i / 11) * Math.PI * 2;
+    const sx = fx + Math.cos(a) * 44, sy = fy + Math.sin(a) * 17;
+    g.fillStyle = rampCss('stone', sy > fy ? 6 : 3);
+    g.beginPath(); g.ellipse(sx, sy, 9, 7, 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = rampCss('stone', sy > fy ? 9 : 5);
+    g.beginPath(); g.ellipse(sx - 2, sy - 2, 5, 3, 0, 0, Math.PI * 2); g.fill();
   }
-  g.fillStyle = rampCss('wood', 3);
-  for (let i = 0; i < 5; i++) {
-    g.save();
-    g.translate(fx, fy);
-    g.rotate((i / 5) * Math.PI);
-    g.fillRect(-30, -3, 60, 5);
-    g.restore();
+  // Ash bed.
+  g.fillStyle = rampCss('grey', 3);
+  g.beginPath(); g.ellipse(fx, fy, 34, 12, 0, 0, Math.PI * 2); g.fill();
+  // Logs leaning into a cone.
+  for (const [ax, ay, bx2, by2] of [[fx - 26, fy + 6, fx + 4, fy - 24],
+    [fx + 26, fy + 6, fx - 2, fy - 26], [fx - 18, fy + 9, fx + 14, fy - 14]]) {
+    g.strokeStyle = rampCss('wood', 3); g.lineWidth = 7;
+    g.beginPath(); g.moveTo(ax, ay); g.lineTo(bx2, by2); g.stroke();
+    g.strokeStyle = rampCss('wood', 6); g.lineWidth = 2;
+    g.beginPath(); g.moveTo(ax, ay - 2); g.lineTo(bx2, by2 - 2); g.stroke();
   }
-  glow(g, fx, fy - 14, 110, '#ff8828', 1);
+  // Flames: overlapping tongues, hottest at the base.
+  for (let i = 0; i < 7; i++) {
+    const ox = fx - 24 + i * 8;
+    const hgt = 22 + ((i * 5) % 3) * 12 - Math.abs(i - 3) * 4;
+    poly(g, [ox - 5, fy + 2, ox, fy - hgt, ox + 5, fy + 2], rampCss('fire', 8 + (i % 3)));
+    poly(g, [ox - 2, fy + 2, ox + 1, fy - hgt * 0.6, ox + 3, fy + 2], rampCss('fire', 13));
+  }
+  glow(g, fx, fy - 12, 130, '#ff7818', 0.95);
 
   // Bedrolls in the foreground.
   for (let i = 0; i < 3; i++) {

@@ -139,6 +139,7 @@ async function boot() {
       hud.textContent = `${Math.round(p * 100)}% ${label}`;
     }, { scene, camera, timeOfDay: tod });
     window.__stages = stages;
+    window.__world = world;
     console.log('STAGES', stages.join(' | '));
     console.log('MISSING TEX', missingTextureIds.join(','));
     genMs = performance.now() - t0;

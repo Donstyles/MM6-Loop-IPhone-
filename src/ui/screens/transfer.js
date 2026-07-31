@@ -39,11 +39,36 @@ export function paintMapPage(g, w, h) {
     return ramp('water', Math.round(clamp(3 + n * 4, 0, 15)));
   }, 77);
 
-  // Landmass: a blobby island built from a few overlapping ellipses.
+  // Landmass: a blobby island built from a few overlapping ellipses. The coast
+  // line is derived from the silhouette rather than stroked per ellipse, or the
+  // overlaps show up as arcs running across the middle of the island.
   const land = [
     [0.42, 0.52, 0.40, 0.36], [0.66, 0.40, 0.26, 0.24], [0.26, 0.72, 0.22, 0.18],
     [0.72, 0.68, 0.20, 0.16], [0.34, 0.26, 0.20, 0.14],
   ];
+  const mask = document.createElement('canvas');
+  mask.width = w; mask.height = h;
+  const mg = mask.getContext('2d');
+  mg.fillStyle = '#ffffff';
+  mg.beginPath();
+  for (const [cx, cy, rx, ry] of land) {
+    mg.moveTo((cx + rx) * w, cy * h);
+    mg.ellipse(cx * w, cy * h, rx * w, ry * h, 0, 0, Math.PI * 2);
+  }
+  mg.fill();
+
+  // Shore: the mask smeared outward, inked dark, and laid under the land.
+  const shore = document.createElement('canvas');
+  shore.width = w; shore.height = h;
+  const sg2 = shore.getContext('2d');
+  for (const [dx, dy] of [[-2, 0], [2, 0], [0, -2], [0, 2], [-2, -2], [2, 2], [2, -2], [-2, 2]]) {
+    sg2.drawImage(mask, dx, dy);
+  }
+  sg2.globalCompositeOperation = 'source-in';
+  sg2.fillStyle = '#3c3a34';
+  sg2.fillRect(0, 0, w, h);
+  g.drawImage(shore, 0, 0);
+
   g.save();
   g.beginPath();
   for (const [cx, cy, rx, ry] of land) {
@@ -52,22 +77,11 @@ export function paintMapPage(g, w, h) {
   }
   g.clip();
   washPixels(g, 0, 0, w, h, (u, v) => {
-    const n = fbm2(u * 0.035, v * 0.035, 4, 2, 0.5, 33) * 0.5 + 0.5;
-    const forest = fbm2(u * 0.02 + 9, v * 0.02, 3, 2, 0.5, 51) * 0.5 + 0.5;
+    const n = fbm2(u * 0.035, v * 0.035, 3, 2, 0.5, 33) * 0.5 + 0.5;
+    const forest = fbm2(u * 0.02 + 9, v * 0.02, 2, 2, 0.5, 51) * 0.5 + 0.5;
     if (forest > 0.58) return ramp('foliage', Math.round(4 + n * 4));
     return ramp('grass', Math.round(6 + n * 5));
   }, 33);
-  g.restore();
-
-  // Coast hatching: a dotted outline just outside the land edge.
-  g.save();
-  g.strokeStyle = '#4b4b4b';
-  g.lineWidth = 1;
-  for (const [cx, cy, rx, ry] of land) {
-    g.beginPath();
-    g.ellipse(cx * w, cy * h, rx * w + 3, ry * h + 3, 0, 0, Math.PI * 2);
-    g.stroke();
-  }
   g.restore();
 
   // Hills and forests as little painted glyphs, the way a period map shows them.

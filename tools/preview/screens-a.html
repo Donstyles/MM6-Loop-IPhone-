@@ -412,6 +412,22 @@ export function glyphCanvas(face, color, shadow) { return R.glyphCanvas('small',
 </script>
 
 <script>
+// Other owners are editing src/art while this page is being captured, and a
+// vite hot-reload landing mid-screenshot yields a blank sheet. This page is a
+// one-shot render, so the HMR socket is stubbed out and the page stays put.
+(function () {
+  const RealWS = window.WebSocket;
+  window.WebSocket = function (url, protocols) {
+    const p = String(protocols || '');
+    if (p.indexOf('vite') >= 0 || String(url).indexOf('vite') >= 0) {
+      return { addEventListener() {}, removeEventListener() {}, send() {}, close() {}, readyState: 3 };
+    }
+    return new RealWS(url, protocols);
+  };
+})();
+</script>
+
+<script>
 // Probe the real modules; only stub what is missing or incomplete.
 (function () {
   function read(url) {

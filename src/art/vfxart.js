@@ -59,7 +59,9 @@ const LUT_STONE = makeLUT([ramp('stone', 1), ramp('stone', 4), ramp('stone', 7),
   ramp('stone', 13), ramp('stone', 15)]);
 const LUT_DUST = makeLUT([ramp('dirt', 1), ramp('dirt', 3), ramp('dirt', 6), ramp('dirt', 9),
   ramp('sand', 9), ramp('sand', 12)]);
-const LUT_STEEL = makeLUT([ramp('stone', 2), ramp('stone', 6), ramp('stone', 10), ramp('grey', 11),
+// Steel is the one thing that must stay neutral: the stone ramp is warm, and
+// blades built from it read as brass.
+const LUT_STEEL = makeLUT([ramp('grey', 2), ramp('grey', 5), ramp('grey', 8), ramp('grey', 11),
   ramp('grey', 13), ramp('grey', 15), W]);
 const LUT_GOLD = makeLUT([ramp('gold', 2), ramp('gold', 6), ramp('gold', 10), ramp('gold', 13),
   ramp('gold', 15), mix(ramp('gold', 15), W, 0.55), W]);

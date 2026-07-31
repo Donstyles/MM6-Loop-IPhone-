@@ -32,7 +32,8 @@ export class Boot {
     this._stageIndex = 0;
     this._totalWeight = STAGES.reduce((a, s) => a + s.weight, 0);
     this._doneWeight = 0;
-    this._budgetMs = 12;    // per-frame generation budget
+    this._budgetMs = 12;        // per-frame generation budget
+    this.stageBudgetMs = 60000; // hard ceiling for any one stage
   }
 
   start() {
@@ -71,6 +72,7 @@ export class Boot {
     if (!gen) return;
     let n = 0;
     let frameStart = performance.now();
+    const stageStart = frameStart;
     for (const step of gen) {
       n++;
       if (step && step.id) this.detail = String(step.id);
@@ -79,6 +81,12 @@ export class Boot {
       if (performance.now() - frameStart > this._budgetMs) {
         await nextFrame();
         frameStart = performance.now();
+      }
+      // A stage that runs away must not keep the player on the loading screen
+      // forever; whatever it produced so far is kept and the rest falls back.
+      if (performance.now() - stageStart > this.stageBudgetMs) {
+        console.warn(`stage ${stage.id} exceeded its budget after ${n} items; continuing`);
+        break;
       }
     }
     return n;

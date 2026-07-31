@@ -238,7 +238,7 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
   const theme = THEME[spec.theme] ? spec.theme : 'cave';
   const T = THEME[theme];
   const prog = onProgress || (() => { });
-  const roomTarget = spec.rooms || r.int(12, 20);
+  const roomTarget = clamp(spec.rooms || r.int(12, 20), 4, 40);
   const levels = clamp(spec.levels || r.int(2, 4), 1, 4);
   const difficulty = spec.difficulty || 1;
 
@@ -267,7 +267,18 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
       edges: [], depth: 0,
     });
   }
-  if (rooms.length < 3) throw new Error('dungeon: not enough room');
+  if (rooms.length < 3) {
+    // Fall back to a guaranteed-placeable layout rather than throwing: a
+    // sparse spec must always produce a playable level.
+    rooms.length = 0;
+    for (let k = 0; k < 6; k++) {
+      const i0 = 3 + (k % 3) * 12, j0 = 3 + ((k / 3) | 0) * 12;
+      rooms.push({
+        index: rooms.length, i0, j0, w: 5, h: 5, ci: i0 + 2.5, cj: j0 + 2.5,
+        level: 0, height: T.roomH[0], edges: [], depth: 0,
+      });
+    }
+  }
 
   // --- connect: nearest-neighbour spanning tree plus a few loops ----------
   prog(0.15, 'linking corridors');

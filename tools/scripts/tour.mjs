@@ -6,7 +6,9 @@
 const wait = (ms) => ({ wait: ms });
 
 export default [
-  { name: 'spawn — morning', js: '__mm6.setTime(9,0)', wait: 900 },
+  { name: 'title screen', js: null, wait: 900 },
+  { name: 'party creation', js: '__mm6.open("chargen")', wait: 900 },
+  { name: 'enter world', js: '__mm6.newGame(); __mm6.setTime(9,0)', wait: 900 },
   { name: 'look around', js: '__mm6.look(0.7, 0)', wait: 500 },
   { name: 'walk forward', js: '__mm6.walk(1,0,1200)', wait: 1400 },
   { name: 'walk forward 2', js: '__mm6.walk(1,0,1600)', wait: 1800 },

@@ -976,6 +976,10 @@ export function makeBillboardField(tex, instances, opts = {}) {
   return mesh;
 }
 
+function speckleBerries(p, rnd) {
+  for (let i = 0; i < 16; i++) p.setArr(20 + rnd.int(24), 38 + rnd.int(16), rampSample('blood', 0.72));
+}
+
 /** Quick procedural sprite sheet for a flora kind, used until spritebake lands. */
 const _floraCache = new Map();
 export function floraTexture(kind, seed = 1) {
@@ -1012,7 +1016,7 @@ export function floraTexture(kind, seed = 1) {
   };
 
   switch (kind) {
-    case 'pine': case 'fir': {
+    case 'pine': case 'pine_snow': case 'fir': {
       trunk(2, 3.5, 40, 'wood', 0.28);
       for (let i = 0; i < 4; i++) {
         const y = 10 + i * 10, w = 8 + i * 5;
@@ -1058,10 +1062,11 @@ export function floraTexture(kind, seed = 1) {
       }
       break;
     }
-    case 'bush': case 'shrub':
+    case 'bush': case 'bush_berry': case 'shrub': case 'sapling': case 'vine':
       blob(32, 46, 15, 12, 'foliage', 0.22, 0.78, 31);
+      if (kind === 'bush_berry') speckleBerries(p, rnd);
       break;
-    case 'fern':
+    case 'fern': case 'grass_tuft':
       blob(32, 50, 13, 9, 'grass', 0.24, 0.72, 44);
       break;
     case 'cactus':
@@ -1069,10 +1074,10 @@ export function floraTexture(kind, seed = 1) {
       blob(22, 34, 4, 7, 'foliage', 0.24, 0.6, 8);
       blob(43, 30, 4, 8, 'foliage', 0.24, 0.6, 9);
       break;
-    case 'rock': case 'boulder':
+    case 'rock': case 'rock_small': case 'rock_large': case 'boulder': case 'log':
       blob(32, 50, 17, 11, 'stone', 0.22, 0.72, 55);
       break;
-    case 'reed':
+    case 'reed': case 'reeds':
       for (let i = 0; i < 12; i++) {
         const x0 = 20 + rnd.int(24), lean = rnd.float(-6, 6);
         for (let y = 26; y < S; y++) {
@@ -1082,7 +1087,7 @@ export function floraTexture(kind, seed = 1) {
         }
       }
       break;
-    case 'flowers':
+    case 'flowers': case 'flowers_white': case 'flowers_red':
       blob(32, 54, 14, 7, 'grass', 0.36, 0.8, 61);
       for (let i = 0; i < 14; i++) {
         p.setArr(18 + rnd.int(28), 46 + rnd.int(12), rampSample(rnd.bool() ? 'gold' : 'blood', 0.7));
@@ -1091,15 +1096,19 @@ export function floraTexture(kind, seed = 1) {
     case 'stump':
       trunk(6, 7, 46, 'wood', 0.26);
       break;
-    case 'mushroom':
+    case 'mushroom': case 'mushroom_cluster': case 'mushroom_giant':
       trunk(1.5, 2, 46, 'plaster', 0.6);
       blob(32, 44, 10, 6, 'blood', 0.3, 0.7, 77);
       break;
     default: { // broadleaf tree - the workhorse of every green region
-      trunk(2.5, 4.5, 34, 'wood', 0.26);
-      blob(32, 26, 19, 17, 'foliage', 0.18, 0.86, 21);
-      blob(22, 20, 10, 9, 'foliage', 0.26, 0.9, 22);
-      blob(43, 30, 10, 9, 'foliage', 0.14, 0.7, 23);
+      // MM6 swapped tree sprites by season: tree01/04/10 had autumn and winter
+      // variants, the conifers did not. Autumn is the same silhouette in the
+      // fire ramp rather than a separate drawing.
+      const leaf = kind === 'oak_autumn' ? 'fire' : kind === 'willow' ? 'grass' : 'foliage';
+      trunk(2.5, 4.5, 34, 'wood', kind === 'birch' ? 0.74 : 0.26);
+      blob(32, 26, 19, 17, leaf, 0.18, 0.86, 21);
+      blob(22, 20, 10, 9, leaf, 0.26, 0.9, 22);
+      blob(43, 30, 10, 9, leaf, 0.14, 0.7, 23);
       break;
     }
   }

@@ -418,8 +418,13 @@ function pickUp(session, e) {
   } else if (item) {
     const p = session.modules?.partyMod;
     const ch = session.party.members[session.activeChar];
-    const ok = p && p.addToInventory ? p.addToInventory(ch, item) : (ch.inventory.push(item), true);
-    if (!ok) { session.message('No room in your pack.'); return; }
+    // Items occupy rectangles in a 14x9 grid, so the party module has to place
+    // them; only fall back to a flat list if it is unavailable.
+    let ok = false;
+    if (p && p.giveItem) ok = !!p.giveItem(session.party, item);
+    else if (p && p.invAdd && ch) ok = !!p.invAdd(ch.inventory, item);
+    else if (ch && Array.isArray(ch.inventory)) { ch.inventory.push(item); ok = true; }
+    if (!ok) { session.message('There is no room in your packs.'); return; }
     session.message(`You pick up ${item.name || 'an item'}.`);
     if (session.audio) session.audio.play('item_pickup');
   }

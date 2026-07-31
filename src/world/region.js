@@ -7,6 +7,7 @@ import {
 } from './terrain.js';
 import { buildSky, FAR_CLIP, SHADE_DIST, timeTint, sunTerms, sunDirection, quantiseShade } from './sky.js';
 import { generateTown } from './town.js';
+import { monstersInLevelRange, MONSTER_IDS } from '../game/monsters.js';
 import { MeshBuilder, buildRuins, buildHouse, addProp, materialFor, setBuildingLight } from './building.js';
 
 // ---------------------------------------------------------------------------
@@ -41,12 +42,12 @@ export const REGIONS = {
     fogClass: 'none', hazeTint: [0.62, 0.67, 0.73], sky: 'plansky3',
     skyTint: [1, 1, 1], cloudiness: 0.42,
     flora: [
-      { kind: 'tree', density: 0.12, scale: [780, 1300], m: [0.40, 1], s: [0, 0.42], h: [0.10, 0.80] },
+      { kind: 'oak', density: 0.12, scale: [780, 1300], m: [0.40, 1], s: [0, 0.42], h: [0.10, 0.80] },
       { kind: 'pine', density: 0.03, scale: [850, 1400], m: [0.55, 1], s: [0, 0.5], h: [0.35, 0.9] },
       { kind: 'bush', density: 0.05, scale: [220, 380], s: [0, 0.45] },
-      { kind: 'rock', density: 0.015, scale: [200, 420], s: [0.2, 0.9] },
+      { kind: 'rock_large', density: 0.015, scale: [200, 420], s: [0.2, 0.9] },
     ],
-    monsters: ['goblin', 'goblin_shaman', 'wolf', 'bat', 'giant_rat', 'peasant_bandit'],
+    levels: [1, 6], monsters: ['goblin', 'goblin_shaman', 'wolf', 'bat', 'giant_rat', 'peasant_bandit'],
     towns: [{ name: 'New Sorpigal', size: 'town', coastal: true }],
     dungeons: [
       { name: 'Abandoned Temple', theme: 'temple', rooms: 14, levels: 2 },
@@ -74,12 +75,12 @@ export const REGIONS = {
     fogClass: 'light', hazeTint: [0.60, 0.64, 0.70], sky: 'plansky3',
     skyTint: [0.98, 1.0, 1.02], cloudiness: 0.5,
     flora: [
-      { kind: 'tree', density: 0.15, scale: [820, 1450], m: [0.36, 1], s: [0, 0.4] },
+      { kind: 'oak', density: 0.15, scale: [820, 1450], m: [0.36, 1], s: [0, 0.4] },
       { kind: 'pine', density: 0.04, scale: [900, 1500], m: [0.60, 1] },
       { kind: 'bush', density: 0.045, scale: [220, 380] },
       { kind: 'haystack_prop', density: 0.004, scale: [1, 1], h: [0.2, 0.45] },
     ],
-    monsters: ['bandit', 'wolf', 'goblin', 'harpy', 'skeleton', 'zombie'],
+    levels: [3, 12], monsters: ['bandit', 'wolf', 'goblin', 'harpy', 'skeleton', 'zombie'],
     towns: [{ name: 'Ironfist', size: 'city', castle: true }],
     dungeons: [
       { name: 'Castle Ironfist Dungeon', theme: 'castle', rooms: 16, levels: 3 },
@@ -108,11 +109,11 @@ export const REGIONS = {
     fogClass: 'none', hazeTint: [0.64, 0.69, 0.74], sky: 'plansky3',
     skyTint: [1, 1, 1], cloudiness: 0.4,
     flora: [
-      { kind: 'tree', density: 0.08, scale: [800, 1300], m: [0.44, 1] },
+      { kind: 'oak', density: 0.08, scale: [800, 1300], m: [0.44, 1] },
       { kind: 'bush', density: 0.05, scale: [220, 380] },
-      { kind: 'flowers', density: 0.035, scale: [180, 300] },
+      { kind: 'flowers_white', density: 0.035, scale: [180, 300] },
     ],
-    monsters: ['bandit', 'thief', 'goblin', 'wolf', 'harpy', 'apprentice_mage'],
+    levels: [5, 15], monsters: ['bandit', 'thief', 'goblin', 'wolf', 'harpy', 'apprentice_mage'],
     towns: [{ name: 'Free Haven', size: 'city', coastal: true }, { name: 'Havenshire', size: 'village' }],
     dungeons: [
       { name: 'Temple of the Moon', theme: 'temple', rooms: 15, levels: 3 },
@@ -143,9 +144,9 @@ export const REGIONS = {
       { kind: 'dead_tree', density: 0.07, scale: [700, 1200] },
       { kind: 'pine', density: 0.05, scale: [800, 1300], m: [0.5, 1] },
       { kind: 'fern', density: 0.07, scale: [200, 340] },
-      { kind: 'rock', density: 0.03, scale: [220, 500], s: [0.2, 0.9] },
+      { kind: 'rock_large', density: 0.03, scale: [220, 500], s: [0.2, 0.9] },
     ],
-    monsters: ['harpy', 'gargoyle', 'wyvern', 'ghost', 'cutpurse'],
+    levels: [12, 24], monsters: ['harpy', 'gargoyle', 'wyvern', 'ghost', 'cutpurse'],
     towns: [{ name: 'Mist', size: 'village', coastal: true }],
     dungeons: [
       { name: 'The Mist Caves', theme: 'cave', rooms: 15, levels: 3 },
@@ -174,9 +175,9 @@ export const REGIONS = {
     flora: [
       { kind: 'palm', density: 0.1, scale: [900, 1500], h: [0.03, 0.5] },
       { kind: 'bush', density: 0.05, scale: [220, 400], m: [0.4, 1] },
-      { kind: 'rock', density: 0.015, scale: [200, 420], s: [0.25, 0.9] },
+      { kind: 'rock_large', density: 0.015, scale: [200, 420], s: [0.25, 0.9] },
     ],
-    monsters: ['lizardman', 'lizard_archer', 'crocodile', 'giant_crab', 'pirate'],
+    levels: [3, 10], monsters: ['lizardman', 'lizard_archer', 'crocodile', 'giant_crab', 'pirate'],
     towns: [{ name: 'Bootleg Bay', size: 'village', coastal: true }],
     dungeons: [
       { name: 'The Temple of the Sun', theme: 'temple', rooms: 14, levels: 2 },
@@ -204,11 +205,11 @@ export const REGIONS = {
     skyTint: [0.92, 0.96, 1.02], cloudiness: 0.68,
     flora: [
       { kind: 'pine', density: 0.17, scale: [950, 1700], s: [0, 0.5] },
-      { kind: 'fir', density: 0.07, scale: [900, 1500] },
-      { kind: 'rock', density: 0.03, scale: [220, 500], s: [0.2, 0.9] },
+      { kind: 'pine_snow', density: 0.07, scale: [900, 1500] },
+      { kind: 'rock_large', density: 0.03, scale: [220, 500], s: [0.2, 0.9] },
       { kind: 'stump', density: 0.01, scale: [180, 260] },
     ],
-    monsters: ['bandit', 'wolf', 'werewolf', 'ogre', 'harpy', 'gargoyle'],
+    levels: [10, 20], monsters: ['bandit', 'wolf', 'werewolf', 'ogre', 'harpy', 'gargoyle'],
     towns: [{ name: 'Silver Cove', size: 'town', coastal: true }],
     dungeons: [
       { name: 'The Silver Helm Outpost', theme: 'castle', rooms: 14, levels: 2 },
@@ -235,11 +236,11 @@ export const REGIONS = {
     skyTint: [0.62, 0.66, 0.62], cloudiness: 0.9,
     flora: [
       { kind: 'dead_tree', density: 0.2, scale: [850, 1600] },
-      { kind: 'mushroom', density: 0.04, scale: [200, 340] },
-      { kind: 'reed', density: 0.05, scale: [220, 380], h: [0, 0.2] },
-      { kind: 'rock', density: 0.015, scale: [200, 400] },
+      { kind: 'mushroom_cluster', density: 0.04, scale: [200, 340] },
+      { kind: 'reeds', density: 0.05, scale: [220, 380], h: [0, 0.2] },
+      { kind: 'rock_large', density: 0.015, scale: [200, 400] },
     ],
-    monsters: ['zombie', 'skeleton', 'ghoul', 'vampire_bat', 'wight', 'necromancer'],
+    levels: [16, 30], monsters: ['zombie', 'skeleton', 'ghoul', 'vampire_bat', 'wight', 'necromancer'],
     towns: [{ name: 'Blackshire', size: 'village' }],
     dungeons: [
       { name: 'The Necromancers\' Guild', theme: 'crypt', rooms: 16, levels: 3 },
@@ -265,11 +266,11 @@ export const REGIONS = {
     fogClass: 'light', hazeTint: [0.74, 0.79, 0.85], sky: 'plansky2',
     skyTint: [0.96, 0.99, 1.06], cloudiness: 0.62,
     flora: [
-      { kind: 'fir', density: 0.08, scale: [850, 1500], h: [0, 0.6] },
-      { kind: 'rock', density: 0.04, scale: [220, 520], s: [0.2, 0.9] },
+      { kind: 'pine_snow', density: 0.08, scale: [850, 1500], h: [0, 0.6] },
+      { kind: 'rock_large', density: 0.04, scale: [220, 520], s: [0.2, 0.9] },
       { kind: 'pine', density: 0.03, scale: [800, 1300], h: [0, 0.5] },
     ],
-    monsters: ['ogre', 'yeti', 'ice_elemental', 'dwarf_raider', 'wolf'],
+    levels: [14, 26], monsters: ['ogre', 'yeti', 'ice_elemental', 'dwarf_raider', 'wolf'],
     towns: [{ name: 'White Cap', size: 'village' }],
     dungeons: [
       { name: 'The Dwarven Mines', theme: 'mine', rooms: 18, levels: 4 },
@@ -296,9 +297,9 @@ export const REGIONS = {
     skyTint: [0.92, 0.72, 0.64], cloudiness: 0.8,
     flora: [
       { kind: 'dead_tree', density: 0.04, scale: [700, 1200], h: [0, 0.5] },
-      { kind: 'rock', density: 0.07, scale: [240, 620], s: [0.15, 0.9] },
+      { kind: 'rock_large', density: 0.07, scale: [240, 620], s: [0.15, 0.9] },
     ],
-    monsters: ['dragon', 'fire_elemental', 'magma_elemental', 'gargoyle', 'devil'],
+    levels: [26, 42], monsters: ['dragon', 'fire_elemental', 'magma_elemental', 'gargoyle', 'devil'],
     towns: [{ name: 'Kriegspire', size: 'village' }],
     dungeons: [
       { name: 'The Tomb of Varn', theme: 'volcano', rooms: 18, levels: 4 },
@@ -325,11 +326,11 @@ export const REGIONS = {
     fogClass: 'medium', hazeTint: [0.50, 0.54, 0.46], sky: 'plansky1',
     skyTint: [0.84, 0.88, 0.80], cloudiness: 0.72,
     flora: [
-      { kind: 'reed', density: 0.15, scale: [220, 420], h: [0, 0.3] },
+      { kind: 'reeds', density: 0.15, scale: [220, 420], h: [0, 0.3] },
       { kind: 'dead_tree', density: 0.07, scale: [700, 1300] },
       { kind: 'fern', density: 0.06, scale: [200, 340] },
     ],
-    monsters: ['eel', 'lizardman', 'swamp_troll', 'giant_leech', 'bog_beast'],
+    levels: [8, 18], monsters: ['eel', 'lizardman', 'swamp_troll', 'giant_leech', 'bog_beast'],
     towns: [{ name: 'Eelford', size: 'village', coastal: true }],
     dungeons: [
       { name: 'The Sunken Barge', theme: 'sewer', rooms: 12, levels: 2 },
@@ -356,10 +357,10 @@ export const REGIONS = {
     skyTint: [1.10, 1.02, 0.82], cloudiness: 0.18,
     flora: [
       { kind: 'cactus', density: 0.025, scale: [300, 600] },
-      { kind: 'rock', density: 0.025, scale: [220, 520] },
+      { kind: 'rock_large', density: 0.025, scale: [220, 520] },
       { kind: 'dead_tree', density: 0.007, scale: [600, 1000] },
     ],
-    monsters: ['sand_worm', 'mummy', 'genie', 'scorpion', 'dragon'],
+    levels: [30, 48], monsters: ['sand_worm', 'mummy', 'genie', 'scorpion', 'dragon'],
     towns: [{ name: 'The Oasis', size: 'village' }],
     dungeons: [
       { name: 'The Tomb of Ethric', theme: 'crypt', rooms: 18, levels: 4 },
@@ -384,11 +385,11 @@ export const REGIONS = {
     fogClass: 'light', hazeTint: [0.68, 0.74, 0.80], sky: 'plansky2',
     skyTint: [0.94, 0.98, 1.06], cloudiness: 0.66,
     flora: [
-      { kind: 'fir', density: 0.035, scale: [700, 1200], h: [0, 0.5] },
-      { kind: 'rock', density: 0.06, scale: [220, 560], s: [0.15, 0.9] },
-      { kind: 'shrub', density: 0.05, scale: [180, 300] },
+      { kind: 'pine_snow', density: 0.035, scale: [700, 1200], h: [0, 0.5] },
+      { kind: 'rock_large', density: 0.06, scale: [220, 560], s: [0.15, 0.9] },
+      { kind: 'bush_berry', density: 0.05, scale: [180, 300] },
     ],
-    monsters: ['yeti', 'ice_elemental', 'frost_giant', 'wolf', 'wyvern'],
+    levels: [20, 34], monsters: ['yeti', 'ice_elemental', 'frost_giant', 'wolf', 'wyvern'],
     towns: [{ name: 'Highfrost', size: 'village' }],
     dungeons: [
       { name: 'The Ice Caverns', theme: 'ice', rooms: 16, levels: 3 },
@@ -413,12 +414,12 @@ export const REGIONS = {
     fogClass: 'none', hazeTint: [0.62, 0.72, 0.64], sky: 'plansky3',
     skyTint: [1.02, 1.06, 1.00], cloudiness: 0.30,
     flora: [
-      { kind: 'tree', density: 0.17, scale: [900, 1700], s: [0, 0.44] },
-      { kind: 'flowers', density: 0.07, scale: [200, 340] },
+      { kind: 'oak', density: 0.17, scale: [900, 1700], s: [0, 0.44] },
+      { kind: 'flowers_white', density: 0.07, scale: [200, 340] },
       { kind: 'bush', density: 0.06, scale: [240, 420] },
       { kind: 'fern', density: 0.05, scale: [200, 340] },
     ],
-    monsters: ['titan', 'dragon', 'archmage', 'behemoth', 'devil'],
+    levels: [38, 60], monsters: ['titan', 'dragon', 'archmage', 'behemoth', 'devil'],
     towns: [{ name: 'The Retreat', size: 'village' }],
     dungeons: [
       { name: 'The Control Center', theme: 'tower', rooms: 18, levels: 4 },
@@ -429,6 +430,50 @@ export const REGIONS = {
 };
 
 export const REGION_IDS = Object.keys(REGIONS);
+
+/**
+ * Resolve a region's spawn table against the live bestiary.
+ *
+ * The hand-written `monsters` lists in the table above are only a hint for what
+ * *kind* of thing lives here; the authoritative set is whatever the bestiary
+ * has in the region's level band, so the world keeps working when the bestiary
+ * is rebuilt. Ids that no longer exist are dropped rather than spawned.
+ */
+export function spawnTableForRegion(def) {
+  const [lo, hi] = def.levels || [1, 60];
+  let ids = [];
+  try {
+    ids = monstersInLevelRange(lo, hi).map((m) => m.id);
+  } catch (e) { ids = []; }
+  if (!ids.length) ids = (def.monsters || []).filter((id) => MONSTER_IDS.includes(id));
+  return ids.length ? ids : MONSTER_IDS.slice(0, 8);
+}
+
+// --- seasons ---------------------------------------------------------------
+//
+// A MM6-only feature: the terrain tileset and the tree sprites swap by month.
+// Winter turns grass to snow, spring and autumn turn it to dirt, and flowers
+// are culled outright outside summer.
+
+export const SEASON_TILE_SWAP = {
+  winter: { grass: 'snow', grass_lush: 'snow', grass_dry: 'snow_rock', farmland: 'snow', forest_floor: 'snow' },
+  shoulder: { grass: 'dirt', grass_lush: 'dirt', farmland: 'dirt' },
+  summer: null,
+};
+
+export const SEASON_FLORA_SWAP = {
+  winter: { oak: 'dead_tree', birch: 'dead_tree', willow: 'dead_tree', pine: 'pine_snow' },
+  shoulder: { oak: 'oak_autumn', birch: 'oak_autumn' },
+  summer: null,
+};
+
+/** months 11,0,1 winter; 2,3,4 and 8,9,10 shoulder; 5,6,7 summer. */
+export function seasonOf(month) {
+  const m = ((month % 12) + 12) % 12;
+  if (m === 11 || m === 0 || m === 1) return 'winter';
+  if (m >= 5 && m <= 7) return 'summer';
+  return 'shoulder';
+}
 
 const yieldNow = () => new Promise((res) => setTimeout(res, 0));
 
@@ -452,6 +497,20 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
   // landform best; `terrain.setTimeOfDay` re-bakes it later without remeshing.
   const tod = opts.timeOfDay === undefined ? 9.5 : opts.timeOfDay;
   setBuildingLight(tod);
+
+  // Seasonal tileset / flora swap.
+  const season = seasonOf(opts.month === undefined ? 6 : opts.month);
+  const tileSwap = SEASON_TILE_SWAP[season];
+  const floraSwap = SEASON_FLORA_SWAP[season];
+  const sdef = (tileSwap || floraSwap) ? {
+    ...def,
+    bands: def.bands.map((b) => (tileSwap && tileSwap[b.tex] ? { ...b, tex: tileSwap[b.tex] } : b)),
+    flora: def.flora
+      // Flowers are culled entirely outside summer, as in the original.
+      .filter((f) => !(season !== 'summer' && f.kind.startsWith('flowers')))
+      .map((f) => (floraSwap && floraSwap[f.kind] ? { ...f, kind: floraSwap[f.kind] } : f)),
+  } : def;
+  const spawnTable = spawnTableForRegion(def);
 
   prog(0.02, 'waking textures');
   await texturesReady;
@@ -554,7 +613,7 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
 
   // --- texture classification --------------------------------------------
   prog(0.34, 'painting ground');
-  paintTiles(hm, def);
+  paintTiles(hm, sdef);
   for (const rd of roads) carveRoad(hm, rd.points, { width: rd.width, tex: rd.tex });
   await yieldNow();
 
@@ -568,7 +627,7 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
       coastal: !!t.coastal, region: id, night: opts.night,
       roadTex: t.size === 'village' ? 'road_dirt' : 'road_cobble',
       hazeTint: def.hazeTint, fogFar: FAR_CLIP,
-      treeKind: (def.flora[0] || {}).kind || 'tree',
+      treeKind: (sdef.flora[0] || {}).kind || 'oak',
       wallTex: id === 'kriegspire' ? 'wall_castle_dark' : 'wall_castle',
     }, r.int(1e9));
     group.add(town.group);
@@ -596,13 +655,15 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
     sub.box('wall_stone_block', -520, 0, 140, 520, 60, 420, { sides: 'nsewt', uu: 3, vv: 0.2 });
     propBuilder.absorb(sub, new THREE.Matrix4().makeRotationY(rot).setPosition(d.x, y, d.z));
     colliders.push({ type: 'obb', x: d.x, z: d.z, hw: 430, hd: 150, rot, y0: y, y1: y + 820 });
+    const dseed = r.int(1e9);
     dungeons.push({
       id: `${id}:${d.name}`.replace(/\s+/g, '_').toLowerCase(),
       name: d.name, theme: d.theme, x: d.x, y, z: d.z, rot,
+      rooms: d.rooms, levels: d.levels, seed: dseed, difficulty: def.difficulty,
       entrance: new THREE.Vector3(d.x + Math.sin(rot) * 220, y, d.z + Math.cos(rot) * 220),
       spec: {
         theme: d.theme, name: d.name, rooms: d.rooms, levels: d.levels,
-        difficulty: def.difficulty, spawnTable: def.monsters, exitTo: id,
+        difficulty: def.difficulty, spawnTable, exitTo: id, seed: dseed,
       },
     });
   }
@@ -643,7 +704,7 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
 
   // --- flora --------------------------------------------------------------
   prog(0.86, 'planting');
-  const flora = scatterFlora(hm, def, r, townSites, { fogNear: SHADE_DIST, fogFar: FAR_CLIP });
+  const flora = scatterFlora(hm, sdef, r, townSites, { fogNear: SHADE_DIST, fogFar: FAR_CLIP });
   group.add(flora.group);
   await yieldNow();
 
@@ -660,7 +721,7 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
     if (nearTown && r.bool(0.75)) continue;
     spawns.push({
       x, y, z,
-      id: r.pick(def.monsters),
+      id: r.pick(spawnTable),
       level: clamp(def.difficulty + r.int(-1, 2), 1, 20),
       count: r.int(1, 3),
       respawn: 60 * 60 * 24 * 7,
@@ -735,6 +796,7 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
     fogClass: def.fogClass, hazeTint: def.hazeTint,
     weather: def.weather,
     difficulty: def.difficulty,
+    season, spawnTable,
     heightAt: (x, z) => heightAt(hm, x, z),
     slopeAt: (x, z) => slopeAt(hm, x, z),
     normalAt: (x, z) => normalAt(hm, x, z),

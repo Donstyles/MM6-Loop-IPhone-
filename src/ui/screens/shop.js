@@ -375,14 +375,15 @@ export function paintShopInterior(g, w, h, kind) {
         g.fillRect(x + 2, sy + 24 - bh, 4, 3);
       }
     }
-    // Still on the right.
-    g.fillStyle = rampCss('gold', 6);
-    g.beginPath(); g.ellipse(w - 62, horizon + 6, 32, 26, 0, 0, Math.PI * 2); g.fill();
-    g.fillStyle = rampCss('gold', 10);
-    g.beginPath(); g.ellipse(w - 70, horizon - 2, 14, 10, 0, 0, Math.PI * 2); g.fill();
+    // Still on the right: a copper belly, a condenser pipe and a green flame.
+    g.fillStyle = rampCss('gold', 5);
+    g.beginPath(); g.ellipse(w - 62, horizon - 6, 30, 24, 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = rampCss('gold', 9);
+    g.beginPath(); g.ellipse(w - 70, horizon - 12, 12, 8, 0, 0, Math.PI * 2); g.fill();
     g.fillStyle = rampCss('gold', 7);
-    g.fillRect(w - 64, horizon - 40, 5, 22);
-    glow(g, w - 62, horizon + 24, 44, '#40f460', 0.6);
+    g.fillRect(w - 64, horizon - 48, 5, 22);
+    g.fillRect(w - 64, horizon - 48, 26, 4);
+    glow(g, w - 62, horizon + 16, 30, '#40f460', 0.45);
   } else {
     // General store: sacks, barrels, hanging herbs, a crowded shelf.
     paintShelf(g, 36, 96, w - 160, { th: 5 });
@@ -404,21 +405,110 @@ export function paintShopInterior(g, w, h, kind) {
     }
   }
 
-  // Counter across the foreground, with the shopkeeper behind it.
-  const cy = h - 62;
-  paintCounter(g, 0, cy, w, 26, { cloth: kind === 'magic' ? 'arcane' : null });
-  figure(g, w * 0.72, cy + 2, 96, 'rgba(18,16,20,0.92)', 'rgba(255,224,160,0.5)', {
-    hat: kind === 'magic' || kind === 'alchemy',
-  });
-  paintClutter(g, 18, h - 6, 'barrel', 34);
-  paintClutter(g, w - 54, h - 4, 'crate', 28);
+  // --- foreground -----------------------------------------------------------
+  // The item grid covers the top two thirds, so everything that has to read at
+  // a glance lives down here: wainscot, counter, shopkeeper and clutter.
 
-  // Lantern over the counter.
-  glow(g, w * 0.34, 30, 90, '#ffd070', 0.65);
-  g.fillStyle = rampCss('gold', 7);
-  g.fillRect((w * 0.34 - 6) | 0, 14, 12, 14);
+  // Wainscot along the bottom of the wall.
+  g.fillStyle = rampCss('wood', 3);
+  g.fillRect(0, horizon - 16, w, 16);
+  g.fillStyle = rampCss('wood', 7);
+  g.fillRect(0, horizon - 16, w, 2);
+
+  // Rug in the middle of the floor.
+  g.save();
+  g.globalAlpha = 0.88;
+  g.fillStyle = rampCss(kind === 'magic' ? 'arcane' : 'blood', 3);
+  g.beginPath(); g.ellipse(w * 0.36, h - 96, 118, 26, 0, 0, Math.PI * 2); g.fill();
+  g.fillStyle = rampCss(kind === 'magic' ? 'arcane' : 'blood', 5);
+  g.beginPath(); g.ellipse(w * 0.36, h - 96, 96, 19, 0, 0, Math.PI * 2); g.fill();
+  g.restore();
+
+  // The shopkeeper, large enough to read, behind a heavy counter.
+  const cy = h - 58;
+  figure(g, w * 0.70, cy + 6, 132, 'rgba(20,17,20,0.94)', 'rgba(255,214,140,0.55)', {
+    hat: kind === 'magic' || kind === 'alchemy', w: 56,
+  });
+  paintCounter(g, 0, cy, w, 30, { cloth: kind === 'magic' ? 'arcane' : null });
+
+  // Goods on the counter, different per trade.
+  const props = {
+    weapon: () => {
+      // A blade laid out for inspection, and a whetstone.
+      g.fillStyle = rampCss('stone', 10);
+      g.fillRect(w * 0.14, cy - 4, 84, 4);
+      g.fillStyle = rampCss('stone', 13);
+      g.fillRect(w * 0.14, cy - 4, 84, 1);
+      g.fillStyle = rampCss('wood', 5);
+      g.fillRect(w * 0.14 + 84, cy - 6, 16, 6);
+      g.fillStyle = rampCss('stone', 4);
+      g.fillRect(w * 0.30, cy - 7, 22, 7);
+    },
+    armor: () => {
+      // A helm and a stack of gauntlets.
+      g.fillStyle = rampCss('stone', 8);
+      g.beginPath(); g.arc(w * 0.16, cy - 2, 13, Math.PI, Math.PI * 2); g.fill();
+      g.fillRect(w * 0.16 - 13, cy - 2, 26, 3);
+      g.fillStyle = rampCss('stone', 12);
+      g.beginPath(); g.arc(w * 0.16 - 4, cy - 3, 9, Math.PI * 1.1, Math.PI * 1.7); g.fill();
+      g.fillStyle = rampCss('stone', 6);
+      for (let i = 0; i < 3; i++) g.fillRect(w * 0.28 + i * 3, cy - 5 - i * 3, 26, 4);
+    },
+    magic: () => {
+      // A crystal on a stand, throwing a little light on the counter.
+      glow(g, w * 0.18, cy - 14, 44, '#c078e8', 0.7);
+      g.fillStyle = rampCss('gold', 7);
+      g.fillRect(w * 0.18 - 8, cy - 6, 16, 6);
+      poly(g, [w * 0.18, cy - 32, w * 0.18 + 9, cy - 14, w * 0.18, cy - 6, w * 0.18 - 9, cy - 14], '#c078e8');
+      g.fillStyle = rampCss('sand', 12);
+      g.fillRect(w * 0.32, cy - 5, 30, 5);
+    },
+    alchemy: () => {
+      // A row of filled flasks and a mortar.
+      for (let i = 0; i < 6; i++) {
+        const x = w * 0.10 + i * 15;
+        const col = ['#c02818', '#2848d8', '#e0d020', '#28c828', '#9038c8', '#40d8d8'][i];
+        g.fillStyle = 'rgba(210,225,235,0.55)';
+        g.fillRect(x, cy - 16, 9, 16);
+        g.fillStyle = col;
+        g.fillRect(x + 1, cy - 9, 7, 8);
+        g.fillStyle = rampCss('wood', 5);
+        g.fillRect(x + 2, cy - 19, 5, 3);
+      }
+      g.fillStyle = rampCss('stone', 7);
+      g.beginPath(); g.ellipse(w * 0.34, cy - 5, 13, 6, 0, Math.PI, 0); g.fill();
+      g.fillRect(w * 0.34 - 13, cy - 5, 26, 5);
+    },
+    general: () => {
+      // Scales, a sack and a ledger.
+      g.fillStyle = rampCss('gold', 7);
+      g.fillRect(w * 0.16, cy - 22, 2, 22);
+      g.fillRect(w * 0.16 - 14, cy - 22, 30, 2);
+      for (const ox of [-14, 14]) {
+        poly(g, [w * 0.16 + ox - 6, cy - 16, w * 0.16 + ox + 6, cy - 16, w * 0.16 + ox, cy - 11],
+          rampCss('gold', 9));
+      }
+      g.fillStyle = rampCss('sand', 7);
+      g.beginPath(); g.ellipse(w * 0.30, cy - 7, 13, 8, 0, 0, Math.PI * 2); g.fill();
+      g.fillStyle = rampCss('blood', 4);
+      g.fillRect(w * 0.38, cy - 5, 24, 5);
+    },
+  };
+  (props[kind] || props.general)();
+
+  paintClutter(g, 14, h - 4, 'barrel', 36);
+  paintClutter(g, 54, h - 2, 'crate', 26);
+  paintClutter(g, w - 52, h - 2, 'sack', 30);
+
+  // Lantern hanging over the counter, and its pool of light.
+  const lx = w * 0.30, ly = horizon - 44;
+  g.fillStyle = rampCss('wood', 2);
+  g.fillRect(lx | 0, 0, 1, ly - 6);
+  g.fillStyle = rampCss('gold', 6);
+  g.fillRect((lx - 7) | 0, ly - 6, 14, 16);
   g.fillStyle = '#ffe8a0';
-  g.fillRect((w * 0.34 - 4) | 0, 16, 8, 10);
+  g.fillRect((lx - 5) | 0, ly - 4, 10, 12);
+  glow(g, lx, ly + 2, 120, '#ffc860', 0.75);
 
   vignette(g, w, h);
 }

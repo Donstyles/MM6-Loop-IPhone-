@@ -158,12 +158,12 @@ const HAIR_COLOURS = {
 };
 
 const EYE_COLOURS = {
-  brown: () => rs('wood', 0.40),
-  hazel: () => mixC(rs('wood', 0.46), rs('swamp', 0.58), 0.45),
-  green: () => mixC(rs('foliage', 0.58), rs('swamp', 0.56), 0.35),
-  blue: () => mixC(rs('sky', 0.42), rs('water', 0.58), 0.45),
-  grey: () => rs('stone', 0.54),
-  amber: () => rs('gold', 0.46),
+  brown: () => desat(rs('wood', 0.34), 0.15),
+  hazel: () => desat(mixC(rs('wood', 0.40), rs('swamp', 0.50), 0.45), 0.15),
+  green: () => desat(mixC(rs('foliage', 0.50), rs('swamp', 0.48), 0.35), 0.18),
+  blue: () => desat(mixC(rs('sky', 0.34), rs('water', 0.50), 0.45), 0.18),
+  grey: () => desat(rs('stone', 0.46), 0.25),
+  amber: () => desat(rs('gold', 0.36), 0.28),
 };
 
 const FACE_SHAPES = {
@@ -302,12 +302,12 @@ function classGear(klass, r, sex, age, hairStyle) {
   };
   switch (klass) {
     case 'knight':
-      if (r.bool(0.55)) g.helm = { kind: 'open', nasal: r.bool(0.7), cheek: r.bool(0.4), gold: 0 };
+      if (r.bool(0.55)) g.helm = { kind: 'open', nasal: r.bool(0.85), cheek: r.bool(0.4), gold: 0 };
       else g.coif = true;
       g.collar = 'plate';
       break;
     case 'paladin':
-      if (r.bool(0.5)) g.helm = { kind: 'open', nasal: r.bool(0.5), cheek: r.bool(0.3), gold: 1 };
+      if (r.bool(0.5)) g.helm = { kind: 'open', nasal: r.bool(0.8), cheek: r.bool(0.3), gold: 1 };
       else g.coif = true;
       g.collar = 'plate';
       g.trim = 'gold';
@@ -464,9 +464,9 @@ function paint(face, ex, W, H) {
     glow: rs('arcane', 0.9),
     catch: [252, 248, 240],
     greyHair: rs('grey', 0.55),
-    lipUp: mixC(scl(SR.ramp[1], 1.2), rs('blood', 0.30), 0.40 * g.lipFull),
-    lipDn: mixC(mixC(SR.ramp[3], rs('blood', 0.40), 0.34 * g.lipFull), SR.ramp[4], 0.16),
-    lipLine: mixC(scl(SR.ramp[0], 1.15), rs('blood', 0.14), 0.4),
+    lipUp: mixC(scl(SR.ramp[1], 1.25), rs('blood', 0.26), 0.24 * g.lipFull),
+    lipDn: mixC(mixC(SR.ramp[3], rs('blood', 0.34), 0.20 * g.lipFull), SR.ramp[4], 0.18),
+    lipLine: mixC(scl(SR.ramp[0], 1.10), rs('blood', 0.12), 0.25),
     mouthIn: mixC(rs('blood', 0.08), [7, 4, 5], 0.45),
     tongue: rs('blood', 0.26),
     teeth: mixC(rs('sand', 0.80), rs('grey', 0.72), 0.45),
@@ -709,7 +709,7 @@ function paint(face, ex, W, H) {
       col = add3(col, C.spec, spec * (1 - 0.4 * ex.hollow));
 
       // weathered skin: mottle, freckles, blush
-      col = scl(col, 1 + (fb(X * 0.95, Y * 0.95, 2, sd + 77) - 0.5) * 0.06 * face.marks.weather);
+      col = scl(col, 1 + (fb(X * 0.95, Y * 0.95, 2, sd + 77) - 0.5) * 0.042 * face.marks.weather);
       if (face.marks.freckles > 0 && Y < noseY + 3) {
         const f = nz(X * 3.1, Y * 3.1, sd + 101);
         if (f > 0.80) {
@@ -740,7 +740,7 @@ function paint(face, ex, W, H) {
             const yy = browY - ry * (0.105 + k * 0.070)
               + (0.55 - k * 0.12) * (dxf * dxf) / (rx * rx) * ry * 0.5;
             const span = smoothstep(rx * 0.84, rx * 0.58, Math.abs(dxf));
-            dk += Math.max(0, 1 - Math.abs(Y - yy) / 0.55) * span * (k === 0 ? 1 : 0.75);
+            dk += Math.max(0, 1 - Math.abs(Y - yy) / 0.40) * span * (k === 0 ? 1 : 0.75);
             lt += Math.max(0, 1 - Math.abs(Y - (yy - 0.75)) / 0.5) * span * 0.5;
           }
         }
@@ -749,7 +749,7 @@ function paint(face, ex, W, H) {
             const s = SIDES[si];
             const ax = fx + s * g.noseW * 1.05, ay = noseY - ry * 0.01;
             const bx = fx + s * g.mouthW * 1.16, by = mouthY + ry * 0.11;
-            dk += Math.max(0, 1 - segDist(X, Y, ax, ay, bx + s * 0.8, by) / 0.85) * (0.65 + 0.45 * wr);
+            dk += Math.max(0, 1 - segDist(X, Y, ax, ay, bx + s * 0.8, by) / 0.62) * (0.75 + 0.45 * wr);
             lt += Math.max(0, 1 - segDist(X, Y, ax - s * 0.9, ay, bx - s * 0.2, by) / 0.6) * 0.4;
           }
         }
@@ -774,7 +774,7 @@ function paint(face, ex, W, H) {
               * smoothstep(g.eyeW * 1.25, g.eyeW * 0.85, Math.abs(ox)) * 0.6;
           }
         }
-        if (dk > 0) col = mixC(col, scl(col, 0.62), Math.min(1, dk) * wr * 0.55);
+        if (dk > 0) col = mixC(col, scl(col, 0.56), Math.min(1, dk) * wr * 0.62);
         if (lt > 0) col = mixC(col, scl(col, 1.20), Math.min(1, lt) * wr * 0.38);
       }
 
@@ -986,9 +986,9 @@ function drawFeatures(buf, i3, X, Y, hc, P) {
 
       // upper lash line, heaviest at the outer corner
       const lashT = -eh * openTop * Math.sqrt(Math.max(0, 1 - Math.pow(Math.abs(ux), 2.3)));
-      const la = Math.max(0, 1 - Math.abs(vy - lashT) / (0.60 + (face.sex === 'f' ? 0.25 : 0)))
-        * smoothstep(1.28, 0.95, Math.abs(ux)) * (0.75 + 0.25 * smoothstep(-0.2, 1.0, ux * s));
-      bl(buf, i3, lashCol, la * 0.95 * hc);
+      const la = Math.max(0, 1 - Math.abs(vy - lashT) / (0.44 + (face.sex === 'f' ? 0.22 : 0)))
+        * smoothstep(1.24, 0.92, Math.abs(ux)) * (0.72 + 0.28 * smoothstep(-0.2, 1.0, ux * s));
+      bl(buf, i3, lashCol, la * (face.sex === 'f' ? 0.88 : 0.74) * hc);
       const lashB = eh * openBot * Math.sqrt(Math.max(0, 1 - Math.pow(Math.abs(ux), 2.3)));
       const lb = Math.max(0, 1 - Math.abs(vy - lashB) / 0.5) * smoothstep(1.15, 0.85, Math.abs(ux));
       bl(buf, i3, mixC(lashCol, skinDeep, 0.45), lb * 0.5 * hc);
@@ -1220,7 +1220,7 @@ function hairColourAt(HC, p, X, Y, sd, LX, LY, ex) {
   const s2 = fb(X * 6.0, Y * 1.1, 2, sd + 211);
   const clump = s1 * 0.7 + s2 * 0.3;
 
-  let shade = 0.16 + diff * 0.95;
+  let shade = 0.24 + diff * 0.92;
   shade *= 0.78 + clump * 0.50;
   shade *= ex.key;
   let c = mixC(HC.dark, HC.base, clamp(shade * 1.5, 0, 1));
@@ -1236,7 +1236,7 @@ function hairColourAt(HC, p, X, Y, sd, LX, LY, ex) {
   // dark layer where the hair meets the forehead, and at the outer edge
   const hl = hairlineAt(p, X);
   c = scl(c, mix(0.52, 1, smoothstep(hl - 0.5, hl - 4.5, Y)));
-  c = scl(c, mix(0.70, 1.04, clamp(1 - r2 * 0.85, 0, 1)));
+  c = scl(c, mix(0.84, 1.04, clamp(1 - r2 * 0.85, 0, 1)));
   return c;
 }
 
@@ -1317,7 +1317,7 @@ function drawGear(buf, subj, face, ex, P) {
 
   const steel = gear.steel;
   const hood = gear.hood;
-  const hoodBase = hood ? rs(hood.ramp, hood.t) : null;
+  const hoodBase = hood ? desat(rs(hood.ramp, hood.t), 0.22) : null;
   const hoodDark = hood ? scl(hoodBase, 0.30) : null;
   const hoodLite = hood ? mixC(scl(hoodBase, 1.55), rs('sand', 0.78), 0.16) : null;
 
@@ -1364,8 +1364,8 @@ function drawGear(buf, subj, face, ex, P) {
           const fold = fb(Math.cos(ang) * 3.6 + Math.sqrt(r2) * 5.5, Math.sin(ang) * 3.6, 3, sd + 403);
           const crease = Math.pow(Math.abs(Math.sin(ang * 6.5 + fold * 3.4)), 3);
           sh *= 0.66 + fold * 0.62;
-          sh *= 1 - crease * 0.30;
-          sh *= mix(0.30, 1, smoothstep(1.0, 1.34, holeM));   // inside the opening
+          sh *= 1 - crease * 0.46;
+          sh *= mix(0.20, 1, smoothstep(1.0, 1.42, holeM));   // inside the opening
           sh *= ex.key;
           let c = mixC(hoodDark, hoodBase, clamp(sh * 1.45, 0, 1));
           c = mixC(c, hoodLite, clamp((sh - 0.60) * 1.7, 0, 1) * 0.8);

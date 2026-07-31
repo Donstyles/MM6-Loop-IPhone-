@@ -433,6 +433,18 @@ export class HUD {
       UI.drawIcon(ctx, 'school_water', v.x + v.w - 20, v.y, 20);
     }
 
+    // The targeting reticle. MM6 pins it to the centre of the world window
+    // whenever you are looking around rather than pointing at the interface.
+    if (this.showReticle) {
+      const cx = Math.round(v.x + v.w / 2), cy = Math.round(v.y + v.h / 2);
+      ctx.fillStyle = this.session.hoverEntity ? '#E1CD23' : '#E6D6C1';
+      for (let i = 3; i <= 6; i++) {
+        ctx.fillRect(cx + i, cy, 1, 1); ctx.fillRect(cx - i, cy, 1, 1);
+        ctx.fillRect(cx, cy + i, 1, 1); ctx.fillRect(cx, cy - i, 1, 1);
+      }
+      ctx.fillRect(cx, cy, 1, 1);
+    }
+
     // Turn-based indicator in the window's bottom-right corner.
     if (S.turnBased) {
       const ap = Math.max(0, Math.min(5, Math.floor((S.turnPoints ?? 130) / 26)));
