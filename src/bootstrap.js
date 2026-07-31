@@ -13,57 +13,63 @@ import { Rand } from './core/rng.js';
 // feature rather than blanking the game.
 // ---------------------------------------------------------------------------
 
-async function opt(path) {
-  try { return await import(/* @vite-ignore */ path); }
-  catch (e) { console.warn('module unavailable:', path, e.message); return null; }
+/**
+ * Import a module without letting a failure take the game down with it.
+ * The loaders below are written as literal `import()` calls rather than as
+ * dynamic paths so the bundler can see them - a computed specifier is invisible
+ * to it and the module simply would not ship.
+ */
+async function opt(name, load) {
+  try { return await load(); }
+  catch (e) { console.warn('module unavailable:', name, e.message); return null; }
 }
 
 const SCREEN_MODULES = [
-  ['charsheet', './ui/screens/charsheet.js', 'CharSheetScreen'],
-  ['inventory', './ui/screens/inventory.js', 'InventoryScreen'],
-  ['spellbook', './ui/screens/spellbook.js', 'SpellbookScreen'],
-  ['questlog', './ui/screens/questlog.js', 'QuestLogScreen'],
-  ['mapscreen', './ui/screens/mapscreen.js', 'MapScreen'],
-  ['quickref', './ui/screens/quickref.js', 'QuickRefScreen'],
-  ['options', './ui/screens/options.js', 'OptionsScreen'],
-  ['dialogue', './ui/screens/dialogue.js', 'DialogueScreen'],
-  ['shop', './ui/screens/shop.js', 'ShopScreen'],
-  ['temple', './ui/screens/temple.js', 'TempleScreen'],
-  ['training', './ui/screens/training.js', 'TrainingScreen'],
-  ['tavern', './ui/screens/tavern.js', 'TavernScreen'],
-  ['bank', './ui/screens/bank.js', 'BankScreen'],
-  ['guild', './ui/screens/guild.js', 'GuildScreen'],
-  ['rest', './ui/screens/rest.js', 'RestScreen'],
-  ['levelup', './ui/screens/levelup.js', 'LevelUpScreen'],
-  ['title', './ui/screens/title.js', 'TitleScreen'],
-  ['chargen', './ui/screens/chargen.js', 'CharGenScreen'],
-  ['transfer', './ui/screens/transfer.js', 'TransferScreen'],
+  ['charsheet', () => import('./ui/screens/charsheet.js'), 'CharSheetScreen'],
+  ['inventory', () => import('./ui/screens/inventory.js'), 'InventoryScreen'],
+  ['spellbook', () => import('./ui/screens/spellbook.js'), 'SpellbookScreen'],
+  ['questlog', () => import('./ui/screens/questlog.js'), 'QuestLogScreen'],
+  ['mapscreen', () => import('./ui/screens/mapscreen.js'), 'MapScreen'],
+  ['quickref', () => import('./ui/screens/quickref.js'), 'QuickRefScreen'],
+  ['options', () => import('./ui/screens/options.js'), 'OptionsScreen'],
+  ['dialogue', () => import('./ui/screens/dialogue.js'), 'DialogueScreen'],
+  ['shop', () => import('./ui/screens/shop.js'), 'ShopScreen'],
+  ['temple', () => import('./ui/screens/temple.js'), 'TempleScreen'],
+  ['training', () => import('./ui/screens/training.js'), 'TrainingScreen'],
+  ['tavern', () => import('./ui/screens/tavern.js'), 'TavernScreen'],
+  ['bank', () => import('./ui/screens/bank.js'), 'BankScreen'],
+  ['guild', () => import('./ui/screens/guild.js'), 'GuildScreen'],
+  ['rest', () => import('./ui/screens/rest.js'), 'RestScreen'],
+  ['levelup', () => import('./ui/screens/levelup.js'), 'LevelUpScreen'],
+  ['title', () => import('./ui/screens/title.js'), 'TitleScreen'],
+  ['chargen', () => import('./ui/screens/chargen.js'), 'CharGenScreen'],
+  ['transfer', () => import('./ui/screens/transfer.js'), 'TransferScreen'],
 ];
 
 export async function startGame(shell) {
   const { engine, ui, screens, registerScreen, openScreen, setSession } = shell;
 
   // --- register every panel that exists ------------------------------------
-  for (const [id, path, exportName] of SCREEN_MODULES) {
-    const m = await opt(path);
+  for (const [id, load, exportName] of SCREEN_MODULES) {
+    const m = await opt(id, load);
     if (!m) continue;
     const Ctor = m[exportName] || m.default || m.Screen;
-    if (!Ctor) { console.warn('screen module has no constructor:', path); continue; }
+    if (!Ctor) { console.warn('screen module has no constructor:', id); continue; }
     registerScreen(id, (session, uiCtx, hud, opts) => new Ctor(session, uiCtx, hud, opts));
   }
 
   // --- systems -------------------------------------------------------------
-  const partyMod = await opt('./game/party.js');
-  const questMod = await opt('./game/quests.js');
-  const combatMod = await opt('./game/combat.js');
-  const monsterMod = await opt('./game/monsters.js');
-  const itemMod = await opt('./game/items.js');
-  const regionMod = await opt('./world/region.js');
-  const dungeonMod = await opt('./world/dungeon.js');
-  const spriteMod = await opt('./art/spritebake.js');
-  const vfxMod = await opt('./ents/vfx.js');
-  const audioMod = await opt('./core/audio.js');
-  const musicMod = await opt('./core/music.js');
+  const partyMod = await opt('./game/party.js', () => import('./game/party.js'));
+  const questMod = await opt('./game/quests.js', () => import('./game/quests.js'));
+  const combatMod = await opt('./game/combat.js', () => import('./game/combat.js'));
+  const monsterMod = await opt('./game/monsters.js', () => import('./game/monsters.js'));
+  const itemMod = await opt('./game/items.js', () => import('./game/items.js'));
+  const regionMod = await opt('./world/region.js', () => import('./world/region.js'));
+  const dungeonMod = await opt('./world/dungeon.js', () => import('./world/dungeon.js'));
+  const spriteMod = await opt('./art/spritebake.js', () => import('./art/spritebake.js'));
+  const vfxMod = await opt('./ents/vfx.js', () => import('./ents/vfx.js'));
+  const audioMod = await opt('./core/audio.js', () => import('./core/audio.js'));
+  const musicMod = await opt('./core/music.js', () => import('./core/music.js'));
 
   const seed = (Math.random() * 1e9) | 0;
   const party = partyMod && partyMod.createParty

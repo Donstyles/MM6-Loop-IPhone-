@@ -256,9 +256,25 @@ function nextFrame() {
   return new Promise((r) => requestAnimationFrame(() => r()));
 }
 
+// Literal import() calls so the bundler can see and ship these; a computed
+// specifier would be invisible to it and 404 in a production build.
+const ART_MODULES = {
+  './art/textures.js': () => import('./art/textures.js'),
+  './art/vfxart.js': () => import('./art/vfxart.js'),
+  './art/font.js': () => import('./art/font.js'),
+  './art/uiart.js': () => import('./art/uiart.js'),
+  './art/portraits.js': () => import('./art/portraits.js'),
+  './art/spritebake.js': () => import('./art/spritebake.js'),
+  './art/models/flora.js': () => import('./art/models/flora.js'),
+  './art/models/props.js': () => import('./art/models/props.js'),
+  './art/models/creatures.js': () => import('./art/models/creatures.js'),
+};
+
 async function safeImport(path) {
+  const load = ART_MODULES[path];
+  if (!load) { console.warn('unknown art module:', path); return null; }
   try {
-    return await import(/* @vite-ignore */ path);
+    return await load();
   } catch (e) {
     console.warn('optional module missing:', path, e.message);
     return null;

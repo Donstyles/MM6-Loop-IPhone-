@@ -333,6 +333,13 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
   const start = rooms.reduce((a, b) => (a.depth <= b.depth ? a : b));
   start.start = true;
 
+  // Re-centre the level so the start room sits on the world origin. The cell
+  // grid is indexed from zero, which would otherwise put a dungeon 20k units
+  // from the origin - and a host that forgets to teleport the party to `start`
+  // then renders an empty black screen with no clue why.
+  const OX = -(Math.floor(start.ci) * CELL + CELL / 2);
+  const OZ = -(Math.floor(start.cj) * CELL + CELL / 2);
+
   // --- cell grid ----------------------------------------------------------
   prog(0.28, 'building cells');
   const cells = new Map();   // key -> cell record
@@ -590,7 +597,7 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
       kind: ds.secret ? 'secret' : 'dungeon',
       secret: ds.secret, locked: !ds.secret && r.bool(0.18),
       open: false, room: ds.room, w, h,
-      pos: mesh.position.clone(),
+      pos: mesh.position.clone().add(new THREE.Vector3(OX, 0, OZ)),
     };
     mesh.name = ds.secret ? 'secretdoor' : 'door';
     doorMeshes.push(mesh);
@@ -692,6 +699,7 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
   prog(0.9, 'assembling');
   const group = new THREE.Group();
   group.name = 'dungeon:' + (spec.name || theme);
+  group.position.set(OX, 0, OZ);
   const mesh = b.finish({ fog: true });
   if (mesh) { mesh.updateMatrix(); group.add(mesh); }
   for (const dm of doorMeshes) group.add(dm);
@@ -712,11 +720,15 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
   }
 
   const startCell = cells.get(key(Math.floor(start.ci), Math.floor(start.cj)));
-  const startPos = new THREE.Vector3(
-    Math.floor(start.ci) * CELL + CELL / 2,
-    (startCell ? startCell.fy : 0) + 160,
-    Math.floor(start.cj) * CELL + CELL / 2,
-  );
+  // Party eye height above the start room's floor, dead centre of the room.
+  const startPos = new THREE.Vector3(0, (startCell ? startCell.fy : 0) + 160, 0);
+  const startFloor = startCell ? startCell.fy : 0;
+  // Face the nearest connected room so the first thing seen is a corridor.
+  let startYaw = 0;
+  {
+    const nb = start.edges.length ? rooms[start.edges[0]] : null;
+    if (nb) startYaw = Math.atan2((nb.ci - start.ci), (nb.cj - start.cj));
+  }
 
   // Collision: hand back the grid itself, which is far cheaper for the shell
   // to query than a few thousand boxes.
@@ -778,10 +790,10 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
   }
 
   // --- collision / query helpers -------------------------------------------
-  const cellAt = (x, z) => cells.get(key(Math.floor(x / CELL), Math.floor(z / CELL)));
+  const cellAt = (x, z) => cells.get(key(Math.floor((x - OX) / CELL), Math.floor((z - OZ) / CELL)));
   const cornerY = (c, x, z) => c.fy
-    + c.gx * (x - (c.i * CELL + CELL / 2))
-    + c.gz * (z - (c.j * CELL + CELL / 2));
+    + c.gx * (x - OX - (c.i * CELL + CELL / 2))
+    + c.gz * (z - OZ - (c.j * CELL + CELL / 2));
 
   /** Floor height under a point, or null in solid rock. */
   function floorAt(x, z) {
@@ -806,7 +818,7 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
   /** Baked light at a point, for tinting sprites the same as the geometry. */
   const _l = [0, 0, 0];
   function lightAt(x, y, z) {
-    shadeVertex(grid, ambDim, x, y, z, 0, 1, 0, _l);
+    shadeVertex(grid, ambDim, x - OX, y, z - OZ, 0, 1, 0, _l);
     return { r: _l[0], g: _l[1], b: _l[2] };
   }
   /** Footstep surface class under a point. */
@@ -826,23 +838,33 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
 
   prog(1, 'done');
 
+  const shift = (a) => a.map((o) => ({ ...o, x: o.x + OX, z: o.z + OZ }));
+
   return {
-    drawMinimap, floorAt, ceilAt, blocked, lightAt, surfaceAt, props,
-    cell: CELL, grid: GRID,
+    drawMinimap, floorAt, ceilAt, blocked, lightAt, surfaceAt,
+    props: shift(props),
+    cell: CELL, grid: GRID, originX: OX, originZ: OZ,
     group, theme, name: spec.name || theme,
     rooms: rooms.map((rm) => ({
-      index: rm.index, x: (rm.i0 + rm.w / 2) * CELL, z: (rm.j0 + rm.h / 2) * CELL,
+      index: rm.index, x: (rm.i0 + rm.w / 2) * CELL + OX, z: (rm.j0 + rm.h / 2) * CELL + OZ,
       y: rm.floorY, w: rm.w * CELL, d: rm.h * CELL, height: rm.height,
       level: rm.level, depth: rm.depth, boss: !!rm.boss, start: !!rm.start,
     })),
-    doors, doorMeshes, chests, spawns, traps, levers, pools, torches,
-    colliders: [{ type: 'grid', cell: CELL, w: GRID, h: GRID, solid: solidGrid, floor: floorGrid, ceil: ceilGrid }]
-      .concat(pillarColliders),
-    start: startPos,
+    doors, doorMeshes,
+    chests: shift(chests), spawns: shift(spawns), traps: shift(traps),
+    levers: shift(levers), pools: shift(pools), torches: shift(torches),
+    colliders: [{
+      type: 'grid', cell: CELL, w: GRID, h: GRID,
+      originX: OX, originZ: OZ,          // worldX = i * cell + originX
+      solid: solidGrid, floor: floorGrid, ceil: ceilGrid,
+    }].concat(pillarColliders.map((c) => ({ ...c, x: c.x + OX, z: c.z + OZ }))),
+    start: startPos, startFloor, startYaw,
     exits: [{ x: startPos.x, y: startPos.y, z: startPos.z, kind: 'surface', to: spec.exitTo || null }],
     bounds: {
-      min: new THREE.Vector3(minX, minY, minZ), max: new THREE.Vector3(maxX, maxY, maxZ),
-      x: (minX + maxX) / 2, z: (minZ + maxZ) / 2, radius: Math.hypot(maxX - minX, maxZ - minZ) / 2,
+      min: new THREE.Vector3(minX + OX, minY, minZ + OZ),
+      max: new THREE.Vector3(maxX + OX, maxY, maxZ + OZ),
+      x: (minX + maxX) / 2 + OX, z: (minZ + maxZ) / 2 + OZ,
+      radius: Math.hypot(maxX - minX, maxZ - minZ) / 2,
     },
     triangles: b.tris,
     update(dt, camera) {
