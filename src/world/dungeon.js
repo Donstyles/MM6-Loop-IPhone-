@@ -777,10 +777,58 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
     ctx.restore();
   }
 
+  // --- collision / query helpers -------------------------------------------
+  const cellAt = (x, z) => cells.get(key(Math.floor(x / CELL), Math.floor(z / CELL)));
+  const cornerY = (c, x, z) => c.fy
+    + c.gx * (x - (c.i * CELL + CELL / 2))
+    + c.gz * (z - (c.j * CELL + CELL / 2));
+
+  /** Floor height under a point, or null in solid rock. */
+  function floorAt(x, z) {
+    const c = cellAt(x, z);
+    return c ? cornerY(c, x, z) : null;
+  }
+  /** Ceiling height over a point, or null in solid rock. */
+  function ceilAt(x, z) {
+    const c = cellAt(x, z);
+    return c ? cornerY(c, x, z) + c.h : null;
+  }
+  /** True where the party cannot stand: solid rock, a pillar, or a lava pool. */
+  function blocked(x, z) {
+    const c = cellAt(x, z);
+    if (!c) return true;
+    if (c.liquid === 'lava') return true;
+    for (const p of pillarColliders) {
+      if (Math.abs(x - p.x) < p.hw + 60 && Math.abs(z - p.z) < p.hd + 60) return true;
+    }
+    return false;
+  }
+  /** Baked light at a point, for tinting sprites the same as the geometry. */
+  const _l = [0, 0, 0];
+  function lightAt(x, y, z) {
+    shadeVertex(grid, ambDim, x, y, z, 0, 1, 0, _l);
+    return { r: _l[0], g: _l[1], b: _l[2] };
+  }
+  /** Footstep surface class under a point. */
+  function surfaceAt(x, z) {
+    const c = cellAt(x, z);
+    if (!c) return 'stone';
+    if (c.liquid === 'water' || c.liquid === 'swamp_water') return 'water';
+    if (T.floor === 'dun_floor_dirt') return 'grass';
+    if (T.floor === 'dun_wood') return 'wood';
+    if (T.floor === 'dun_ice') return 'snow';
+    return 'stone';
+  }
+
+  const props = torches.map((t) => ({
+    kind: t.kind === 'brazier' ? 'brazier' : 'torch', x: t.x, y: t.y, z: t.z,
+  })).concat(levers.map((l) => ({ kind: 'lever', x: l.x, y: l.y, z: l.z })));
+
   prog(1, 'done');
 
   return {
-    drawMinimap,
+    drawMinimap, floorAt, ceilAt, blocked, lightAt, surfaceAt, props,
+    cell: CELL, grid: GRID,
     group, theme, name: spec.name || theme,
     rooms: rooms.map((rm) => ({
       index: rm.index, x: (rm.i0 + rm.w / 2) * CELL, z: (rm.j0 + rm.h / 2) * CELL,

@@ -704,7 +704,11 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
 
   // --- flora --------------------------------------------------------------
   prog(0.86, 'planting');
-  const flora = scatterFlora(hm, sdef, r, townSites, { fogNear: SHADE_DIST, fogFar: FAR_CLIP });
+  // `opts.flora: false` skips our billboard stand-ins entirely, for a shell
+  // that spawns real baked sprites from region.props / region.def.flora itself.
+  const flora = opts.flora === false
+    ? { group: new THREE.Group(), batches: [], state: { drawn: 0, total: 0 }, update() {}, dispose() {} }
+    : scatterFlora(hm, sdef, r, townSites, { fogNear: SHADE_DIST, fogFar: FAR_CLIP });
   group.add(flora.group);
   await yieldNow();
 
@@ -821,10 +825,9 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
         const f = opts.scene && opts.scene.fog;
         if (f) {
           // Same curve the terrain and buildings bake with, so billboards sit
-          // in the scene rather than reading as cut-outs. Expressed in sRGB and
-          // raised to 2.2 because the shader multiplies a decoded sample.
-          const daylight = clamp(sky.state.ambient / 0.69, 0.22, 1);
-          const light = Math.pow(0.62 + 0.38 * daylight, 2.2);
+          // in the scene rather than reading as cut-outs. Only night darkens;
+          // the shell owns the daytime multiply.
+          const light = sky.state.night ? Math.pow(0.38, 2.2) : 1;
           for (const b of flora.batches) b.mesh.userData.setFog(f.color, f.near, f.far, light);
           for (const t of towns) if (t.trees) t.trees.userData.setFog(f.color, f.near, f.far, light);
         }
@@ -833,7 +836,7 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
       flora.update(camera);
       for (const t of towns) t.update(camera);
     },
-    setTimeOfDay(hours) { terrain.setTimeOfDay(hours); },
+    setTimeOfDay(hours) { terrain.setTimeOfDay(hours); setBuildingLight(hours); },
     dispose() {
       terrain.dispose();
       flora.dispose();
@@ -886,10 +889,13 @@ function buildMinimapPlate(hm, def, towns, dungeons, roads) {
       if (h < hm.water) { r = 34; gg = 62; b = 96; }
       else {
         // Relief shading so the plate reads as landform, not a colour blob.
-        const hl = hm.height[j * (hm.size + 1) + Math.max(0, i - 1)];
-        const k = clamp(1 + (h - hl) / 700, 0.62, 1.38);
+        // Sampled against the cell one step north-west, which is where the
+        // automap's implied light comes from.
+        const hl = hm.height[Math.max(0, j - 1) * (hm.size + 1) + Math.max(0, i - 1)];
+        const k = clamp(1 + (h - hl) / 260, 0.45, 1.55);
         r *= k; gg *= k; b *= k;
       }
+      if (hm.roadMask[j * hm.size + i]) { r = r * 0.45 + 190 * 0.55; gg = gg * 0.45 + 165 * 0.55; b = b * 0.45 + 120 * 0.55; }
       const o = (y * S + x) * 4;
       img.data[o] = clamp(r, 0, 255);
       img.data[o + 1] = clamp(gg, 0, 255);

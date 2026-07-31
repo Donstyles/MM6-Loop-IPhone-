@@ -34,8 +34,9 @@ let DIFFUSE = sunTerms(9.5).diffuse;
 
 /** Set the hour buildings generated from here on will be lit for. */
 export function setBuildingLight(hours) {
-  SUN = sunDirection(hours);
-  const t = sunTerms(hours);
+  const h = hours <= 1 ? hours * 24 : hours;
+  SUN = sunDirection(h);
+  const t = sunTerms(h);
   AMBIENT = t.ambient; DIFFUSE = t.diffuse;
 }
 
@@ -46,9 +47,10 @@ export function setBuildingLight(hours) {
  */
 function faceShade(nx, ny, nz, tintR = 1, tintG = 1, tintB = 1, extra = 1) {
   const ndl = Math.max(0, nx * SUN.x + ny * SUN.y + nz * SUN.z);
-  // Same two-point curve the terrain uses, so walls and ground agree exactly.
-  const daylight = clamp(AMBIENT / 0.69, 0.22, 1);
-  const g = quantiseShade(clamp((0.46 + 0.54 * ndl) * (0.62 + 0.38 * daylight) * extra, 0, 1));
+  // Same sun-elevation-normalised curve the terrain uses, so walls and ground
+  // agree exactly and neither goes black when the sun is low.
+  const up = Math.max(0.30, SUN.y);
+  const g = quantiseShade(clamp((0.50 + 0.50 * clamp(ndl / up, 0, 1)) * (DIFFUSE > 0 ? 1 : 0.38) * extra, 0, 1));
   const l = SRGB_TO_LIN(g);
   return [l * tintR, l * tintG, l * tintB];
 }

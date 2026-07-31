@@ -131,12 +131,12 @@ const SKIN_TONES = {
 function skinRamp(tone) {
   const s = SKIN_TONES[tone];
   const f = rs('flesh', s.t);
-  const base = desat([f[0] * s.tint[0], f[1] * s.tint[1], f[2] * s.tint[2]], 0.26);
+  const base = desat([f[0] * s.tint[0], f[1] * s.tint[1], f[2] * s.tint[2]], 0.32);
   return {
     ramp: [
-      mixC(scl(base, 0.17), rs('blood', 0.14), s.ruddy * 0.7),
-      mixC(scl(base, 0.34), rs('blood', 0.24), s.ruddy * 0.9),
-      mixC(scl(base, 0.62), rs('blood', 0.34), s.ruddy * 0.7),
+      mixC(scl(base, 0.26), rs('blood', 0.18), s.ruddy * 0.7),
+      mixC(scl(base, 0.44), rs('blood', 0.26), s.ruddy * 0.9),
+      mixC(scl(base, 0.68), rs('blood', 0.34), s.ruddy * 0.7),
       base,
       desat(mixC(scl(base, 1.12), rs('sand', 0.74), 0.13), 0.06),
       desat(mixC(scl(base, 1.24), rs('sand', 0.84), 0.22), 0.12),
@@ -335,6 +335,7 @@ function classGear(klass, r, sex, age, hairStyle) {
   }
   g.hairVisible = g.hood ? 0.55 : 1;
   if (g.helm) g.hairVisible = 0.7;
+  if (g.coif) g.hairVisible = 0.18;
   if (hairStyle === 'bald') g.hairVisible = 0;
   return g;
 }
@@ -364,7 +365,7 @@ const EXPR_BASE = {
 
 const EXPR = {
   normal: {},
-  smile: { browIn: -0.25, eyeOpenL: 0.80, eyeOpenR: 0.80, lidLow: 0.35, mouthCurve: 1.55, mouthOpen: 0.12, key: 1.08, tint: [1.03, 1.00, 0.97] },
+  smile: { browIn: -0.25, eyeOpenL: 0.80, eyeOpenR: 0.80, lidLow: 0.35, mouthCurve: 1.7, mouthOpen: 0.22, teeth: 0.4, key: 1.08, tint: [1.03, 1.00, 0.97] },
   wide_smile: { browIn: -0.5, browOut: -0.3, eyeOpenL: 0.66, eyeOpenR: 0.66, lidLow: 0.5, mouthCurve: 2.2, mouthOpen: 0.42, mouthW: 1.12, teeth: 0.95, key: 1.12, tint: [1.04, 1.00, 0.96] },
   level_up: { browIn: -0.6, browOut: -0.4, eyeOpenL: 0.86, eyeOpenR: 0.86, lidLow: 0.25, mouthCurve: 1.9, mouthOpen: 0.30, teeth: 0.7, key: 1.22, amb: 1.15, rimGold: 1, tint: [1.07, 1.02, 0.90] },
   sad: { browIn: -1.5, browOut: 1.0, browTilt: -0.9, eyeOpenL: 0.74, eyeOpenR: 0.74, lidLow: 0.2, gazeY: 0.5, mouthCurve: -1.15, mouthW: 0.94, key: 0.92, tint: [0.96, 0.98, 1.04] },
@@ -477,18 +478,18 @@ function paint(face, ex, W, H) {
     wound: rs('blood', 0.28),
     disease: rs('swamp', 0.42),
     freck: scl(SR.ramp[2], 1.05),
-    scar: mixC(scl(SR.ramp[4], 0.98), rs('blood', 0.40), 0.30),
+    scar: mixC(scl(SR.ramp[4], 0.94), rs('blood', 0.34), 0.14),
     lash: mixC(face.hair.dark, [14, 10, 11], 0.5),
     nostril: mixC(SR.ramp[0], [16, 9, 9], 0.4),
-    sclera: mixC(rs('sand', 0.72), rs('stone', 0.80), 0.42),
+    sclera: mixC(rs('sand', 0.62), rs('stone', 0.70), 0.46),
     vessel: rs('blood', 0.38),
     iris: EYE_COLOURS[face.eyeName](),
     pupil: ex.glow ? rs('arcane', 0.85) : [11, 8, 9],
     glow: rs('arcane', 0.9),
     catch: [252, 248, 240],
     greyHair: rs('grey', 0.55),
-    lipUp: mixC(scl(SR.ramp[1], 1.25), rs('blood', 0.26), 0.24 * g.lipFull),
-    lipDn: mixC(mixC(SR.ramp[3], rs('blood', 0.34), 0.20 * g.lipFull), SR.ramp[4], 0.18),
+    lipUp: mixC(scl(SR.ramp[2], 0.86), rs('blood', 0.26), 0.16 * g.lipFull),
+    lipDn: mixC(mixC(SR.ramp[3], rs('blood', 0.34), 0.13 * g.lipFull), SR.ramp[4], 0.26),
     lipLine: mixC(scl(SR.ramp[0], 1.10), rs('blood', 0.12), 0.25),
     mouthIn: mixC(rs('blood', 0.08), [7, 4, 5], 0.45),
     tongue: rs('blood', 0.26),
@@ -718,13 +719,13 @@ function paint(face, ex, W, H) {
       ao -= blob(dxf, Y - (mouthY + ry * 0.10), g.mouthW * 0.85, ry * 0.045) * 0.30; // under the lip
       ao -= blob(Math.abs(dxf) - rx * 0.52, Y - (noseY + ry * 0.07), rx * 0.30, ry * 0.13)
         * (0.32 * g.hollow + 0.45 * ex.hollow);
-      ao -= smoothstep(chinY - ry * 0.10, chinY + 1.5, Y) * 0.50;                   // jaw underside
+      ao -= smoothstep(chinY - ry * 0.06, chinY + 1.5, Y) * 0.38;                   // jaw underside
       ao -= hairShadowAt(hairP, X, Y) * 0.38;
       // headgear throws its own edge across the face
       if (gearShadow) ao -= gearShadow(X, Y) * 0.55;
       // the far cheek turns away from the light and the viewer at once
-      ao -= smoothstep(rFar * 0.45, rFar * 1.02, -dxf * near) * 0.22;
-      ao = clamp(ao, 0.10, 1);
+      ao -= smoothstep(rFar * 0.55, rFar * 1.05, -dxf * near) * 0.14;
+      ao = clamp(ao, 0.18, 1);
       sh *= ao;
 
       let col = skinShade(sh, SR);
@@ -754,8 +755,10 @@ function paint(face, ex, W, H) {
       if (noseRed > 0) col = mixC(col, mixC(col, C.noseRed, 0.45), noseRed * (0.13 + ex.blush * 0.55));
       if (ex.wound) {
         const wsx = face.marks.scar ? face.marks.scar.side : near;
-        const w = blob(Math.abs(dxf - wsx * rx * 0.52) - 0.6, Y - (noseY - ry * 0.08), rx * 0.26, ry * 0.15);
-        if (w > 0) col = mixC(col, C.wound, w * 0.62 * ex.wound * (0.6 + 0.4 * nz(X * 2, Y * 2, sd + 5)));
+        const w = blob(Math.abs(dxf - wsx * rx * 0.52) - 0.6, Y - (noseY - ry * 0.08), rx * 0.34, ry * 0.20);
+        if (w > 0) {
+          col = mixC(col, C.wound, w * w * 0.75 * ex.wound * (0.45 + 0.55 * nz(X * 1.6, Y * 1.6, sd + 5)));
+        }
       }
       if (ex.blotch) {
         const b = fb(X * 0.55, Y * 0.55, 3, sd + 131);
@@ -813,7 +816,7 @@ function paint(face, ex, W, H) {
         const sc = face.marks.scar;
         const ax = fx + sc.side * rx * 0.52, ay = eyeY - ry * 0.28 + sc.y * ry * 0.1;
         const k = Math.max(0, 1 - segDist(X, Y, ax, ay, ax + sc.side * 1.2, ay + ry * 0.30 * sc.len) / 0.6);
-        if (k > 0) col = mixC(col, C.scar, k * 0.75);
+        if (k > 0) col = mixC(col, C.scar, k * 0.5);
       }
 
       bl(buf, i3, col, hc);
@@ -838,9 +841,11 @@ function paint(face, ex, W, H) {
         const ddx = Xw - pvx, ddy = Yw - pvy;
         const X = pvx + ddx * ca + ddy * sa;
         const Y = pvy - ddx * sa + ddy * ca;
-        if (face.gear.hairVisible < 1) {
-          a *= mix(face.gear.hairVisible * 0.35, 1,
-            smoothstep(hairP.hairlineY + 6, hairP.hairlineY - 3, Y));
+        if (face.gear.hairVisible < 0.3) a *= face.gear.hairVisible;
+        else if (face.gear.hairVisible < 1) {
+          // Under a hood a fringe escapes at the hairline and nowhere else.
+          a *= face.gear.hairVisible * mix(1, 0.25,
+            smoothstep(hairP.hairlineY + 1, hairP.hairlineY - 5, Y));
         }
         if (a <= 0.004) continue;
         bl(buf, ii * 3, hairColourAt(HC, hairP, X, Y, sd, LX, LY, ex), a);
@@ -987,11 +992,12 @@ function drawFeatures(buf, i3, X, Y, hc, P) {
       // in the shadow the upper lid casts.
       const lidShadow = mix(0.55, 1.06, smoothstep(-1.05, 0.25, vs));
       let c = scl(C.sclera, lidShadow * (0.9 + 0.2 * ex.key));
-      c = mixC(c, C.vessel, Math.max(0, Math.abs(ux) - 0.5) * 0.40);
+      c = mixC(c, C.vessel, Math.max(0, Math.abs(ux) - 0.35) * 0.55);
+      c = scl(c, 1 - Math.max(0, Math.abs(ux) - 0.45) * 0.55);
       bl(buf, i3, c, ea * hc);
 
       // iris
-      const gx = ecx + ex.gazeX * ew * 0.5 + g.turn * ew * 0.75;
+      const gx = ecx + ex.gazeX * ew * 0.5 + g.turn * ew * 0.45;
       const gy = eyeY + ex.gazeY * eh * 0.4 + eh * 0.10;
       const ir = g.eyeW * 0.56;
       const idm = Math.sqrt(ell(X - gx, Y - gy, ir, ir));
@@ -999,10 +1005,10 @@ function drawFeatures(buf, i3, X, Y, hc, P) {
         const iCol = C.iris;
         const a2 = Math.atan2(Y - gy, X - gx);
         const fibre = nz(Math.cos(a2) * 4 + 9, Math.sin(a2) * 4 + 9, sd + 17);
-        let c2 = mixC(scl(iCol, 0.55), scl(iCol, 1.30), clamp(0.35 + fibre * 0.7, 0, 1));
+        let c2 = mixC(scl(iCol, 0.42), scl(iCol, 1.10), clamp(0.35 + fibre * 0.7, 0, 1));
         // light enters from the upper left, so the lower iris glows
-        c2 = mixC(c2, scl(iCol, 1.45), clamp(((Y - gy) / ir) * 0.6 + 0.15, 0, 1) * 0.42);
-        c2 = mixC(c2, scl(iCol, 0.20), smoothstep(0.70, 1.0, idm));      // limbal ring
+        c2 = mixC(c2, scl(iCol, 1.30), clamp(((Y - gy) / ir) * 0.6 + 0.15, 0, 1) * 0.34);
+        c2 = mixC(c2, scl(iCol, 0.16), smoothstep(0.58, 0.98, idm));     // limbal ring
         c2 = scl(c2, lidShadow);
         bl(buf, i3, c2, cov(idm * idm, 0.28) * ea * hc);
         const pr = ir * 0.42 * ex.pupil * (ex.glow ? 0.8 : 1);
@@ -1012,7 +1018,7 @@ function drawFeatures(buf, i3, X, Y, hc, P) {
         }
         // one catchlight, upper left of the pupil
         bl(buf, i3, C.catch,
-          cov(ell(X - (gx - ir * 0.40), Y - (gy - ir * 0.40), ir * 0.27, ir * 0.27), 0.6) * ea * 0.92 * hc);
+          cov(ell(X - (gx - ir * 0.42), Y - (gy - ir * 0.42), ir * 0.22, ir * 0.22), 0.6) * ea * 0.85 * hc);
       }
 
       // upper lash line, heaviest at the outer corner
@@ -1263,7 +1269,7 @@ function hairColourAt(HC, p, X, Y, sd, LX, LY, ex) {
   const sheen = Math.exp(-sq((ux + 0.44) / 0.40)) * Math.exp(-sq((uy + 0.48) / 0.48));
   const phase = ang * 7.5 + (nz(X * 0.45, Y * 0.45, sd + 215) - 0.5) * 4.0 + r2 * 2.5;
   const stroke = Math.pow(Math.abs(Math.sin(phase)), 7);
-  c = mixC(c, HC.lite, sheen * HC.sheen * (0.25 + stroke * 0.75));
+  c = mixC(c, HC.lite, sheen * HC.sheen * 0.62 * (0.30 + stroke * 0.70));
   // dark layer where the hair meets the forehead, and at the outer edge
   const hl = hairlineAt(p, X);
   c = scl(c, mix(0.52, 1, smoothstep(hl - 0.5, hl - 4.5, Y)));
@@ -1377,10 +1383,12 @@ function drawGear(buf, subj, face, ex, P) {
         a = Math.max(a, smoothstep(dw + 1.2, dw - 0.8, Math.abs(X - hcx))
           * smoothstep(hcy - 1, hcy + 5, Y));
         if (hood.peak > 0.2) {
-          const t = clamp((ocy - ory - Y) / (ry * 0.50), 0, 1);
-          const px2 = hcx - rx * 0.45 * t;
-          a = Math.max(a, smoothstep(rx * 0.38 * (1 - t) + 0.8, rx * 0.38 * (1 - t) - 0.5, Math.abs(X - px2))
-            * (1 - smoothstep(0.85, 1.0, t)) * smoothstep(0, 0.05, t));
+          // A soft fold of cloth standing off the crown, tapering out - a hard
+          // edge here reads as a notch cut out of the head.
+          const t = clamp((ocy - ory + 2.0 - Y) / (ry * 0.34), 0, 1);
+          const px2 = hcx - rx * 0.34 * t;
+          const hw = rx * 0.40 * (1 - t * t * t);
+          a = Math.max(a, smoothstep(hw + 1.6, hw - 1.0, Math.abs(X - px2)) * (1 - t * t));
         }
         // The opening is centred well below the head so the hood frames the
         // face and stops at the jaw instead of wrapping under the chin like a
@@ -1399,7 +1407,7 @@ function drawGear(buf, subj, face, ex, P) {
           const inv = 1 / (Math.sqrt(r2) + 1e-3);
           const fold = fb(ux * inv * 3.6 + Math.sqrt(r2) * 5.5, uy * inv * 3.6, 2, sd + 403);
           const crease = Math.pow(Math.abs(Math.sin((uy * inv) * 6.5 + Math.sign(ux) * 1.4 + fold * 3.4)), 3);
-          sh *= 0.66 + fold * 0.62;
+          sh *= 0.72 + fold * 0.50;
           sh *= 1 - crease * 0.46;
           sh *= mix(0.20, 1, smoothstep(1.0, 1.42, holeM));   // inside the opening
           sh *= ex.key;
@@ -1414,10 +1422,10 @@ function drawGear(buf, subj, face, ex, P) {
 
       // ---- mail coif ------------------------------------------------------
       if (gear.coif) {
-        const outer = ell(X - hcx, Y - (hcy - ry * 0.03), rx * 1.13, ry * 1.10);
+        const outer = ell(X - hcx, Y - (hcy - ry * 0.02), rx * 1.07, ry * 1.05);
         const inner = ell(X - fx, Y - (hcy + ry * 0.16), rx * 1.00, ry * 1.02);
         let a = cov(outer, 0.10) * (1 - cov(inner, 0.09));
-        a = Math.max(a, cov(outer, 0.10) * smoothstep(chinY - 2, chinY + 2, Y));
+        a = Math.max(a, cov(outer, 0.10) * smoothstep(chinY - 3, chinY - 0.5, Y));
         if (a > 0.004) {
           // Rings on a staggered lattice - fine enough to read as mail at 1:1.
           const gx = X * 1.35, gy = Y * 1.35;
@@ -1603,7 +1611,7 @@ function drawShoulders(buf, subj, face, ex, P) {
           // A worn embroidered band, not a string of fairy lights.
           const st = Math.exp(-sq((Y - top - 2.2) / 1.1));
           const gl = nz(X * 0.75, Y * 0.75, sd + 507);
-          c = mixC(c, desat(rs('arcane', 0.58), 0.30), st * smoothstep(0.50, 0.90, gl) * 0.40);
+          c = mixC(c, desat(rs('arcane', 0.50), 0.42), st * smoothstep(0.55, 0.92, gl) * 0.28);
         }
       }
       bl(buf, i3, c, a);
@@ -1661,7 +1669,7 @@ function gradePass(buf, subj, face, ex, BW, BH, px2dx, px2dy, sd) {
         a = mixC(a, mixC(rs('grey', 0.14), rs('fire', 0.16), 0.4), s * 0.5);
         const ember = nz(X * 2.2, Y * 2.2 - 3, sd + 611);
         a = mixC(a, rs('fire', 0.70 + 0.30 * nz(X * 5, Y * 5, sd + 612)),
-          smoothstep(0.90, 0.985, ember) * s * 0.95);
+          smoothstep(0.945, 0.99, ember) * s * 0.95);
         a = add3(a, rs('fire', 0.55), clamp(grad, 0, 1) * 0.55);
         c = a;
       }

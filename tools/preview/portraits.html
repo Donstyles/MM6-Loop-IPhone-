@@ -14,6 +14,7 @@
 <h2>B. every expression, 3&times; (knight m) </h2><div id="b"></div>
 <h2>B2. every expression, 3&times; (sorcerer f)</h2><div id="c"></div>
 <h2>C. mock party bar, 1:1</h2><div id="d"></div>
+<h2>D. close-ups, 6&times; &mdash; look for brow ridge, nose shadow on the cheek, dark neck</h2><div id="e"></div>
 <script type="module">
 import { makeFace, renderPortrait, PORTRAIT_W as PW, PORTRAIT_H as PH, EXPRESSIONS, portraitSheet }
   from '/src/art/portraits.js';
@@ -22,7 +23,7 @@ import { makeFace, renderPortrait, PORTRAIT_W as PW, PORTRAIT_H as PH, EXPRESSIO
 // size the headless compositor is happy with.
 const SEC = new URLSearchParams(location.search).get('sec') || 'all';
 const want = (k) => SEC === 'all' || SEC === k;
-for (const k of ['a', 'b', 'c', 'd']) {
+for (const k of ['a', 'b', 'c', 'd', 'e']) {
   if (!want(k)) { const e = document.getElementById(k); e.previousElementSibling.remove(); e.remove(); }
 }
 
@@ -104,6 +105,24 @@ if (want('d')) {
     });
   });
   if (want('d')) document.getElementById('d').appendChild(c);
+}
+
+// --- D: big close-ups -------------------------------------------------------
+if (want('e')) {
+  const specs = [
+    ['knight', 'm', 'middle', 6001], ['archer', 'f', 'young', 6102],
+    ['sorcerer', 'm', 'old', 6203], ['cleric', 'f', 'middle', 6304],
+    ['druid', 'm', 'old', 6405], ['paladin', 'f', 'young', 6506],
+  ];
+  const Z = 6, CW = PW * Z + 10, CH = PH * Z + 18;
+  const { c, g } = sheetOf(specs.length / 2 * CW + 8, 2 * CH + 8);
+  specs.forEach(([k, sx, age, seed], i) => {
+    const f = makeFace(seed, { klass: k, sex: sx, age });
+    const x = 4 + (i % 3) * CW, y = 4 + Math.floor(i / 3) * CH;
+    g.drawImage(renderPortrait(f, i % 2 ? 'normal' : 'angry'), x, y, PW * Z, PH * Z);
+    label(g, x, y + PH * Z + 3, [`${k} ${sx}/${age} ${f.hairStyle}/${f.beard}`], '#d0bd84');
+  });
+  document.getElementById('e').appendChild(c);
 }
 
 const t2 = performance.now();

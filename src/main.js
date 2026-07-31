@@ -307,6 +307,27 @@ window.__mm6 = {
   region: (id) => import('./bootstrap.js').then((m) => m.loadRegion(session, id, 12345)),
   dungeon: (spec) => import('./bootstrap.js').then((m) => m.loadDungeon(session, spec || { theme: 'cave' }, 999)),
   stats: () => ({ ...perf, screen: screens.top ? screens.top.id : null }),
+  /** Average brightness of the world window, for checking exposure. */
+  probe() {
+    const gl = engine.renderer.getContext();
+    const w = engine.width, h = engine.height;
+    const px = new Uint8Array(w * h * 4);
+    engine.renderer.setRenderTarget(engine.rt);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    engine.renderer.setRenderTarget(null);
+    let top = [0, 0, 0], bot = [0, 0, 0], nT = 0, nB = 0;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x += 3) {
+        const i = (y * w + x) * 4;
+        // readPixels is bottom-up, so low y is the lower half of the image.
+        const t = y > h * 0.55 ? top : bot;
+        t[0] += px[i]; t[1] += px[i + 1]; t[2] += px[i + 2];
+        if (y > h * 0.55) nT++; else nB++;
+      }
+    }
+    const avg = (s, n) => s.map((v) => Math.round(v / Math.max(1, n)));
+    return { sky: avg(top, nT), ground: avg(bot, nB), tint: engine.postMaterial.uniforms.uTint.value.toArray() };
+  },
 };
 
 /** Merge scripted input into the axes the session reads. */

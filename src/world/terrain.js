@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import {
   Pix, toTexture, grainFill, blotch, cracks, speckle, bricks, planks,
-  rampSample, mixC, scaleC,
+  rampSample, mixC, scaleC, makeCanvas, ctx2d,
 } from '../art/texcanvas.js';
 import {
   fbm2, ridged2, gradNoise2, valueNoise2, hash2, Rand, clamp, smoothstep, lerpN,
@@ -85,11 +85,36 @@ export function getTexture(id, opts = {}) {
   return tex;
 }
 
-/** Average colour of a texture id, useful for fog/minimap tinting. */
+const _tintCache = new Map();
+/**
+ * Average colour of a texture id. Sampled from the real bitmap where we can get
+ * at it, because the automap plate is built from these and guessing from the
+ * ramp makes every region look like the same green square.
+ */
 export function textureTint(id) {
-  const s = FALLBACK[id] || FALLBACK.grass;
-  const c = rampSample(s.ramp, (s.lo + s.hi) * 0.5);
-  return new THREE.Color(c[0] / 255, c[1] / 255, c[2] / 255);
+  const hit = _tintCache.get(id);
+  if (hit) return hit;
+  let col = null;
+  try {
+    const img = getTexture(id).image;
+    if (img && img.width) {
+      const c = makeCanvas(8, 8);
+      const g = ctx2d(c);
+      g.drawImage(img, 0, 0, 8, 8);
+      const d = g.getImageData(0, 0, 8, 8).data;
+      let r = 0, gg = 0, b = 0;
+      for (let i = 0; i < d.length; i += 4) { r += d[i]; gg += d[i + 1]; b += d[i + 2]; }
+      const n = d.length / 4;
+      col = new THREE.Color(r / n / 255, gg / n / 255, b / n / 255);
+    }
+  } catch (e) { col = null; }
+  if (!col) {
+    const s = FALLBACK[id] || FALLBACK.grass;
+    const c = rampSample(s.ramp, (s.lo + s.hi) * 0.5);
+    col = new THREE.Color(c[0] / 255, c[1] / 255, c[2] / 255);
+  }
+  _tintCache.set(id, col);
+  return col;
 }
 
 // Painted stand-ins. Deliberately simple - the real module does the good work -
@@ -602,19 +627,22 @@ const DEFAULT_TOD = 9.5;
  */
 function faceGrey(nx, ny, nz, sun, ambient, diffuse, upness) {
   const ndl = Math.max(0, nx * sun.x + ny * sun.y + nz * sun.z);
-  // Anchored to two sanity points rather than to the engine's raw
-  // `ambient + diffuse*N.L`, which saturates to white on level ground for most
-  // of the day: a slope facing the sun at noon lands on the raw texture colour,
-  // and the least-lit face sits at 46% of it.
-  const lit = 0.46 + 0.54 * ndl;
+  // N.L is normalised against the sun's own elevation, so *level ground reads
+  // as the raw texture at every daylight hour*. Taking N.L raw would multiply
+  // the whole world by sin(sun altitude) and turn a 07:00 meadow black, which
+  // is not what MM6 does: its ambient floor carries the flat ground and the
+  // sun only models the slopes.
+  const up = Math.max(0.30, sun.y);
+  const rel = clamp(ndl / up, 0, 1);
+  const lit = 0.50 + 0.50 * rel;
   // MM6's sun has no north/south component at all, so a north- or south-facing
   // slope shades identically to flat ground and the landform vanishes. A small
   // steepness term stands in for the occlusion the engine baked per-vertex.
   const steep = 1 - 0.14 * (1 - clamp(upness === undefined ? ny : upness, 0, 1));
-  // Time of day scales the whole thing; `ambient` peaks at 0.69.
-  const daylight = clamp(ambient / 0.69, 0.22, 1);
-  const s = clamp(lit * steep * (0.62 + 0.38 * daylight) * (diffuse > 0 ? 1 : 0.55), 0, 1);
-  return SRGB_TO_LIN(quantiseShade(s));
+  // Only night darkens globally; the shell owns the day/night multiply and
+  // applying our own on top of it would darken everything twice.
+  const night = diffuse > 0 ? 1 : 0.38;
+  return SRGB_TO_LIN(quantiseShade(clamp(lit * steep * night, 0, 1)));
 }
 
 // --- water animation -------------------------------------------------------
@@ -805,7 +833,8 @@ export function buildTerrain(hm, opts = {}) {
 
   /** Re-bake every facet's grey level for a new hour. ~5ms for a whole map. */
   function setTimeOfDay(hours) {
-    tod = hours;
+    // Callers pass either an hour or a 0..1 fraction of the day; accept both.
+    tod = hours === undefined ? tod : (hours <= 1 ? hours * 24 : hours);
     const sun = sunDirection(tod);
     const st = sunTerms(tod);
     for (const c of chunks) {

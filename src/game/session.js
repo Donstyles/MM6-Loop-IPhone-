@@ -211,7 +211,11 @@ export class Session {
     scene.fog.near = near;
     scene.fog.far = far;
     this.sprites.setFog(c, near, far);
-    if (this.map.setFogColor) this.map.setFogColor(c, k);
+    // Pass 1.0 for the light multiplier: the terrain already bakes time of day
+    // into its vertex colours and the post pass applies the global day/night
+    // tint, so handing the haze value down here as well darkened the world
+    // three times over.
+    if (this.map.setFogColor) this.map.setFogColor(c, 1);
     this.engine.setIndoor(indoor);
   }
 
