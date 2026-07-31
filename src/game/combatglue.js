@@ -30,14 +30,21 @@ export function installCombat(session) {
     const target = pickTarget(session);
 
     let acted = false;
-    for (let i = 0; i < members.length; i++) {
+    // While in turns only the character whose turn it is may swing.
+    const order = session.turnBased && session.turnQueue.length
+      ? [session.turnQueue[0]]
+      : members.map((_, i) => i);
+    for (const i of order) {
       const ch = members[i];
       if (!canAct(ch)) continue;
       if (ch.recovery > 0) continue;
       acted = true;
       swing(session, ch, i, target, combat, rnd);
-      // In turn-based mode only the active character acts per input.
-      if (session.turnBased) break;
+      if (session.turnBased) {
+        // One action per input while in turns, and it costs action points.
+        session.consumeTurn(i);
+        break;
+      }
     }
     if (!acted && session.audio) session.audio.play('error', { volume: 0.3 });
     return acted;
@@ -55,6 +62,7 @@ export function installCombat(session) {
     }
     ch.sp -= cost;
     ch.recovery = (spell.recovery || 100) / 60;
+    if (session.turnBased) session.consumeTurn(charIndex, 40);
 
     const school = (spell.school || 'spirit').toLowerCase();
     if (session.audio) session.audio.play(`cast_${school}`);

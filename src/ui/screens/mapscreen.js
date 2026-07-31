@@ -11,7 +11,7 @@
 import * as F from '../../art/font.js';
 import { rampCss } from '../../core/palette.js';
 import {
-  Screen, A, PANEL, px, py, TAB_Y, TAB_H, EXIT_X, EXIT_W,
+  Screen, A, px, py, TAB_Y, TAB_H, EXIT_X, EXIT_W,
   WHITE, CANARY, HILITE, DIM,
   MAP_NAVY, MAP_WALL, MAP_FRIEND, MAP_HOSTILE, MAP_CORPSE, MAP_DECOR, MAP_TREASURE,
 } from './screenbase.js';

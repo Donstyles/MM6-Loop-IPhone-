@@ -157,7 +157,7 @@ function handleKeys() {
   if (input.justPressed.has('KeyM')) openScreen('mapscreen');
   if (input.justPressed.has('KeyZ')) openScreen('quickref');
   if (input.justPressed.has('KeyR')) openScreen('rest');
-  if (input.justPressed.has('Enter')) session.turnBased = !session.turnBased;
+  if (input.justPressed.has('Enter')) session.toggleTurnBased();
   for (let i = 0; i < 4; i++) {
     if (input.justPressed.has(`Digit${i + 1}`)) session.activeChar = i;
   }
@@ -184,7 +184,7 @@ function handleHudButtons() {
     else if (b.id === 'rest') openScreen('rest');
     else if (b.id === 'quickref') openScreen('quickref');
     else if (b.id === 'options') openScreen('options');
-    else if (b.id === 'turnbased') session.turnBased = !session.turnBased;
+    else if (b.id === 'turnbased') session.toggleTurnBased();
     else if (b.id.startsWith('char')) session.activeChar = parseInt(b.id.slice(4), 10);
   }
 }

@@ -246,9 +246,13 @@ export class Session {
 
     if (moving && this.audio) this.footsteps(dt);
 
-    // Entities
-    this.entities.update(dt, this.entityCtx(dt));
-    if (this.vfx) this.vfx.update(dt, this.entityCtx(dt));
+    // Entities. In turn-based mode their AI is driven by the turn manager, so
+    // they only tick their animations here.
+    const ectx = this.entityCtx(dt);
+    ectx.frozen = this.turnBased;
+    this.entities.update(dt, ectx);
+    this.updateTurns(dt);
+    if (this.vfx) this.vfx.update(dt, ectx);
 
     this.updateCombatState();
     this.applyFog();
@@ -380,6 +384,117 @@ export class Session {
 
   monsterAttack(e) { if (this.onMonsterAttackCb) this.onMonsterAttackCb(e); }
   monsterRanged(e) { if (this.onMonsterRangedCb) this.onMonsterRangedCb(e); }
+
+  // --- turn-based mode -----------------------------------------------------
+  //
+  // MM6 lets you drop combat into turns at any moment. The world stops, the
+  // party spends action points, and then every monster in range acts once
+  // behind an hourglass before control comes back.
+
+  toggleTurnBased() {
+    if (this.turnBased) this.leaveTurnBased();
+    else this.enterTurnBased();
+    return this.turnBased;
+  }
+
+  enterTurnBased() {
+    this.turnBased = true;
+    this.turnActor = 'party';
+    this.turnPoints = 130;
+    this.rebuildTurnQueue();
+    this.message('Turn-based mode.');
+    if (this.audio) this.audio.play('click');
+  }
+
+  leaveTurnBased() {
+    this.turnBased = false;
+    this.turnActor = null;
+    this.turnQueue.length = 0;
+    this.message('Real-time mode.');
+    if (this.audio) this.audio.play('click');
+  }
+
+  rebuildTurnQueue() {
+    const members = (this.party && this.party.members) || [];
+    this.turnQueue = members
+      .map((ch, i) => ({ i, ch }))
+      .filter(({ ch }) => ch.hp > 0 && ch.recovery <= 0)
+      .sort((a, b) => (b.ch.stats?.speed || 0) - (a.ch.stats?.speed || 0))
+      .map(({ i }) => i);
+    if (this.turnQueue.length) this.activeChar = this.turnQueue[0];
+  }
+
+  /** Called after a character spends their action. */
+  consumeTurn(charIndex, cost = 26) {
+    if (!this.turnBased) return;
+    this.turnPoints = Math.max(0, this.turnPoints - cost);
+    const at = this.turnQueue.indexOf(charIndex);
+    if (at >= 0) this.turnQueue.splice(at, 1);
+    if (this.turnQueue.length === 0 || this.turnPoints <= 0) this.beginMonsterTurn();
+    else this.activeChar = this.turnQueue[0];
+  }
+
+  beginMonsterTurn() {
+    this.turnActor = 'monsters';
+    this._monsterTurnT = 0;
+    this._monsterActed = new Set();
+  }
+
+  updateTurns(dt) {
+    if (!this.turnBased || this.turnActor !== 'monsters') return;
+    this._monsterTurnT += dt;
+
+    // Monsters act in sequence with a short beat between them so you can see
+    // what hit you, then control returns to the party.
+    const live = this.entities.list.filter(
+      (e) => e.category === 'monster' && !e.dead && e.state === 'chase',
+    );
+    const step = 0.35;
+    const idx = Math.floor(this._monsterTurnT / step);
+    if (idx < live.length) {
+      const e = live[idx];
+      if (!this._monsterActed.has(e.id)) {
+        this._monsterActed.add(e.id);
+        this.takeMonsterTurn(e);
+      }
+      return;
+    }
+    if (this._monsterTurnT > live.length * step + 0.2) {
+      // Recovery ticks once per round, then the party acts again.
+      for (const ch of (this.party.members || [])) {
+        if (ch.recovery > 0) ch.recovery = Math.max(0, ch.recovery - 1.0);
+      }
+      this.turnActor = 'party';
+      this.turnPoints = 130;
+      this.rebuildTurnQueue();
+      if (!this.turnQueue.length) this.beginMonsterTurn();
+    }
+  }
+
+  takeMonsterTurn(e) {
+    const px = this.player.pos.x, pz = this.player.pos.z;
+    const dist = Math.hypot(e.pos.x - px, e.pos.z - pz);
+    const reach = (e.data?.reach || 260) + 90;
+    e.yaw = Math.atan2(px - e.pos.x, pz - e.pos.z) + Math.PI;
+
+    if (dist <= reach) {
+      e.setAction('attack');
+      this.monsterAttack(e);
+    } else if (e.data?.ranged && dist < (e.data.ranged.range || 3000)) {
+      e.setAction('attack_ranged', true);
+      this.monsterRanged(e);
+    } else {
+      // One turn buys one step of movement.
+      const stepLen = Math.min(dist - reach, (e.speed || 260) * 0.9);
+      const nx = e.pos.x + ((px - e.pos.x) / dist) * stepLen;
+      const nz = e.pos.z + ((pz - e.pos.z) / dist) * stepLen;
+      if (!this.map.blocked(nx, e.pos.y, nz, e.radius, 100)) {
+        e.pos.x = nx; e.pos.z = nz;
+        e.pos.y = this.map.groundAt(nx, nz, e.pos.y);
+      }
+      e.setAction('walk');
+    }
+  }
 
   footsteps(dt) {
     this._stepT = (this._stepT || 0) + dt * (this.player.vel.length() / 500);

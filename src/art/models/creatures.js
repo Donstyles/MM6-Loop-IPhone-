@@ -446,7 +446,10 @@ function buildBipedRig(H, P, C, rnd) {
 
   // pelvis + ribcage
   body.add(box(hipW * 1.05, torsoH * 0.30, torsoD * 1.0, C.cloth, { pivot: 'bottom', y: -torsoH * 0.06 }));
-  torso.add(box(hipW, torsoH, torsoD, C.body, { pivot: 'bottom', taper: shoulderW / hipW, bulge: P.ribs ? -0.05 : 0.06 }));
+  // A robe clothes the torso as well as the legs - without this every mage
+  // in the game walks around bare-chested.
+  const torsoCol = P.robe ? C.cloth : C.body;
+  torso.add(box(hipW, torsoH, torsoD, torsoCol, { pivot: 'bottom', taper: shoulderW / hipW, bulge: P.ribs ? -0.05 : 0.06 }));
   if (P.ribs) {
     for (let i = 0; i < 3; i++) {
       torso.add(box(hipW * (0.95 - i * 0.05), torsoH * 0.055, torsoD * 1.02, mulHex(C.body, 0.72),
@@ -477,7 +480,7 @@ function buildBipedRig(H, P, C, rnd) {
     const sh = grp(s * (shoulderW * 0.5 + armR * 0.5), torsoH * (1 - P.armDroop), 0);
     torso.add(sh);
     sh.rotation.z = -s * 0.10;
-    sh.add(box(armR * 2.1, armUp, armR * 2.1, mulHex(C.body, 0.84), { pivot: 'top', taper: 0.85 }));
+    sh.add(box(armR * 2.1, armUp, armR * 2.1, mulHex(torsoCol, 0.84), { pivot: 'top', taper: 0.85 }));
     const fo = grp(0, -armUp, 0);
     sh.add(fo);
     fo.add(box(armR * 1.8, armFo, armR * 1.8, C.skin, { pivot: 'top', taper: 0.9 }));

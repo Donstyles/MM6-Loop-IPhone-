@@ -18,7 +18,7 @@ import * as F from '../../art/font.js';
 import { rampCss } from '../../core/palette.js';
 import {
   Screen, A, PANEL, SIDE, TAB_X, TAB_Y, TAB_W, TAB_H, px, py,
-  WHITE, CANARY, HILITE, DIM, GREEN, RED, drawTabs, drawWrapped,
+  WHITE, CANARY, HILITE, drawTabs, drawWrapped,
 } from './screenbase.js';
 
 // --- item model -------------------------------------------------------------

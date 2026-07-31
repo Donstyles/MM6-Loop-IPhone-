@@ -169,6 +169,10 @@ export class EntityManager {
       if (e.static) { if (e.visible) e.advanceAnim(dt); continue; }
       if (!e.visible) continue;
 
+      // Turn-based mode suspends autonomous behaviour; the turn manager moves
+      // and animates monsters explicitly.
+      if (ctx.frozen) { e.advanceAnim(dt); continue; }
+
       if (e.category === CATEGORY.MONSTER && !e.dead) {
         this.updateMonster(e, dt, ctx, Math.sqrt(d2));
       } else if (e.category === CATEGORY.NPC) {

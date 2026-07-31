@@ -13,7 +13,6 @@
 // or renamed helper degrades into a plainer panel instead of a black screen.
 // ---------------------------------------------------------------------------
 
-import { layout } from '../../core/layout.js';
 import * as F from '../../art/font.js';
 import * as UI from '../../art/uiart.js';
 import * as PORTRAITS from '../../art/portraits.js';

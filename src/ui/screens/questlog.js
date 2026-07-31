@@ -8,7 +8,7 @@
 
 import * as F from '../../art/font.js';
 import {
-  Screen, A, PANEL, px, py, TAB_Y, TAB_H, EXIT_X, EXIT_W,
+  Screen, A, px, py, TAB_Y, TAB_H, EXIT_X, EXIT_W,
   CANARY, HILITE, WHITE, DIM, BOOK_INK, PASTELS, wrapLines,
 } from './screenbase.js';
 
