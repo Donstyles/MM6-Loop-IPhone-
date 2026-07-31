@@ -15,8 +15,6 @@ import { box, cyl, cone, sph, plate, grp, mulHex, disposeTree } from './creature
 
 const PI = Math.PI;
 
-function plank(g, w, h, d, hex, o) { g.add(box(w, h, d, hex, o)); }
-
 function barrelBody(H, hexWood, hexBand, rnd) {
   const g = new THREE.Group();
   const staves = 9;

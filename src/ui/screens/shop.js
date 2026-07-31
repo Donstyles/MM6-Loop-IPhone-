@@ -376,9 +376,9 @@ export function paintShopInterior(g, w, h, kind) {
       }
     }
     // Still on the right: a copper belly, a condenser pipe and a green flame.
-    g.fillStyle = rampCss('gold', 5);
+    g.fillStyle = rampCss('gold', 3);
     g.beginPath(); g.ellipse(w - 62, horizon - 6, 30, 24, 0, 0, Math.PI * 2); g.fill();
-    g.fillStyle = rampCss('gold', 9);
+    g.fillStyle = rampCss('gold', 6);
     g.beginPath(); g.ellipse(w - 70, horizon - 12, 12, 8, 0, 0, Math.PI * 2); g.fill();
     g.fillStyle = rampCss('gold', 7);
     g.fillRect(w - 64, horizon - 48, 5, 22);
@@ -418,11 +418,12 @@ export function paintShopInterior(g, w, h, kind) {
   // Worn rug on the boards - dark and small, so it reads as floor covering
   // rather than as a painted disc.
   const rugRamp = kind === 'magic' ? 'arcane' : 'blood';
+  const rugLo = kind === 'magic' ? 1 : 2, rugHi = kind === 'magic' ? 2 : 4;
   g.save();
   g.globalAlpha = 0.6;
-  g.fillStyle = rampCss(rugRamp, 2);
+  g.fillStyle = rampCss(rugRamp, rugLo);
   g.beginPath(); g.ellipse(w * 0.34, h - 86, 92, 17, 0, 0, Math.PI * 2); g.fill();
-  g.fillStyle = rampCss(rugRamp, 4);
+  g.fillStyle = rampCss(rugRamp, rugHi);
   g.beginPath(); g.ellipse(w * 0.34, h - 86, 74, 12, 0, 0, Math.PI * 2); g.fill();
   g.fillStyle = rampCss('sand', 6);
   g.beginPath(); g.ellipse(w * 0.34, h - 86, 40, 6, 0, 0, Math.PI * 2); g.fill();

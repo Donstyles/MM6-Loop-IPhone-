@@ -354,9 +354,18 @@ export function buildSky(scene, opts = {}) {
     const cap = 216 / 255;
 
     if (use.on) {
+      // GetLevelFogColor is a pure neutral grey, but applying it raw turns a
+      // black swamp into a snowfield because the sky above it still carries the
+      // region's colour cast. Pull it most of the way toward the region haze so
+      // fog and sky agree and each map keeps its character.
       const dv = clamp(density, 0, 1);
       const v = ((1 - dv) * 200 + dv * 31) / 255;
-      fog.color.setRGB(v, v, v * 1.01);
+      const k = 0.62;
+      fog.color.setRGB(
+        lerpN(v, state.plate.r * g, k),
+        lerpN(v, state.plate.g * g, k),
+        lerpN(v * 1.01, state.plate.b * g, k),
+      );
       fog.near = use.weak;
       fog.far = use.weak + Math.max(1, use.strong - use.weak) / cap;
       // The sub-horizon fill is the fog colour: on a foggy day the world and

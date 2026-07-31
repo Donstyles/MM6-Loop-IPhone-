@@ -47,7 +47,13 @@ export class Boot {
   async _run() {
     const times = {};
     window.__bootTimes = times;
+    // ?skip=portraits,sprites lets a capture run bypass a stage that is
+    // temporarily broken without disabling the feature everywhere.
+    const skip = new Set(
+      (new URLSearchParams(location.search).get('skip') || '').split(',').filter(Boolean),
+    );
     for (const stage of STAGES) {
+      if (skip.has(stage.id)) { times[stage.id] = 'skipped'; continue; }
       this.label = stage.label;
       this._stage = stage;
       const t0 = performance.now();
@@ -131,7 +137,7 @@ export class Boot {
       // are rendered on demand and cached.
       if (m.buildPortraits) {
         const seeds = [];
-        for (let i = 0; i < 8; i++) seeds.push(1000 + i * 7717);
+        for (let i = 0; i < 3; i++) seeds.push(1000 + i * 7717);
         return m.buildPortraits(seeds);
       }
       return null;

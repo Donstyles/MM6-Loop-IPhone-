@@ -232,7 +232,7 @@ export const REGIONS = {
       { tex: 'forest_floor', m: [0.84, 1] },
       { tex: 'grass_dry' },
     ],
-    fogClass: 'medium', hazeTint: [0.36, 0.40, 0.36], sky: 'plansky1',
+    fogClass: 'light', hazeTint: [0.34, 0.38, 0.33], sky: 'plansky1',
     skyTint: [0.62, 0.66, 0.62], cloudiness: 0.9,
     flora: [
       { kind: 'dead_tree', density: 0.2, scale: [850, 1600] },
@@ -293,7 +293,7 @@ export const REGIONS = {
       { tex: 'gravel', s: [0.86, 9] },
       { tex: 'ash' },
     ],
-    fogClass: 'medium', hazeTint: [0.46, 0.38, 0.35], sky: 'plansky1',
+    fogClass: 'light', hazeTint: [0.44, 0.36, 0.33], sky: 'plansky1',
     skyTint: [0.92, 0.72, 0.64], cloudiness: 0.8,
     flora: [
       { kind: 'dead_tree', density: 0.04, scale: [700, 1200], h: [0, 0.5] },
@@ -323,7 +323,7 @@ export const REGIONS = {
       { tex: 'swamp_muck', m: [0, 0.30] },
       { tex: 'grass_dry' },
     ],
-    fogClass: 'medium', hazeTint: [0.50, 0.54, 0.46], sky: 'plansky1',
+    fogClass: 'light', hazeTint: [0.48, 0.52, 0.44], sky: 'plansky1',
     skyTint: [0.84, 0.88, 0.80], cloudiness: 0.72,
     flora: [
       { kind: 'reeds', density: 0.15, scale: [220, 420], h: [0, 0.3] },

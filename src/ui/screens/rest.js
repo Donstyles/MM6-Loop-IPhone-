@@ -55,7 +55,7 @@ export function paintRestPanel(g, w, h) {
 
   // Campfire on the right: a ring of stones, a leaning stack of logs and
   // tongues of flame. The key light for the whole panel comes off it.
-  const fx = w - 128, fy = h - 84;
+  const fx = w - 96, fy = h - 104;
   for (let i = 0; i < 11; i++) {
     const a = (i / 11) * Math.PI * 2;
     const sx = fx + Math.cos(a) * 44, sy = fy + Math.sin(a) * 17;

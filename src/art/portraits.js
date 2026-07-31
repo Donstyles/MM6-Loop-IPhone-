@@ -457,7 +457,7 @@ function paint(face, ex, W, H) {
     scar: mixC(scl(SR.ramp[4], 0.98), rs('blood', 0.40), 0.30),
     lash: mixC(face.hair.dark, [14, 10, 11], 0.5),
     nostril: mixC(SR.ramp[0], [16, 9, 9], 0.4),
-    sclera: mixC(rs('sand', 0.58), rs('stone', 0.66), 0.42),
+    sclera: mixC(rs('sand', 0.72), rs('stone', 0.80), 0.42),
     vessel: rs('blood', 0.38),
     iris: EYE_COLOURS[face.eyeName](),
     pupil: ex.glow ? rs('arcane', 0.85) : [11, 8, 9],
@@ -569,10 +569,10 @@ function paint(face, ex, W, H) {
         * (1.15 * g.hollow + 1.4 * ex.hollow);
       // muzzle, lips, chin
       z += blob(dxf, Y - (mouthY - 0.4), rx * 0.52, ry * 0.135) * 1.05;
-      const lipY = mouthY + ex.mouthOpen * 0.7;
-      z += blob(dxf, Y - (lipY - ry * 0.034), g.mouthW * 0.92, ry * 0.034) * 0.65 * g.lipFull;
-      z += blob(dxf, Y - (lipY + ry * 0.042), g.mouthW * 0.80, ry * 0.042) * 0.85 * g.lipFull;
-      z -= blob(dxf, Y - lipY, g.mouthW * 0.95, ry * 0.015) * 0.85;
+      const lipY = mouthY + ex.mouthOpen * 1.4;
+      z += blob(dxf, Y - (lipY - ry * 0.055), g.mouthW * 0.92, ry * 0.055) * 0.85 * g.lipFull;
+      z += blob(dxf, Y - (lipY + ry * 0.068), g.mouthW * 0.82, ry * 0.068) * 1.05 * g.lipFull;
+      z -= blob(dxf, Y - lipY, g.mouthW * 0.95, ry * 0.024) * 1.1;
       z += blob(dxf, Y - (chinY - ry * 0.150), rx * 0.30, ry * 0.110) * 1.05;
       z -= blob(dxf, Y - (chinY - ry * 0.250), rx * 0.24, ry * 0.042) * 0.55;
       // jaw line: a ridge running from below the ear to the chin
@@ -1039,12 +1039,12 @@ function drawFeatures(buf, i3, X, Y, hc, P) {
       const skew = ex.mouthSkew * 0.55;
       const yc = mouthY - ex.mouthCurve * (ux * ux) * 0.55 + skew * ux * 0.9 + ex.mouthCurve * 0.12;
       const open = ex.mouthOpen;
-      const lipTop = yc - ry * (0.028 + 0.026 * g.lipFull);
-      const lipBot = yc + ry * (0.036 + 0.034 * g.lipFull) + open * ry * 0.20;
+      const lipTop = yc - ry * (0.050 + 0.042 * g.lipFull);
+      const lipBot = yc + ry * (0.062 + 0.052 * g.lipFull) + open * ry * 0.24;
 
       if (open > 0.03) {
         const round = mix(0.88 - open * 0.12, 0.52, ex.mouthRound);
-        const oh = open * ry * (0.135 + ex.mouthRound * 0.05);
+        const oh = open * ry * (0.28 + ex.mouthRound * 0.06);
         const om = Math.pow(Math.abs(ux / round), mix(2.1, 2.0, ex.mouthRound))
           + Math.pow(Math.abs((Y - (yc + oh * 0.25)) / oh), 1.9);
         const oa = cov(om, 0.4);
@@ -1064,11 +1064,11 @@ function drawFeatures(buf, i3, X, Y, hc, P) {
       const upT = smoothstep(lipTop - 0.8, lipTop + 0.2, Y) * smoothstep(yc + 0.15, yc - 0.35, Y);
       const cupid = 1 - Math.exp(-sq(ux / 0.25)) * 0.35;
       const upA = upT * smoothstep(1.05, 0.82, Math.abs(ux)) * cupid * (1 - open * 0.7);
-      if (upA > 0) bl(buf, i3, C.lipUp, upA * 0.85 * hc);
+      if (upA > 0) bl(buf, i3, C.lipUp, upA * 0.95 * hc);
       const dnA = smoothstep(yc - 0.1, yc + 0.5, Y) * smoothstep(lipBot + 0.4, lipBot - 0.5, Y)
         * smoothstep(1.0, 0.72, Math.abs(ux)) * (1 - open * 0.8);
       if (dnA > 0) {
-        const c = mixC(C.lipDn, skinLite, Math.max(0, 1 - Math.abs((Y - (yc + ry * 0.028)) / 0.7)) * 0.40);
+        const c = mixC(C.lipDn, skinLite, Math.max(0, 1 - Math.abs((Y - (yc + ry * 0.055)) / 0.9)) * 0.50);
         bl(buf, i3, c, dnA * 0.8 * hc);
       }
       // The line between the lips is the darkest mark on the lower face; at
@@ -1384,7 +1384,7 @@ function drawGear(buf, subj, face, ex, P) {
         a = Math.max(a, cov(outer, 0.10) * smoothstep(chinY - 2, chinY + 2, Y));
         if (a > 0.004) {
           // Rings on a staggered lattice - fine enough to read as mail at 1:1.
-          const gx = X * 1.9, gy = Y * 1.9;
+          const gx = X * 1.35, gy = Y * 1.35;
           const row = Math.floor(gy);
           const cx2 = Math.floor(gx + (row & 1 ? 0.5 : 0));
           const rr = Math.hypot(gx + (row & 1 ? 0.5 : 0) - cx2 - 0.5, gy - row - 0.5);
@@ -1392,8 +1392,8 @@ function drawGear(buf, subj, face, ex, P) {
           const ux = (X - hcx) / (rx * 1.13), uy = (Y - hcy) / (ry * 1.10);
           const zc = Math.sqrt(Math.max(0, 1 - ux * ux - uy * uy));
           const nl = 1 / Math.sqrt(ux * ux + uy * uy + zc * zc + 1e-6);
-          let sh = 0.12 + Math.max(0, (ux * LX + uy * LY + zc * 0.8) * nl) * 0.85;
-          sh *= 0.58 + ring * 0.80;
+          let sh = 0.10 + Math.max(0, (ux * LX + uy * LY + zc * 0.8) * nl) * 0.72;
+          sh *= 0.46 + ring * 0.85;
           sh += hash2(cx2, row, sd) * 0.12 - 0.05;
           sh *= ex.key;
           let c = mixC(steel.dark, steel.base, clamp(sh * 1.5, 0, 1));
@@ -1623,9 +1623,9 @@ function gradePass(buf, subj, face, ex, BW, BH, px2dx, px2dy, sd) {
           + Math.abs(s - subj[Math.min(BW * BH - 1, ii + BW)]);
         let a = scl(c, 0.10);
         a = mixC(a, mixC(rs('grey', 0.14), rs('fire', 0.16), 0.4), s * 0.5);
-        const ember = nz(X * 2.6, Y * 2.6 - 3, sd + 611);
-        a = mixC(a, rs('fire', 0.75 + 0.25 * nz(X * 5, Y * 5, sd + 612)),
-          smoothstep(0.955, 0.99, ember) * s * 0.9);
+        const ember = nz(X * 2.2, Y * 2.2 - 3, sd + 611);
+        a = mixC(a, rs('fire', 0.70 + 0.30 * nz(X * 5, Y * 5, sd + 612)),
+          smoothstep(0.90, 0.985, ember) * s * 0.95);
         a = add3(a, rs('fire', 0.55), clamp(grad, 0, 1) * 0.55);
         c = a;
       }
