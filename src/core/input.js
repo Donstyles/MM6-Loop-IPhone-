@@ -59,7 +59,10 @@ export class Input {
 
     this.pointer = { x: 0, y: 0, inView: false, down: false };
     this.mouseLook = false;
-    this.hasTouch = false;
+    // Show the movement stick from the first frame on a touch device rather
+    // than waiting for a tap to reveal it.
+    this.hasTouch = typeof navigator !== 'undefined'
+      && (navigator.maxTouchPoints > 0 || 'ontouchstart' in window);
     this.wheel = 0;
 
     this._bind();
