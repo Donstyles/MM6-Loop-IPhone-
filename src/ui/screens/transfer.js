@@ -13,7 +13,7 @@ import { clamp, Rand, fbm2 } from '../../core/rng.js';
 import * as F from '../../art/font.js';
 import {
   HouseScreen, PANEL, A, baked, poly, washPixels, gold, yesNo, optionList, OPTION, dlgRect,
-  exitButton, partyGold, spend, say, C_WHITE, C_GOLD, C_CANARY, C_DIM, C_RED, C_BODY,
+  exitButton, partyGold, spend, say, MM6, C_WHITE, C_GOLD, C_CANARY, C_DIM, C_RED, C_BODY,
 } from './dialogue.js';
 
 /**
@@ -31,11 +31,13 @@ export const DESTINATIONS = [
 
 /** Painted map of Enroth on a book page: sea, coast, hills, forests, roads. */
 export function paintMapPage(g, w, h) {
-  // Sea first, as a banded wash with a hatched coastal shelf.
-  washPixels(g, 0, 0, w, h, (u, v) => {
-    const n = fbm2(u * 0.02, v * 0.02, 4, 2, 0.55, 77) * 0.5 + 0.5;
-    return ramp('water', Math.round(clamp(3 + n * 4, 0, 15)));
-  }, 77);
+  // MM6's Town Portal and Lloyd's Beacon both use the sbmap book page, so this
+  // is a chart on parchment, not a picture of the sea. The water is drawn the
+  // way a period cartographer draws it: paper with parallel hatching.
+  MM6.blit(g, MM6.paperCanvas(w, h, 'book', 23), 0, 0);
+  for (let y = 3; y < h; y += 6) {
+    for (let x = 2; x < w - 2; x += 5) MM6.rct(g, x, y, 3, 1, [126, 142, 148]);
+  }
 
   // Landmass: a blobby island built from a few overlapping ellipses. The coast
   // line is derived from the silhouette rather than stroked per ellipse, or the
@@ -63,7 +65,7 @@ export function paintMapPage(g, w, h) {
     sg2.drawImage(mask, dx, dy);
   }
   sg2.globalCompositeOperation = 'source-in';
-  sg2.fillStyle = '#3c3a34';
+  sg2.fillStyle = '#4a3a20';
   sg2.fillRect(0, 0, w, h);
   g.drawImage(shore, 0, 0);
 
@@ -74,11 +76,13 @@ export function paintMapPage(g, w, h) {
     g.ellipse(cx * w, cy * h, rx * w, ry * h, 0, 0, Math.PI * 2);
   }
   g.clip();
+  // The land is bare paper with a faint wash, so the drawn symbols carry it.
+  MM6.blit(g, MM6.paperCanvas(w, h, 'sheet', 41), 0, 0);
   washPixels(g, 0, 0, w, h, (u, v) => {
     const n = fbm2(u * 0.035, v * 0.035, 3, 2, 0.5, 33) * 0.5 + 0.5;
-    const forest = fbm2(u * 0.02 + 9, v * 0.02, 2, 2, 0.5, 51) * 0.5 + 0.5;
-    if (forest > 0.58) return ramp('foliage', Math.round(4 + n * 4));
-    return ramp('grass', Math.round(6 + n * 5));
+    // Bare paper with only a breath of tone: the drawn symbols carry the map,
+    // and a green wash would read as a satellite photograph.
+    return [196 + n * 26, 178 + n * 24, 134 + n * 22];
   }, 33);
   g.restore();
 
@@ -95,10 +99,12 @@ export function paintMapPage(g, w, h) {
       poly(g, [x - 7, y + 4, x, y - 7, x + 7, y + 4], rampCss('stone', 5));
       poly(g, [x - 2, y + 4, x, y - 7, x + 3, y - 1], rampCss('stone', 9));
     } else {
-      g.fillStyle = rampCss('foliage', 3);
-      g.beginPath(); g.arc(x, y - 2, 4, 0, Math.PI * 2); g.fill();
-      g.fillStyle = rampCss('wood', 3);
-      g.fillRect(x - 1, y + 1, 2, 4);
+      // Forest: a drawn chevron pair with a trunk, as on a period chart.
+      for (let k = 0; k < 4; k++) {
+        MM6.rct(g, x - 3 + k, y - k, 1, 1, [58, 78, 40]);
+        MM6.rct(g, x + 3 - k, y - k, 1, 1, [58, 78, 40]);
+      }
+      MM6.rct(g, x, y + 1, 1, 3, [76, 58, 32]);
     }
   }
 

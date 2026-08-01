@@ -149,6 +149,11 @@ export function outdoorMap(region) {
     drawMinimap: region.drawMinimap || null,
     setTimeOfDay: region.setTimeOfDay ? (h) => region.setTimeOfDay(h) : null,
     setFogColor(c) { if (region.setFogColor) region.setFogColor(c); },
+    // The region culls its own billboard fields against the camera and drives
+    // the sky; without this every cluster in the map draws every frame.
+    update(camera, dt, timeOfDay, weather) {
+      if (region.update) region.update(dt || 0.016, camera, timeOfDay, weather);
+    },
     populate(entities) { if (region.populate) region.populate(entities); },
     dispose() { if (region.dispose) region.dispose(); },
   };
@@ -189,6 +194,7 @@ export function dungeonMap(dungeon) {
     drawMinimap: dungeon.drawMinimap || null,
     setTimeOfDay: null,
     setFogColor() {},
+    update(camera, dt) { if (dungeon.update) dungeon.update(dt || 0.016, camera); },
     populate(entities) { if (dungeon.populate) dungeon.populate(entities); },
     dispose() { if (dungeon.dispose) dungeon.dispose(); },
   };

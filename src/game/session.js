@@ -310,6 +310,12 @@ export class Session {
     this.updateTurns(dt);
     if (this.vfx) this.vfx.update(dt, ectx);
 
+    // Let the map cull its own batched content against the camera and advance
+    // its sky. Hours, not the 0-1 fraction, since that is what it bakes against.
+    if (this.map && this.map.update) {
+      this.map.update(this.engine.camera, dt, this.clock.hour + this.clock.minute / 60);
+    }
+
     this.updateCombatState();
     this.syncTimeOfDay();
     this.applyFog();

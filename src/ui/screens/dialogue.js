@@ -190,11 +190,21 @@ export function optionList(ui, ctx, items, o = {}) {
       // stippled, because a translucent slab is not an 8-bit thing.
       MM6.stipple(ctx, x, y + 2, w, h - 4, [10, 8, 6], 0.34);
     }
-    const ty = it.note ? y + 4 : y + Math.round((h - F.lineHeightOf('normal')) / 2);
-    F.drawText(ctx, it.label, x + w / 2, ty, { align: 'center', color: col, maxWidth: w - 6 });
+    // Long topics fold onto a second line. MM6 never ends an option in an
+    // ellipsis, and the serif face is wide enough that several would.
+    const label = wrapLines(it.label, w - 8, 'normal');
+    const lh = 12;
+    const block = label.length * lh + (it.note ? 11 : 0);
+    let ty = y + Math.round((h - block) / 2);
+    for (const line of label) {
+      F.drawText(ctx, line, x + w / 2, ty, { align: 'center', color: col });
+      ty += lh;
+    }
     if (it.note) {
-      F.drawText(ctx, it.note, x + w / 2, ty + 12,
-        { face: 'small', align: 'center', color: on ? C_CANARY : C_DIM, maxWidth: w - 6 });
+      for (const line of wrapLines(it.note, w - 8, 'small').slice(0, 1)) {
+        F.drawText(ctx, line, x + w / 2, ty,
+          { face: 'small', align: 'center', color: on ? C_CANARY : C_DIM });
+      }
     }
     if (hit.click && on) clicked = it.id;
     y += step;
@@ -880,51 +890,36 @@ export class DialogueScreen extends HouseScreen {
     return baked(`interior:${this.interior}`, PANEL.w, PANEL.h, (g, w, h) => paintRoom(g, w, h, this.interior));
   }
 
-  panelInfo() {
-    const out = [];
-    if (this.isHired()) out.push({ text: `In your service - ${this.npc.hire.wage}g/day`, color: C_LEARN });
-    else if (this.npc.title) out.push({ text: '', color: C_WHITE });
-    return out;
-  }
-
-  /** The NPC's speech, printed over the lower half of the illustration. */
+  /**
+   * MM6 never covers the interior with a text slab: the painting stays clear
+   * and the reply is printed in the right-hand panel under the topic list.
+   * Clicking anywhere on the painting finishes the typewriter reveal.
+   */
   drawContent(ctx) {
-    const x = PANEL.x + 16, w = PANEL.w - 32;
-    const y = PANEL.y + 176, h = 150;
-    plate(ctx, x, y, w, h, 0.70);
-    A.corner(ctx, x + 2, y + 2, 9, 'tl');
-    A.corner(ctx, x + w - 11, y + 2, 9, 'tr');
-    A.corner(ctx, x + 2, y + h - 11, 9, 'bl');
-    A.corner(ctx, x + w - 11, y + h - 11, 9, 'br');
-
-    F.drawText(ctx, this.npc.name, x + 14, y + 10, { color: C_BLUE });
-    if (this.npc.title) {
-      F.drawText(ctx, this.npc.title, x + w - 14, y + 11, { face: 'small', align: 'right', color: C_DIM });
-    }
-    A.rule(ctx, x + 12, y + 24, w - 24, '#7a6a4a');
-
-    const shown = this.body.slice(0, Math.floor(this.shown));
-    drawWrapped(ctx, shown, x + 14, y + 32, w - 28, { face: 'normal', lineHeight: 13, color: C_WHITE });
-
-    if (!this.revealed && ((this.t * 3) | 0) % 2 === 0) {
-      const lines = wrapLines(shown, w - 28, 'normal');
-      const last = lines[lines.length - 1] || '';
-      ctx.fillStyle = C_WHITE;
-      ctx.fillRect((x + 14 + F.measure(last, 'normal').w + 2) | 0, y + 32 + (lines.length - 1) * 13, 5, 9);
-    }
-    if (this.reward) {
-      F.drawText(ctx, `+${gold(this.reward.gold)} gold   +${gold(this.reward.xp)} experience`,
-        x + w - 14, y + h - 16, { face: 'small', align: 'right', color: C_CANARY });
-    }
-
-    // The plate itself finishes the reveal, MM6-style.
     if (this.ui && this.ui.region) {
-      const hit = this.ui.region('dlg:body', x, y, w, h);
+      const hit = this.ui.region('dlg:body', PANEL.x, PANEL.y, PANEL.w, PANEL.h);
       if (hit.click) this.shown = this.body.length;
     }
   }
 
-  drawMessage() { /* the speech plate is the message */ }
+  /** The NPC's reply, wrapped into the dialogue column. */
+  panelInfo() {
+    const out = [];
+    const shown = this.body.slice(0, Math.floor(this.shown));
+    if (shown) out.push({ text: shown, color: C_WHITE });
+    if (this.reward) {
+      out.push({
+        text: `+${gold(this.reward.gold)} gold, +${gold(this.reward.xp)} experience`,
+        color: C_CANARY,
+      });
+    }
+    if (this.isHired()) {
+      out.push({ text: `In your service - ${this.npc.hire.wage}g/day`, color: C_LEARN });
+    }
+    return out;
+  }
+
+  drawMessage() { /* the reply lives in the dialogue column */ }
 
   handleKey(code) {
     if (code === 'Escape') { this.close(); return true; }
@@ -959,11 +954,24 @@ export function paintRoom(g, w, h, kind = 'house') {
   // A shuttered window on the left throwing the key light.
   const wx = 40, wy = 46, ww = 74, wh = 82;
   g.fillStyle = rampCss('wood', 4); g.fillRect(wx - 5, wy - 5, ww + 10, wh + 10);
-  g.fillStyle = rampCss('sky', 11); g.fillRect(wx, wy, ww, wh);
-  g.fillStyle = rampCss('sky', 13); g.fillRect(wx, wy, ww, wh / 2);
+  g.fillStyle = rampCss('wood', 7); g.fillRect(wx - 5, wy - 5, ww + 10, 2);
+  // Glazing: banded daylight, a diagonal reflection across each pane and old
+  // green glass at the edges. A flat white quad has no glass in it.
+  for (let y = 0; y < wh; y++) {
+    const t = MM6.band(y / wh, 6);
+    for (let x = 0; x < ww; x++) {
+      const edge = Math.min(x, ww - 1 - x, y, wh - 1 - y) < 3 ? 0.82 : 1;
+      const refl = ((x + y * 0.6) % 34) < 6 ? 1.14 : 1;
+      MM6.rct(g, wx + x, wy + y, 1, 1,
+        MM6.shade(MM6.mix([214, 230, 244], [148, 176, 204], t), edge * refl));
+    }
+  }
   g.fillStyle = rampCss('wood', 6);
-  g.fillRect(wx + ww / 2 - 1, wy, 2, wh);
-  g.fillRect(wx, wy + wh / 2 - 1, ww, 2);
+  g.fillRect(wx + ww / 2 - 2, wy, 4, wh);
+  g.fillRect(wx, wy + wh / 2 - 2, ww, 4);
+  g.fillStyle = rampCss('wood', 9);
+  g.fillRect(wx + ww / 2 - 2, wy, 1, wh);
+  g.fillRect(wx, wy + wh / 2 - 2, ww, 1);
   glow(g, wx + ww / 2, wy + wh / 2, 120, '#fff0c0', 0.5);
 
   // Light cast on the floor from the window.
@@ -980,28 +988,31 @@ export function paintRoom(g, w, h, kind = 'house') {
   g.fillRect(w - 130, horizon - 96, 104, 6);
   g.fillStyle = '#140a04';
   g.fillRect(w - 116, horizon - 62, 76, 62);
-  glow(g, w - 78, horizon - 26, 58, '#ff8020', 0.85);
-  for (let i = 0; i < 7; i++) {
-    const fx = w - 108 + i * 11;
-    poly(g, [fx, horizon - 4, fx + 5, horizon - 22 - (i % 3) * 6, fx + 10, horizon - 4], rampCss('fire', 10 + (i % 3)));
+  MM6.rct(g, w - 112, horizon - 10, 68, 6, [70, 44, 22]);
+  for (let i = 0; i < 5; i++) {
+    MM6.flame(g, w - 104 + i * 13, horizon - 6, 14 + (i % 3) * 5, 26 + (i % 4) * 8, i * 1.7);
   }
+  glow(g, w - 78, horizon - 26, 52, '#ff8020', 0.7);
 
   paintClutter(g, 24, h - 12, 'barrel', 30);
   paintClutter(g, 60, h - 10, 'crate', 24);
   paintClutter(g, w - 46, h - 14, 'sack', 26);
 
   // A rug in the middle distance so the floor is not empty.
-  g.save();
-  g.globalAlpha = 0.9;
-  g.fillStyle = rampCss('blood', 4);
-  g.beginPath();
-  g.ellipse(w / 2, horizon + 40, 118, 30, 0, 0, Math.PI * 2);
-  g.fill();
-  g.fillStyle = rampCss('blood', 7);
-  g.beginPath();
-  g.ellipse(w / 2, horizon + 40, 96, 22, 0, 0, Math.PI * 2);
-  g.fill();
-  g.restore();
+  const rgx = Math.round(w / 2), rgy = horizon + 40, rgw = 118, rgh = 30;
+  for (let dy = -rgh; dy <= rgh; dy++) {
+    const k = Math.round(rgw * Math.sqrt(Math.max(0, 1 - (dy * dy) / (rgh * rgh))));
+    const t = (dy + rgh) / (rgh * 2);
+    MM6.rct(g, rgx - k, rgy + dy, k * 2, 1, rampCss('blood', 2 + Math.round(t * 2)));
+    if (k > 26) {
+      MM6.rct(g, rgx - k + 10, rgy + dy, k * 2 - 20, 1, rampCss('blood', 5 + Math.round(t * 2)));
+      MM6.rct(g, rgx - k + 24, rgy + dy, k * 2 - 48, 1, rampCss('sand', 4 + Math.round(t * 2)));
+    }
+    if (k > 34 && (dy + rgh) % 7 === 3) {
+      for (let x = -k + 30; x < k - 30; x += 16) MM6.rct(g, rgx + x, rgy + dy, 6, 1, rampCss('blood', 8));
+    }
+  }
+  for (let x = -rgw + 8; x < rgw - 8; x += 5) MM6.rct(g, rgx + x, rgy + rgh, 2, 3, rampCss('sand', 8));
 
   // Vignette: the original interiors are all painted dark at the edges.
   vignette(g, w, h);

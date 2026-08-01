@@ -315,7 +315,7 @@ export const PAPER = {
   spell: { base: '#d4c29c', lo: '#b0a078', hi: '#ede0c4' },
   book: { base: '#cfc0a0', lo: '#ac9c78', hi: '#e8dcbc' },
   // Tooled hide: the inventory field and the paperdoll's backing board.
-  hide: { base: '#4a3a26', lo: '#2a2014', hi: '#6e5a3c' },
+  hide: { base: '#4a3a26', lo: '#3a2e1e', hi: '#605036' },
 };
 
 /**
@@ -343,7 +343,7 @@ export function paperCanvas(w, h, kind = 'sheet', seed = 11) {
     const e = Math.min(ex / 13, ey / 11);
     if (e < 1) t -= (1 - clamp(e, 0, 1)) * (dark ? 0.28 : 0.42);
     return mix(lo, hi, band(clamp(t, 0, 1), 12));
-  }, dark ? 3 : 8);
+  }, dark ? 1.5 : 8);
 }
 
 export function paper(ctx, x, y, w, h, kind = 'sheet', seed = 11) {

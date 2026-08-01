@@ -3,6 +3,7 @@ import { Session } from './game/session.js';
 import { HUD } from './ui/hud.js';
 import { outdoorMap, dungeonMap, emptyMap } from './game/maps.js';
 import { Rand } from './core/rng.js';
+import { mergeStatic } from './game/mergestatic.js';
 
 // ---------------------------------------------------------------------------
 // Game start-up.
@@ -237,6 +238,12 @@ export async function loadRegion(session, regionId, seed, entry = null) {
   const region = await regionMod.generateRegion(regionId, seed, null);
   // Tell the spawner the region has already planted its own trees.
   region.hasFloraField = (region.floraPlan || []).length > 0;
+  // Bake the static scenery down to one mesh per material before it is shown.
+  const g = region.group || region.terrain?.group;
+  if (g) {
+    const r = mergeStatic(g);
+    console.info(`region ${regionId}: merged ${r.merged} meshes, ${r.before} -> ${r.after}`);
+  }
   const map = outdoorMap(region);
   session.setMap(map, regionId, entry || region.spawnPoint || townEntry(region) || null);
   populateRegion(session, region, seed);
@@ -267,6 +274,7 @@ export async function loadDungeon(session, spec, seed, entry = null) {
   const dungeonMod = session.modules?.dungeonMod;
   if (!dungeonMod || !dungeonMod.generateDungeon) return;
   const d = await dungeonMod.generateDungeon(spec, seed, null);
+  if (d.group) mergeStatic(d.group);
   const map = dungeonMap(d);
   session.setMap(map, spec.id || 'dungeon', entry);
   populateDungeon(session, d, seed);

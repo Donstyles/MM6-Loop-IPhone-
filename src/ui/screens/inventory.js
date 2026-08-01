@@ -187,8 +187,7 @@ export function drawPaperdoll(ctx, screen, ch) {
   ctx.save();
   ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
   // The doll stands on the panel's own tooled hide, not in a black well.
-  M.paper(ctx, r.x, r.y, r.w, r.h, 'sheet', 43);
-  M.stipple(ctx, r.x, r.y, r.w, r.h, [40, 28, 16], 0.55);
+  M.paper(ctx, r.x, r.y, r.w, r.h, 'hide', 43);
   // Anything worn behind the body goes down first: the cloak hangs behind the
   // shoulders and the bow is slung across the back.
   if (eq.cloak) paintWorn(ctx, 'cloak', eq.cloak, place.cloak);

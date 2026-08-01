@@ -60,10 +60,10 @@ export const PARTY_TORCH_POWER = 1;
  * actually be measured off the frame and hold the unlit floor at the bottom of
  * MM6's quoted band; torches then take it up from there.
  */
-const AMBIENT_TARGET = 0.145;
+const AMBIENT_TARGET = 0.105;
 
 /** Rendered sRGB value a surface at the centre of a torch pool lands on. */
-const LIT_TARGET = 0.40;
+const LIT_TARGET = 0.31;
 
 const THEME = {
   cave: {
