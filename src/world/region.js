@@ -882,6 +882,10 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
     bounds: { min: new THREE.Vector3(-half, hm.min, -half), max: new THREE.Vector3(half, hm.max, half), radius: half },
     ambient: sunTerms(tod),
     fogClass: def.fogClass, hazeTint: def.hazeTint,
+    // The colour distance fades toward. Each region names its own haze in its
+    // definition; without handing it out here every map fell back to one shared
+    // blue-grey and Bootleg Bay hazed the same colour as the Isle of Mist.
+    fogColor: new THREE.Color().fromArray(def.hazeTint || [0.56, 0.65, 0.74]).getHex(),
     weather: def.weather,
     difficulty: def.difficulty,
     season, spawnTable,
@@ -1011,19 +1015,40 @@ function buildMinimapPlate(hm, def, towns, dungeons, roads) {
     });
     g.stroke();
   }
+  // Towns are drawn as what they are - lanes and building footprints on open
+  // ground - not as a filled block. A solid square is most of the automap at
+  // the zoom the panel actually uses, and MM6's plate lets you read a town's
+  // street plan off it.
+  const px = (v) => v / (hm.size * hm.tile) * S;
   for (const t of towns) {
-    const [x, y] = toPx(t.x, t.z);
-    const r = Math.max(2.5, t.radius / (hm.size * hm.tile) * S);
-    g.fillStyle = '#d8cba0';
-    g.fillRect(x - r, y - r, r * 2, r * 2);
-    g.strokeStyle = '#4a4030';
-    g.lineWidth = 1;
-    g.strokeRect(x - r, y - r, r * 2, r * 2);
+    for (const rd of t.roads || []) {
+      g.strokeStyle = '#c2ab7e';
+      g.lineWidth = Math.max(1, px(rd.width || 256));
+      g.beginPath();
+      rd.points.forEach((p, i) => {
+        const [rx, ry] = toPx(p.x, p.z);
+        i ? g.lineTo(rx, ry) : g.moveTo(rx, ry);
+      });
+      g.stroke();
+    }
+    for (const b of t.buildings || []) {
+      const fp = b.footprint || { w: 512, d: 512 };
+      const w = Math.max(2, px(fp.w)), d = Math.max(2, px(fp.d));
+      const [bx, by] = toPx(b.x, b.z);
+      g.fillStyle = b.shop ? '#8c6a3c' : '#6b5a44';
+      g.fillRect(Math.round(bx - w / 2), Math.round(by - d / 2), Math.round(w), Math.round(d));
+      g.fillStyle = '#3a3026';
+      g.fillRect(Math.round(bx - w / 2), Math.round(by + d / 2) - 1, Math.round(w), 1);
+    }
   }
   for (const d of dungeons) {
     const [x, y] = toPx(d.x, d.z);
-    g.fillStyle = '#201814';
-    g.beginPath(); g.arc(x, y, 2.2, 0, 6.2832); g.fill();
+    // A cave mouth, not a dot: a dark square with a lit lintel reads at the
+    // panel's zoom where a 2 px circle does not.
+    g.fillStyle = '#1a1410';
+    g.fillRect(Math.round(x) - 3, Math.round(y) - 3, 7, 7);
+    g.fillStyle = '#8a7a5c';
+    g.fillRect(Math.round(x) - 3, Math.round(y) - 3, 7, 1);
   }
   return c;
 }

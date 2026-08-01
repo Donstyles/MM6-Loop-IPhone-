@@ -1007,144 +1007,809 @@ export function makeBillboardField(tex, instances, opts = {}) {
   return mesh;
 }
 
-function speckleBerries(p, rnd) {
-  for (let i = 0; i < 16; i++) p.setArr(20 + rnd.int(24), 38 + rnd.int(16), rampSample('blood', 0.72));
+// ---------------------------------------------------------------------------
+// Flora billboards.
+//
+// MM6's trees are `tree01`..`tree66`: pre-rendered billboards, 128x192 to
+// 192x256 source pixels, standing 400-1000 world units tall. They are painted
+// art, not filled shapes - a tapered trunk with bark grain and a lit and a
+// shadow side, real limbs joining the trunk to the crown, and a crown built of
+// overlapping foliage clumps with four to six banded value steps and gaps you
+// can see the sky through. The silhouette is hard-keyed off index 0, so it is
+// jagged and 1-bit; there is no feathering anywhere on it.
+//
+// Everything below paints into a Pix by hand. No canvas arcs, no strokes, no
+// gradients, no partial alpha: every curve is scanline-filled and every ramp is
+// quantised into a handful of steps so it bands the way a 256-colour frame does.
+// ---------------------------------------------------------------------------
+
+/** Trees get the full 128px sheet; undergrowth and props share a 64px one. */
+const TREE_KINDS = new Set([
+  'oak', 'oak_autumn', 'oak_winter', 'tree', 'pine', 'pine_snow', 'fir',
+  'birch', 'willow', 'palm', 'dead_tree', 'sapling',
+]);
+
+/** Bounds-checked write - Pix.idx() wraps, and a wrapped tree is a ruined one. */
+function fput(p, x, y, c) {
+  x |= 0; y |= 0;
+  if (x < 0 || y < 0 || x >= p.w || y >= p.h) return;
+  p.setArr(x, y, c);
 }
 
-/** Quick procedural sprite sheet for a flora kind, used until spritebake lands. */
-const _floraCache = new Map();
-export function floraTexture(kind, seed = 1) {
-  const key = kind + seed;
-  if (_floraCache.has(key)) return _floraCache.get(key);
-  const S = 64;
-  const p = new Pix(S, S);
-  p.fill(0, 0, 0, 0);
-  const rnd = new Rand(seed * 7919 + kind.length);
+/** Quantise into `n` discrete steps. The banding is the look, not an artefact. */
+function qb(t, n) {
+  const s = Math.max(2, n | 0);
+  return Math.round(clamp(t, 0, 1) * (s - 1)) / (s - 1);
+}
 
-  const trunk = (wTop, wBot, hTop, rampName, shade) => {
-    for (let y = hTop; y < S; y++) {
-      const t = (y - hTop) / (S - hTop);
-      const w = wTop + (wBot - wTop) * t;
-      for (let x = Math.round(S / 2 - w); x <= Math.round(S / 2 + w); x++) {
-        const side = (x - S / 2) / Math.max(1, w);
-        p.setArr(x, y, scaleC(rampSample(rampName, shade), 1 - Math.abs(side) * 0.35 + (side < 0 ? 0.14 : 0)));
-      }
-    }
-  };
-  const blob = (cx, cy, rx, ry, rampName, lo, hi, sd) => {
-    for (let y = Math.max(0, cy - ry); y < Math.min(S, cy + ry); y++) {
-      for (let x = Math.max(0, cx - rx); x < Math.min(S, cx + rx); x++) {
-        const dx = (x - cx) / rx, dy = (y - cy) / ry;
+/**
+ * Bark lightness at a point on a trunk or limb.
+ *
+ * `side` is -1 at the left edge, +1 at the right. The key light is the baked
+ * upper-front-left of every MM6 turntable render, so the left third stays lit
+ * and the right edge falls into a hard shadow line. On top of the cylinder
+ * term go two octaves of very anisotropic noise - stretched ~10:1 along the
+ * trunk - which is what reads as vertical grain rather than as speckle.
+ */
+function barkTone(x, y, side, base, seed) {
+  const round = 1 - side * side * 0.62;              // cylinder falloff
+  let l = base + 0.30 * round - side * 0.26;
+  l += (valueNoise2(x * 1.9, y * 0.14, seed) - 0.5) * 0.30;
+  l += (valueNoise2(x * 0.62, y * 0.05, seed + 311) - 0.5) * 0.26;
+  if (side > 0.72) l -= 0.16;                        // hard shadow edge
+  if (side < -0.78) l += 0.10;                       // rim of the lit side
+  return l;
+}
+
+/**
+ * A tapered trunk with a root flare, a slight lean, bark grain and knots.
+ * Writes `2` into `mask` so the canopy's sky-holes never eat the wood.
+ */
+function paintTrunk(p, mask, o) {
+  const {
+    y0, y1, cx0, cx1, w0, w1, ramp: rampName = 'wood',
+    base = 0.30, flare = 0.55, sway = 0, seed = 1, steps = 6,
+  } = o;
+  const span = Math.max(1, y1 - y0);
+  const knots = [];
+  const nk = 2 + Math.floor(hash2(seed, 7, 91) * 2);
+  for (let i = 0; i < nk; i++) {
+    const t = 0.16 + hash2(seed, i * 13 + 3, 5) * 0.66;
+    knots.push({ y: y0 + span * t, r: (w0 + (w1 - w0) * t) * (0.55 + hash2(seed, i, 9) * 0.35), s: hash2(seed, i, 21) < 0.5 ? -1 : 1 });
+  }
+  for (let y = y0; y <= y1; y++) {
+    const t = (y - y0) / span;
+    let hw = w0 + (w1 - w0) * t;
+    // Root flare: the last sixth of the trunk widens into the ground, which is
+    // what makes a tree read as planted instead of stuck in.
+    if (t > 0.84) hw *= 1 + ((t - 0.84) / 0.16) * flare;
+    const cx = cx0 + (cx1 - cx0) * t + Math.sin(t * 3.1 + seed) * sway;
+    const xa = Math.round(cx - hw), xb = Math.round(cx + hw);
+    for (let x = xa; x <= xb; x++) {
+      const side = (x - cx) / Math.max(0.9, hw);
+      if (Math.abs(side) > 1.06) continue;
+      let l = barkTone(x, y, side, base, seed);
+      for (const k of knots) {
+        const dx = (x - cx - k.s * hw * 0.42) / Math.max(1, k.r);
+        const dy = (y - k.y) / Math.max(1.4, k.r * 1.7);
         const d = dx * dx + dy * dy;
-        if (d > 1) continue;
-        const n = valueNoise2(x * 0.5, y * 0.5, sd);
-        if (d > 0.62 && n < 0.42) continue;         // ragged silhouette
-        // Light from the upper left, same convention as every other surface.
-        const lit = clamp(0.5 - dx * 0.45 - dy * 0.5 + n * 0.35, 0, 1);
-        p.setArr(x, y, rampSample(rampName, lo + (hi - lo) * lit), 255);
+        if (d < 1) l += d < 0.42 ? -0.26 : 0.16;     // dark core, lit collar
       }
+      fput(p, x, y, rampSample(rampName, qb(l, steps)));
+      const i = (y | 0) * p.w + (x | 0);
+      if (x >= 0 && y >= 0 && x < p.w && y < p.h) mask[i] = 2;
     }
-  };
+  }
+}
 
-  switch (kind) {
-    case 'pine': case 'pine_snow': case 'fir': {
-      trunk(2, 3.5, 40, 'wood', 0.46);
-      for (let i = 0; i < 4; i++) {
-        const y = 10 + i * 10, w = 8 + i * 5;
-        for (let yy = y; yy < y + 13 && yy < S; yy++) {
-          const t = (yy - y) / 13;
-          const half = w * t;
-          for (let x = Math.round(S / 2 - half); x <= Math.round(S / 2 + half); x++) {
-            const n = valueNoise2(x * 0.6, yy * 0.6, 12 + i);
-            if (n < 0.30) continue;
-            const side = (x - S / 2) / Math.max(1, half);
-            p.setArr(x, yy, rampSample('foliage', 0.22 + 0.5 * clamp(0.55 - side * 0.5 - t * 0.2 + n * 0.3, 0, 1)));
-          }
-        }
+/** A tapered limb from (ax,ay) to (bx,by). Same bark rig as the trunk. */
+function paintLimb(p, mask, ax, ay, bx, by, w0, w1, o = {}) {
+  const { ramp: rampName = 'wood', base = 0.24, seed = 1, steps = 6 } = o;
+  const len = Math.hypot(bx - ax, by - ay);
+  const n = Math.max(2, Math.round(len * 1.6));
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    const x = ax + (bx - ax) * t, y = ay + (by - ay) * t;
+    const k = Math.max(0, Math.round((w0 + (w1 - w0) * t) * 0.5));
+    for (let dy = -k; dy <= k; dy++) {
+      for (let dx = -k; dx <= k; dx++) {
+        if (dx * dx + dy * dy > (k + 0.35) * (k + 0.35)) continue;
+        const side = k > 0 ? dx / k : 0;
+        const px = Math.round(x + dx), py = Math.round(y + dy);
+        fput(p, px, py, rampSample(rampName, qb(barkTone(px, py, side, base, seed), steps)));
+        if (px >= 0 && py >= 0 && px < p.w && py < p.h) mask[py * p.w + px] = 2;
       }
-      break;
     }
-    case 'palm': {
-      trunk(2, 3, 18, 'wood', 0.52);
-      for (let a = 0; a < 7; a++) {
-        const ang = -Math.PI * 0.15 - a * (Math.PI * 0.78 / 6);
-        for (let t = 0; t < 26; t++) {
-          const x = Math.round(S / 2 + Math.cos(ang) * t);
-          const y = Math.round(18 + Math.sin(ang) * t * 0.8 + t * t * 0.012);
-          for (let w = -2; w <= 2; w++) {
-            if (x + w < 0 || x + w >= S || y < 0 || y >= S) continue;
-            if (Math.abs(w) > 2 - t * 0.06) continue;
-            p.setArr(x + w, y, rampSample('foliage', 0.34 + 0.4 * valueNoise2(x, y + w, 3)));
-          }
-        }
-      }
-      break;
+  }
+}
+
+/**
+ * One foliage clump.
+ *
+ * The rim is eroded by noise so the silhouette comes out jagged and 1-bit
+ * rather than as a clean ellipse edge, and the interior takes a lit/shadow
+ * gradient plus two scales of leaf noise before it is quantised to `steps`
+ * bands. Clumps are drawn bottom-up so the sunlit tops overwrite the shaded
+ * undersides and the crown gains a real top-to-bottom value range.
+ */
+function paintClump(p, mask, cx, cy, rx, ry, o) {
+  const {
+    ramp: rampName = 'foliage', lo = 0.22, hi = 0.92, seed = 1,
+    steps = 5, ragged = 0.46, tilt = 0, bias = 0,
+  } = o;
+  const y0 = Math.floor(cy - ry), y1 = Math.ceil(cy + ry);
+  const x0 = Math.floor(cx - rx), x1 = Math.ceil(cx + rx);
+  for (let y = y0; y <= y1; y++) {
+    if (y < 0 || y >= p.h) continue;
+    for (let x = x0; x <= x1; x++) {
+      if (x < 0 || x >= p.w) continue;
+      const dx = (x - cx) / rx, dy = (y - cy) / ry;
+      const d2 = dx * dx + dy * dy;
+      if (d2 > 1.05) continue;
+      const nc = valueNoise2(x * 0.38, y * 0.38, seed);          // clump scale
+      const nl = valueNoise2(x * 1.25, y * 1.25, seed + 77);     // leaf scale
+      // Ragged 1-bit rim: erode harder the further out the pixel sits.
+      if (d2 > 0.46 && nc * 0.72 + nl * 0.42 < ragged * (d2 - 0.32)) continue;
+      let l = 0.50 + bias - dx * (0.26 + tilt) - dy * 0.46
+        + (nc - 0.5) * 0.66 + (nl - 0.5) * 0.30;
+      fput(p, x, y, rampSample(rampName, qb(lo + (hi - lo) * clamp(l, 0, 1), steps)));
+      mask[y * p.w + x] = 1;
     }
-    case 'dead_tree': {
-      trunk(2, 4, 12, 'wood', 0.42);
-      for (let a = 0; a < 5; a++) {
-        const ang = -Math.PI * 0.25 - a * 0.28;
-        for (let t = 0; t < 18; t++) {
-          const x = Math.round(S / 2 + Math.cos(ang) * t * (a % 2 ? 1 : -1));
-          const y = Math.round(24 + Math.sin(ang) * t);
-          if (x < 0 || x >= S || y < 0 || y >= S) continue;
-          p.setArr(x, y, rampSample('wood', 0.16));
-        }
-      }
-      break;
+  }
+}
+
+/**
+ * Punch sky-holes through the crown.
+ *
+ * A real canopy is not a solid mass; MM6's tree bitmaps have daylight showing
+ * between the foliage clumps and that is a large part of why they do not read
+ * as blobs. Holes only ever open in leaf pixels (mask 1), never in wood, and
+ * only where they are fully surrounded, so the outer silhouette is untouched.
+ */
+function punchCanopy(p, mask, seed, amount, scale = 0.26) {
+  const w = p.w, h = p.h;
+  const doomed = [];
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x;
+      if (mask[i] !== 1) continue;
+      if (!mask[i - 1] || !mask[i + 1] || !mask[i - w] || !mask[i + w]) continue;
+      const n = valueNoise2(x * scale, y * scale * 1.25, seed) * 0.7
+        + valueNoise2(x * scale * 2.3, y * scale * 2.3, seed + 5) * 0.3;
+      if (n < amount) doomed.push(i);
     }
-    case 'bush': case 'bush_berry': case 'shrub': case 'sapling': case 'vine':
-      blob(32, 46, 15, 12, 'foliage', 0.38, 0.90, 31);
-      if (kind === 'bush_berry') speckleBerries(p, rnd);
-      break;
-    case 'fern': case 'grass_tuft':
-      blob(32, 50, 13, 9, 'grass', 0.24, 0.72, 44);
-      break;
-    case 'cactus':
-      trunk(4, 5, 20, 'foliage', 0.30);
-      blob(22, 34, 4, 7, 'foliage', 0.24, 0.6, 8);
-      blob(43, 30, 4, 8, 'foliage', 0.24, 0.6, 9);
-      break;
-    case 'rock': case 'rock_small': case 'rock_large': case 'boulder': case 'log':
-      blob(32, 50, 17, 11, 'stone', 0.22, 0.72, 55);
-      break;
-    case 'reed': case 'reeds':
-      for (let i = 0; i < 12; i++) {
-        const x0 = 20 + rnd.int(24), lean = rnd.float(-6, 6);
-        for (let y = 26; y < S; y++) {
-          const x = Math.round(x0 + lean * (S - y) / 38);
-          if (x < 0 || x >= S) continue;
-          p.setArr(x, y, rampSample('swamp', 0.30 + 0.4 * rnd.float()));
+  }
+  for (const i of doomed) { p.data[i * 4 + 3] = 0; mask[i] = 0; }
+}
+
+/**
+ * Bleed the edge colour outward into the transparent margin.
+ *
+ * The alpha stays a hard 0/255 - what changes is only the RGB the mip chain
+ * averages in. Without this, half-size mips blend the sprite toward the black
+ * of the empty texels and a distant tree grows a dark halo.
+ */
+function bleedAlpha(p, passes = 3) {
+  const w = p.w, h = p.h, d = p.data;
+  for (let s = 0; s < passes; s++) {
+    const add = [];
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        if (d[i + 3] !== 0 || d[i] || d[i + 1] || d[i + 2]) continue;
+        let r = 0, g = 0, b = 0, n = 0;
+        for (let k = 0; k < 4; k++) {
+          const nx = x + (k === 0 ? -1 : k === 1 ? 1 : 0);
+          const ny = y + (k === 2 ? -1 : k === 3 ? 1 : 0);
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+          const j = (ny * w + nx) * 4;
+          if (!d[j] && !d[j + 1] && !d[j + 2]) continue;
+          r += d[j]; g += d[j + 1]; b += d[j + 2]; n++;
         }
+        if (n) add.push(i, r / n, g / n, b / n);
       }
-      break;
-    case 'flowers': case 'flowers_white': case 'flowers_red':
-      blob(32, 54, 14, 7, 'grass', 0.36, 0.8, 61);
-      for (let i = 0; i < 14; i++) {
-        p.setArr(18 + rnd.int(28), 46 + rnd.int(12), rampSample(rnd.bool() ? 'gold' : 'blood', 0.7));
+    }
+    for (let k = 0; k < add.length; k += 4) {
+      const i = add[k];
+      d[i] = add[k + 1]; d[i + 1] = add[k + 2]; d[i + 2] = add[k + 3]; d[i + 3] = 0;
+    }
+    if (!add.length) break;
+  }
+}
+
+// --- the tree families -----------------------------------------------------
+
+/**
+ * Deciduous broadleaf: trunk, a fork of limbs, and a crown of clumps.
+ * `o.weep` hangs strands from the limb tips instead (willow); `o.pale` swaps
+ * the trunk for birch bark.
+ */
+function paintBroadleaf(p, mask, rnd, o) {
+  const S = p.w, cx = S * 0.5;
+  const leaf = o.leaf || 'foliage';
+  const crownY = S * (o.crownY || 0.50);
+  const trunkTop = crownY + S * 0.04;
+
+  // Trunk.
+  paintTrunk(p, mask, {
+    y0: Math.round(trunkTop), y1: S - 1, cx0: cx, cx1: cx + (o.lean || 0) * S,
+    w0: S * (o.wTop || 0.026), w1: S * (o.wBot || 0.048),
+    base: o.barkBase === undefined ? 0.30 : o.barkBase,
+    flare: 0.62, sway: S * 0.012, seed: o.seed, steps: 6,
+    ramp: o.pale ? 'plaster' : 'wood',
+  });
+  if (o.pale) {
+    // Birch: horizontal lenticel bands scored across the white bark.
+    for (let b = 0; b < 9; b++) {
+      const y = Math.round(trunkTop + (S - trunkTop) * (0.06 + b * 0.105) + rnd.float(-2, 2));
+      const t = (y - trunkTop) / Math.max(1, S - 1 - trunkTop);
+      const hw = S * (0.026 + (0.048 - 0.026) * t);
+      const x0 = Math.round(cx - hw * rnd.float(0.3, 1.0));
+      const x1 = Math.round(cx + hw * rnd.float(0.3, 1.0));
+      for (let x = x0; x <= x1; x++) {
+        fput(p, x, y, rampSample('grey', 0.14 + rnd.float(0, 0.12)));
+        if (rnd.bool(0.45)) fput(p, x, y + 1, rampSample('grey', 0.10));
       }
-      break;
-    case 'stump':
-      trunk(6, 7, 46, 'wood', 0.26);
-      break;
-    case 'mushroom': case 'mushroom_cluster': case 'mushroom_giant':
-      trunk(1.5, 2, 46, 'plaster', 0.6);
-      blob(32, 44, 10, 6, 'blood', 0.3, 0.7, 77);
-      break;
-    default: { // broadleaf tree - the workhorse of every green region
-      // MM6 swapped tree sprites by season: tree01/04/10 had autumn and winter
-      // variants, the conifers did not. Autumn is the same silhouette in the
-      // fire ramp rather than a separate drawing.
-      const leaf = kind === 'oak_autumn' ? 'fire' : kind === 'willow' ? 'grass' : 'foliage';
-      trunk(2.5, 4.5, 34, 'wood', kind === 'birch' ? 0.80 : 0.46);
-      blob(32, 26, 19, 17, leaf, 0.34, 0.95, 21);
-      blob(22, 20, 10, 9, leaf, 0.42, 1.0, 22);
-      blob(43, 30, 10, 9, leaf, 0.28, 0.82, 23);
-      break;
     }
   }
 
-  const tex = toTexture(p, { dither: 8, repeat: false, mips: true });
+  // Limbs. They start below the crown so the junction is visible, and every
+  // one of them ends inside a foliage clump.
+  const nb = o.branches || 5;
+  const tips = [];
+  for (let i = 0; i < nb; i++) {
+    const a = -Math.PI * 0.5 + (i - (nb - 1) / 2) * (Math.PI / (nb + 1.4)) + rnd.float(-0.16, 0.16);
+    const len = S * rnd.float(0.20, 0.30);
+    const bx = cx + Math.cos(a) * len * (o.spread || 1.25);
+    const by = trunkTop + Math.sin(a) * len - S * 0.02;
+    paintLimb(p, mask, cx + rnd.float(-1, 1), trunkTop + S * rnd.float(0.01, 0.09),
+      bx, by, S * 0.028, S * 0.010, { seed: o.seed + i, base: o.pale ? 0.34 : 0.22, ramp: o.pale ? 'plaster' : 'wood' });
+    // A second-order fork off the tip: two twigs, so the branch structure is
+    // still legible where it emerges from the foliage.
+    for (let k = 0; k < 2; k++) {
+      const a2 = a + (k ? 0.55 : -0.55) + rnd.float(-0.2, 0.2);
+      paintLimb(p, mask, bx, by, bx + Math.cos(a2) * S * 0.11, by + Math.sin(a2) * S * 0.11,
+        S * 0.010, S * 0.005, { seed: o.seed + i * 3 + k, base: 0.20, ramp: o.pale ? 'plaster' : 'wood' });
+    }
+    tips.push([bx, by]);
+  }
+
+  if (o.weep) {
+    // Willow: a broken crown of clumps with foliage strands falling out of the
+    // whole underside, not one ellipse with noodles hung off the rim.
+    const domeR = S * 0.38;
+    const dome = [
+      [cx, crownY - S * 0.20, domeR * 0.92, S * 0.15, -0.04],
+      [cx - domeR * 0.52, crownY - S * 0.15, domeR * 0.46, S * 0.11, -0.08],
+      [cx + domeR * 0.50, crownY - S * 0.16, domeR * 0.44, S * 0.11, -0.06],
+      [cx - domeR * 0.20, crownY - S * 0.28, domeR * 0.50, S * 0.12, 0.14],
+      [cx + domeR * 0.26, crownY - S * 0.26, domeR * 0.42, S * 0.11, 0.08],
+    ];
+    dome.sort((a, b) => b[1] - a[1]);
+    for (let i = 0; i < dome.length; i++) {
+      const [dx, dy, rx, ry, bias] = dome[i];
+      paintClump(p, mask, dx, dy, rx, ry, {
+        ramp: leaf, lo: 0.12, hi: 0.92, seed: o.seed + 40 + i * 13, steps: 5, ragged: 0.56, bias,
+      });
+    }
+    for (let i = 0; i < 46; i++) {
+      const t = rnd.float(-1, 1);
+      const sx = cx + t * domeR * 1.02;
+      const sy = crownY - S * 0.22 + (1 - t * t) * S * 0.05 + rnd.float(0, S * 0.05);
+      const len = S * rnd.float(0.10, 0.34) * (1 - t * t * 0.45);
+      const shade = 0.26 + rnd.float(0, 0.52);
+      const wob = rnd.float(0.09, 0.20);
+      for (let k = 0; k < len; k++) {
+        const y = sy + k;
+        const x = sx + Math.sin(k * wob + i) * S * 0.022 + k * t * 0.06;
+        const l = qb(shade + (valueNoise2(x * 0.9, y * 0.9, o.seed) - 0.5) * 0.44 - k / len * 0.14, 5);
+        fput(p, Math.round(x), Math.round(y), rampSample(leaf, 0.18 + l * 0.70));
+        if (k < len * 0.7 || rnd.bool(0.6)) fput(p, Math.round(x) + 1, Math.round(y), rampSample(leaf, 0.14 + l * 0.6));
+        const ii = Math.round(y) * p.w + Math.round(x);
+        if (ii >= 0 && ii < mask.length) mask[ii] = 1;
+      }
+    }
+    return;
+  }
+
+  // Crown: shadowed underside masses first, then the sunlit caps, so the
+  // canopy carries a real top-to-bottom value range instead of one flat green.
+  const cr = S * (o.crownR || 0.40);
+  // The crown sits clear of the top of the trunk so the limbs and the fork
+  // stay visible underneath it. A canopy pulled down over the junction is what
+  // turns a tree into a lollipop.
+  const cy = crownY - S * 0.24;
+  const clumps = [];
+  for (const [bx, by] of tips) clumps.push([bx, by, cr * 0.34, cr * 0.28, -0.10]);
+  const ring = o.ring === undefined ? 6 : o.ring;
+  for (let i = 0; i < ring; i++) {
+    const a = (i / ring) * Math.PI * 2 + rnd.float(0, 0.5);
+    const rr = cr * rnd.float(0.52, 0.78);
+    clumps.push([cx + Math.cos(a) * rr, cy + Math.sin(a) * rr * 0.62,
+      cr * rnd.float(0.30, 0.42), cr * rnd.float(0.26, 0.36), 0]);
+  }
+  clumps.push([cx + rnd.float(-1, 1) * cr * 0.12, cy + cr * 0.12, cr * 0.60, cr * 0.42, -0.08]);
+  clumps.push([cx - cr * 0.18, cy - cr * 0.34, cr * 0.44, cr * 0.30, 0.16]);
+  clumps.push([cx + cr * 0.26, cy - cr * 0.22, cr * 0.36, cr * 0.26, 0.08]);
+  clumps.sort((a, b) => b[1] - a[1]);
+  for (let i = 0; i < clumps.length; i++) {
+    const [x, y, rx, ry, bias] = clumps[i];
+    paintClump(p, mask, x, y, rx, ry, {
+      ramp: leaf, lo: o.lo === undefined ? 0.18 : o.lo, hi: o.hi === undefined ? 0.86 : o.hi,
+      seed: o.seed + i * 17, steps: o.steps || 5,
+      ragged: 0.50, bias, tilt: 0.06,
+    });
+  }
+  punchCanopy(p, mask, o.seed + 3, o.holes === undefined ? 0.24 : o.holes, 0.30);
+}
+
+/** Conifer: a spiky stack of drooping boughs with the trunk showing between. */
+function paintConifer(p, mask, rnd, o) {
+  const S = p.w, cx = S * 0.5;
+  const leaf = o.leaf || 'foliage';
+  paintTrunk(p, mask, {
+    y0: Math.round(S * 0.10), y1: S - 1, cx0: cx, cx1: cx,
+    w0: S * 0.010, w1: S * 0.036, base: 0.22, flare: 0.7, seed: o.seed, steps: 6,
+  });
+  const tiers = o.tiers || 8;
+  for (let i = tiers - 1; i >= 0; i--) {
+    const t = i / (tiers - 1);
+    const yTop = S * (0.09 + t * 0.72);
+    const hgt = S * (0.13 + t * 0.13);
+    const halfMax = S * (0.050 + t * 0.31) * rnd.float(0.94, 1.06);
+    for (let k = 0; k < hgt; k++) {
+      const y = Math.round(yTop + k);
+      const u = k / Math.max(1, hgt - 1);
+      // Boughs droop: the widest point is near the bottom of the tier, and the
+      // last rows pull back in, which is what gives a fir its scalloped edge.
+      const half = halfMax * (u < 0.80 ? 0.22 + (u / 0.80) * 0.78 : 1 - (u - 0.80) * 2.6);
+      for (let x = Math.round(cx - half) - 1; x <= Math.round(cx + half) + 1; x++) {
+        const side = (x - cx) / Math.max(1, half);
+        const n = valueNoise2(x * 1.15, y * 1.15, o.seed + i * 9);
+        // Spiky, per-column needle edge: the silhouette is a saw, never a
+        // clean triangle, and it is 1-bit - a texel is needles or it is sky.
+        const spike = valueNoise2(x * 0.55, i * 3.7, o.seed + 5);
+        if (Math.abs(side) > 0.80 + spike * 0.30) continue;
+        if (Math.abs(side) > 0.62 && n < 0.30) continue;
+        let l = 0.52 - side * 0.34 - u * 0.44 + (n - 0.5) * 0.70;
+        l = 0.10 + 0.86 * clamp(l, 0, 1);
+        fput(p, x, y, rampSample(leaf, qb(l, 5)));
+        if (x >= 0 && y >= 0 && x < p.w && y < p.h) mask[y * p.w + x] = 1;
+      }
+    }
+    if (o.snow) {
+      // A crust of snow along the top of each bough, never on the underside.
+      for (let d = 0; d < 2; d++) {
+        const y = Math.round(yTop + hgt * (0.10 + d * 0.10));
+        const hw = halfMax * (0.35 + d * 0.22);
+        for (let x = Math.round(cx - hw); x <= Math.round(cx + hw); x++) {
+          if (valueNoise2(x * 0.8, i * 2.1 + d, o.seed + 71) < 0.40) continue;
+          fput(p, x, y, rampSample('ice', d ? 0.58 : 0.78));
+        }
+      }
+    }
+  }
+  // Leader spike.
+  for (let k = 0; k < S * 0.10; k++) {
+    const y = Math.round(S * 0.035 + k);
+    const half = Math.max(0.6, k * 0.36);
+    for (let x = Math.round(cx - half); x <= Math.round(cx + half); x++) {
+      fput(p, x, y, rampSample(leaf, qb(0.42 + (valueNoise2(x, y, o.seed) - 0.5) * 0.5, 5)));
+      if (x >= 0 && y >= 0 && x < p.w && y < p.h) mask[y * p.w + x] = 1;
+    }
+  }
+  punchCanopy(p, mask, o.seed + 9, 0.14, 0.38);
+}
+
+/** Palm: a curved ringed bole with a fan of fronds and a few coconuts. */
+function paintPalm(p, mask, rnd, o) {
+  const S = p.w, cx = S * 0.5;
+  const topY = S * 0.42;
+  for (let y = Math.round(topY); y < S; y++) {
+    const t = (y - topY) / (S - topY);
+    const bx = cx + Math.sin((1 - t) * 1.05) * S * 0.10;
+    const hw = S * (0.022 + t * 0.020) * (t > 0.88 ? 1 + (t - 0.88) * 4 : 1);
+    for (let x = Math.round(bx - hw); x <= Math.round(bx + hw); x++) {
+      const side = (x - bx) / Math.max(0.9, hw);
+      // Ring scars every few rows: the palm's stacked leaf bases.
+      const rib = (y % 5 === 0) ? -0.18 : (y % 5 === 1 ? 0.12 : 0);
+      fput(p, x, y, rampSample('wood', qb(barkTone(x, y, side, 0.36, o.seed) + rib, 6)));
+      if (x >= 0 && y >= 0 && x < p.w && y < p.h) mask[y * p.w + x] = 2;
+    }
+  }
+  const hx = cx + Math.sin(1.05) * S * 0.10, hy = topY;
+  // Nine fronds fanned symmetrically about the vertical, each drooping under
+  // its own weight. The outer ones lie almost flat; the two centre ones stand.
+  const NF = 9;
+  for (let f = 0; f < NF; f++) {
+    const spread = (f / (NF - 1) - 0.5) * 2;                 // -1 .. 1
+    const a = -Math.PI * 0.5 + spread * 1.30 + rnd.float(-0.10, 0.10);
+    const len = S * (0.42 - Math.abs(spread) * 0.10) * rnd.float(0.9, 1.08);
+    const droop = S * (0.14 + (1 - Math.abs(spread)) * 0.26);
+    const shade = 0.28 + rnd.float(0, 0.46);
+    for (let k = 0; k < len; k++) {
+      const u = k / len;
+      const x = hx + Math.cos(a) * k;
+      const y = hy + Math.sin(a) * k * 0.80 + u * u * droop;
+      const halfw = Math.max(0, (1 - u * 0.75) * S * 0.036);
+      for (let d = -Math.ceil(halfw); d <= Math.ceil(halfw); d++) {
+        if (Math.abs(d) > halfw) continue;
+        if (Math.abs(d) > 0.7 && (k + d) % 3 === 0) continue;      // leaflet gaps
+        const l = qb(shade + 0.22 - Math.abs(d) / Math.max(1, halfw) * 0.28
+          + (valueNoise2(x, y + d, o.seed) - 0.5) * 0.4, 5);
+        fput(p, Math.round(x), Math.round(y + d), rampSample('foliage', 0.16 + l * 0.72));
+        const ii = Math.round(y + d) * p.w + Math.round(x);
+        if (ii >= 0 && ii < mask.length) mask[ii] = 1;
+      }
+    }
+  }
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2;
+    paintClump(p, mask, hx + Math.cos(a) * S * 0.03, hy + S * 0.03 + Math.sin(a) * S * 0.015,
+      S * 0.022, S * 0.022, { ramp: 'sand', lo: 0.30, hi: 0.70, seed: o.seed + i, steps: 4, ragged: 0.1 });
+  }
+}
+
+/** A bare, storm-broken trunk: no foliage, so the branch drawing carries it. */
+function paintDeadTree(p, mask, rnd, o) {
+  const S = p.w, cx = S * 0.5;
+  const topY = S * 0.34;
+  paintTrunk(p, mask, {
+    y0: Math.round(topY), y1: S - 1, cx0: cx + S * 0.03, cx1: cx,
+    w0: S * 0.020, w1: S * 0.052, base: 0.22, flare: 0.7, sway: S * 0.02,
+    seed: o.seed, steps: 6,
+  });
+  const forks = [];
+  for (let i = 0; i < 5; i++) {
+    const a = -Math.PI * 0.5 + (i - 2) * 0.44 + rnd.float(-0.14, 0.14);
+    const y0 = topY + rnd.float(0, S * 0.22);
+    const len = S * rnd.float(0.16, 0.30);
+    const bx = cx + Math.cos(a) * len, by = y0 + Math.sin(a) * len;
+    paintLimb(p, mask, cx, y0, bx, by, S * 0.024, S * 0.008, { seed: o.seed + i, base: 0.20 });
+    forks.push([bx, by, a]);
+  }
+  for (const [bx, by, a] of forks) {
+    for (let k = 0; k < 2; k++) {
+      const a2 = a + (k ? 0.6 : -0.7) + rnd.float(-0.2, 0.2);
+      const l2 = S * rnd.float(0.08, 0.16);
+      paintLimb(p, mask, bx, by, bx + Math.cos(a2) * l2, by + Math.sin(a2) * l2,
+        S * 0.010, S * 0.004, { seed: o.seed + k * 7, base: 0.18 });
+    }
+  }
+}
+
+/** A rounded shrub: three or four clumps on a stubby stem. */
+function paintBush(p, mask, rnd, o) {
+  const S = p.w, cx = S * 0.5;
+  paintTrunk(p, mask, {
+    y0: Math.round(S * 0.62), y1: S - 1, cx0: cx, cx1: cx,
+    w0: S * 0.022, w1: S * 0.034, base: 0.26, flare: 0.5, seed: o.seed, steps: 5,
+  });
+  const leaf = o.leaf || 'foliage';
+  const cy = S * 0.60, cr = S * 0.36;
+  const set = [
+    [cx, cy + cr * 0.26, cr * 0.92, cr * 0.52, -0.16],
+    [cx - cr * 0.50, cy - cr * 0.04, cr * 0.50, cr * 0.42, -0.02],
+    [cx + cr * 0.52, cy + cr * 0.06, cr * 0.44, cr * 0.38, -0.08],
+    [cx - cr * 0.14, cy - cr * 0.34, cr * 0.56, cr * 0.40, 0.16],
+    [cx + cr * 0.30, cy - cr * 0.26, cr * 0.40, cr * 0.32, 0.08],
+  ];
+  set.sort((a, b) => b[1] - a[1]);
+  for (let i = 0; i < set.length; i++) {
+    const [x, y, rx, ry, bias] = set[i];
+    paintClump(p, mask, x, y, rx, ry, {
+      ramp: leaf, lo: 0.16, hi: 0.88, seed: o.seed + i * 23, steps: 5, ragged: 0.62, bias,
+    });
+  }
+  punchCanopy(p, mask, o.seed + 2, 0.26, 0.46);
+  if (o.berry) {
+    for (let i = 0; i < 22; i++) {
+      const x = Math.round(cx + rnd.float(-1, 1) * cr * 0.85);
+      const y = Math.round(cy + rnd.float(-0.7, 0.7) * cr * 0.7);
+      if (!mask[y * p.w + x]) continue;
+      fput(p, x, y, rampSample('blood', 0.62 + rnd.float(0, 0.2)));
+      if (rnd.bool(0.5)) fput(p, x, y + 1, rampSample('blood', 0.34));
+    }
+  }
+}
+
+/** Blades: tapered, leaning, individually shaded. Used for tufts and reeds. */
+function paintBlades(p, mask, rnd, o) {
+  const S = p.w, cx = S * 0.5;
+  const { n = 18, rampName = 'grass', lo = 0.22, hi = 0.86, top = 0.30, spread = 0.34, head = 0 } = o;
+  for (let i = 0; i < n; i++) {
+    const x0 = cx + rnd.float(-1, 1) * S * spread;
+    const hgt = S * rnd.float(0.36, 1 - top);
+    const lean = rnd.float(-1, 1) * S * 0.14;
+    const shade = lo + (hi - lo) * rnd.float(0.25, 1);
+    const thick = rnd.float(0.6, 1.6);
+    let ty = 0, tx = 0;
+    for (let k = 0; k < hgt; k++) {
+      const t = k / hgt;
+      const y = S - 1 - k;
+      const x = x0 + lean * t * t;
+      const w = Math.max(0, thick * (1 - t * 0.85));
+      for (let d = -Math.floor(w); d <= Math.ceil(w); d++) {
+        const l = qb(shade - t * 0.10 + (d < 0 ? 0.08 : -0.10), 5);
+        fput(p, Math.round(x + d), y, rampSample(rampName, l));
+        const ii = y * p.w + Math.round(x + d);
+        if (ii >= 0 && ii < mask.length) mask[ii] = 1;
+      }
+      ty = y; tx = x;
+    }
+    if (head && rnd.bool(head)) {
+      for (let k = 0; k < S * 0.10; k++) {
+        fput(p, Math.round(tx), ty - k, rampSample('wood', qb(0.42 - k * 0.02, 5)));
+        fput(p, Math.round(tx) + 1, ty - k, rampSample('wood', 0.28));
+      }
+    }
+  }
+}
+
+/** A rock or a boulder: faceted, lit from the upper left, never a soft ball. */
+function paintRock(p, mask, rnd, o) {
+  const S = p.w, cx = S * 0.5;
+  const n = o.n || 3;
+  const base = o.ramp || 'stone';
+  const set = [];
+  for (let i = 0; i < n; i++) {
+    const k = i / n;
+    const rx = S * (0.34 - k * 0.13) * rnd.float(0.8, 1.2);
+    const ry = rx * rnd.float(0.52, 0.80);
+    set.push([cx + rnd.float(-1, 1) * S * 0.20, S - 1 - ry * rnd.float(0.7, 1.5) - k * S * 0.06, rx, ry]);
+  }
+  set.sort((a, b) => b[1] - a[1]);
+  for (let i = 0; i < set.length; i++) {
+    const [x, y, rx, ry] = set[i];
+    // Facets, not a sphere: quantise the shading hard and jitter the rim.
+    for (let py = Math.floor(y - ry); py <= Math.ceil(y + ry); py++) {
+      if (py < 0 || py >= p.h) continue;
+      for (let px = Math.floor(x - rx); px <= Math.ceil(x + rx); px++) {
+        if (px < 0 || px >= p.w) continue;
+        const dx = (px - x) / rx, dy = (py - y) / ry;
+        const d2 = dx * dx + dy * dy;
+        const nz = valueNoise2(px * 0.30, py * 0.30, o.seed + i * 11);
+        if (d2 > 0.80 + (nz - 0.5) * 0.60) continue;
+        // Flat facets rather than a shaded ball: quantise a low-frequency noise
+        // into four planes and shade each one whole.
+        const facet = Math.round(valueNoise2(px * 0.11, py * 0.13, o.seed + i) * 3) / 3;
+        const l = 0.08 + 0.62 * clamp(0.46 - dx * 0.26 - dy * 0.40 + (facet - 0.5) * 1.05, 0, 1);
+        fput(p, px, py, rampSample(base, qb(l, 5)));
+        mask[py * p.w + px] = 1;
+      }
+    }
+  }
+}
+
+// --- the entry point -------------------------------------------------------
+
+/**
+ * A flora billboard sheet, painted once per kind and cached forever.
+ * @param {string} kind
+ * @param {number} seed
+ */
+const _floraCache = new Map();
+export function floraTexture(kind, seed = 1) {
+  const key = kind + '|' + seed;
+  if (_floraCache.has(key)) return _floraCache.get(key);
+  const S = TREE_KINDS.has(kind) ? 128 : 64;
+  const p = new Pix(S, S);
+  p.fill(0, 0, 0, 0);
+  const mask = new Uint8Array(S * S);
+  const rnd = new Rand(seed * 7919 + kind.length * 131 + 17);
+  const sd = (seed * 2654435761 + kind.length * 40503) >>> 8;
+  const o = { seed: sd };
+
+  switch (kind) {
+    case 'pine': case 'fir':
+      paintConifer(p, mask, rnd, { ...o, tiers: 8 });
+      break;
+    case 'pine_snow':
+      paintConifer(p, mask, rnd, { ...o, tiers: 8, snow: 1 });
+      break;
+    case 'palm':
+      paintPalm(p, mask, rnd, o);
+      break;
+    case 'dead_tree':
+      paintDeadTree(p, mask, rnd, o);
+      break;
+    case 'birch':
+      paintBroadleaf(p, mask, rnd, {
+        ...o, pale: 1, leaf: 'grass', crownY: 0.44, crownR: 0.30, branches: 4,
+        ring: 5, wTop: 0.016, wBot: 0.026, lo: 0.26, hi: 0.98, holes: 0.36, spread: 1.0,
+      });
+      break;
+    case 'willow':
+      paintBroadleaf(p, mask, rnd, {
+        ...o, weep: 1, leaf: 'swamp', crownY: 0.44, branches: 5, wBot: 0.044,
+      });
+      break;
+    case 'oak_autumn':
+      paintBroadleaf(p, mask, rnd, {
+        ...o, leaf: 'fire', crownY: 0.52, crownR: 0.40, branches: 5,
+        lo: 0.12, hi: 0.56, barkBase: 0.24, holes: 0.26,
+      });
+      break;
+    case 'oak_winter':
+      paintDeadTree(p, mask, rnd, o);
+      break;
+    case 'sapling':
+      paintBroadleaf(p, mask, rnd, {
+        ...o, leaf: 'grass', crownY: 0.42, crownR: 0.26, branches: 3, ring: 3,
+        wTop: 0.010, wBot: 0.018, lo: 0.28, hi: 0.96, holes: 0.34,
+      });
+      break;
+    case 'bush': case 'shrub':
+      paintBush(p, mask, rnd, o);
+      break;
+    case 'bush_berry':
+      paintBush(p, mask, rnd, { ...o, berry: 1 });
+      break;
+    case 'vine':
+      paintBush(p, mask, rnd, { ...o, leaf: 'foliage' });
+      break;
+    case 'fern':
+      paintBlades(p, mask, rnd, { ...o, n: 22, rampName: 'foliage', lo: 0.20, hi: 0.80, top: 0.42, spread: 0.40 });
+      break;
+    case 'grass_tuft':
+      paintBlades(p, mask, rnd, { ...o, n: 24, rampName: 'grass', lo: 0.22, hi: 0.92, top: 0.34, spread: 0.30 });
+      break;
+    case 'reed': case 'reeds':
+      paintBlades(p, mask, rnd, { ...o, n: 16, rampName: 'swamp', lo: 0.26, hi: 0.86, top: 0.14, spread: 0.24, head: 0.35 });
+      break;
+    case 'flowers': case 'flowers_white': case 'flowers_red': {
+      paintBlades(p, mask, rnd, { ...o, n: 16, rampName: 'grass', lo: 0.24, hi: 0.82, top: 0.36, spread: 0.34 });
+      const petal = kind === 'flowers_red' ? 'blood' : 'plaster';
+      for (let i = 0; i < 9; i++) {
+        const cx = Math.round(S * 0.5 + rnd.float(-1, 1) * S * 0.32);
+        const cy = Math.round(S * (0.40 + rnd.float(0, 0.34)));
+        for (let dy = -2; dy <= 2; dy++) {
+          for (let dx = -2; dx <= 2; dx++) {
+            if (Math.abs(dx) + Math.abs(dy) > 2) continue;
+            const c = (dx || dy) ? rampSample(petal, kind === 'flowers_red' ? 0.66 : 0.90)
+              : rampSample('gold', 0.70);
+            fput(p, cx + dx, cy + dy, c);
+            const ii = (cy + dy) * S + (cx + dx);
+            if (ii >= 0 && ii < mask.length) mask[ii] = 1;
+          }
+        }
+      }
+      break;
+    }
+    case 'cactus': {
+      const cx = S * 0.5;
+      paintTrunk(p, mask, {
+        y0: Math.round(S * 0.14), y1: S - 1, cx0: cx, cx1: cx,
+        w0: S * 0.085, w1: S * 0.095, base: 0.30, flare: 0.1,
+        seed: sd, steps: 5, ramp: 'foliage',
+      });
+      for (const s of [-1, 1]) {
+        const ay = S * (0.40 + rnd.float(0, 0.16));
+        paintLimb(p, mask, cx + s * S * 0.08, ay, cx + s * S * 0.22, ay, S * 0.09, S * 0.08,
+          { ramp: 'foliage', base: 0.30, seed: sd + 1, steps: 5 });
+        paintTrunk(p, mask, {
+          y0: Math.round(ay - S * 0.26), y1: Math.round(ay), cx0: cx + s * S * 0.22, cx1: cx + s * S * 0.22,
+          w0: S * 0.055, w1: S * 0.055, base: 0.30, flare: 0, seed: sd + 2, steps: 5, ramp: 'foliage',
+        });
+      }
+      // Ribs and spines.
+      for (let y = Math.round(S * 0.14); y < S; y++) {
+        for (const dx of [-4, 0, 4]) fput(p, Math.round(cx + dx), y, rampSample('foliage', dx < 0 ? 0.62 : 0.20));
+        if (y % 4 === 0) {
+          fput(p, Math.round(cx - S * 0.10), y, rampSample('sand', 0.82));
+          fput(p, Math.round(cx + S * 0.10), y, rampSample('sand', 0.72));
+        }
+      }
+      break;
+    }
+    case 'stump': {
+      const cx = S * 0.5;
+      paintTrunk(p, mask, {
+        y0: Math.round(S * 0.42), y1: S - 1, cx0: cx, cx1: cx,
+        w0: S * 0.22, w1: S * 0.28, base: 0.24, flare: 0.55, seed: sd, steps: 6,
+      });
+      // Sawn top: pale heartwood with growth rings.
+      for (let y = Math.round(S * 0.42); y < S * 0.52; y++) {
+        const t = (y - S * 0.42) / (S * 0.10);
+        const hw = S * 0.22 * Math.sqrt(Math.max(0.02, 1 - (1 - t * 2) * (1 - t * 2)));
+        for (let x = Math.round(cx - hw); x <= Math.round(cx + hw); x++) {
+          const r = Math.hypot((x - cx) / (S * 0.22), (y - S * 0.47) / (S * 0.05));
+          fput(p, x, y, rampSample('wood', qb(0.62 - (Math.round(r * 5) % 2) * 0.16 - t * 0.12, 5)));
+          if (x >= 0 && y >= 0 && x < S && y < S) mask[y * S + x] = 2;
+        }
+      }
+      break;
+    }
+    case 'log': {
+      // A felled trunk lying across the frame: a capsule, not a rectangle, with
+      // the sawn end showing rings and the bark grain running along its length.
+      const cy = S * 0.66, ry = S * 0.20;
+      const xa = S * 0.06, xb = S * 0.90;
+      for (let y = Math.round(cy - ry); y <= Math.round(cy + ry); y++) {
+        const t = (y - cy) / ry;                     // -1 top .. 1 bottom
+        const bulge = Math.sqrt(Math.max(0, 1 - t * t));
+        for (let x = Math.round(xa); x <= Math.round(xb); x++) {
+          // Round both ends off so the silhouette is a lying cylinder.
+          const eL = (x - xa) / (ry * 0.9), eR = (xb - x) / (ry * 0.9);
+          const cap = Math.min(1, eL, eR);
+          if (cap <= 0 || bulge < 1 - cap * cap * 0.9) {
+            if (bulge * Math.min(1, cap * 1.6) < 0.12) continue;
+          }
+          const n = valueNoise2(x * 0.30, y * 1.5, sd);
+          let l = 0.52 - Math.abs(t + 0.30) * 0.55 + (n - 0.5) * 0.34;
+          if (t > 0.55) l -= 0.18;                   // shadowed underside
+          fput(p, x, y, rampSample('wood', qb(l, 6)));
+          if (y >= 0 && y < S) mask[y * S + x] = 2;
+        }
+      }
+      // Sawn end: heartwood rings, lighter than the bark.
+      const ex = Math.round(xb - ry * 0.55);
+      for (let y = Math.round(cy - ry); y <= Math.round(cy + ry); y++) {
+        const t = (y - cy) / ry;
+        const bulge = Math.sqrt(Math.max(0, 1 - t * t));
+        for (let x = ex; x <= Math.round(ex + ry * 0.55 * bulge); x++) {
+          const r = Math.hypot((x - ex) / (ry * 0.55), t);
+          fput(p, x, y, rampSample('wood', qb(0.72 - (Math.round(r * 5) % 2) * 0.16 - Math.abs(t) * 0.12, 5)));
+        }
+      }
+      // A couple of broken stubs on top.
+      for (let i = 0; i < 3; i++) {
+        const bx = S * (0.24 + i * 0.24);
+        paintLimb(p, mask, bx, cy - ry * 0.6, bx + rnd.float(-1, 1) * S * 0.10, cy - ry * 0.6 - S * 0.12,
+          S * 0.045, S * 0.015, { seed: sd + i, base: 0.24 });
+      }
+      break;
+    }
+    case 'mushroom': case 'mushroom_cluster': case 'mushroom_giant': {
+      const big = kind === 'mushroom_giant';
+      const n = big ? 1 : 4;
+      for (let i = 0; i < n; i++) {
+        const cx = S * 0.5 + (big ? 0 : rnd.float(-1, 1) * S * 0.26);
+        const hgt = S * (big ? 0.60 : rnd.float(0.26, 0.46));
+        paintTrunk(p, mask, {
+          y0: Math.round(S - 1 - hgt), y1: S - 1, cx0: cx, cx1: cx,
+          w0: S * (big ? 0.09 : 0.035), w1: S * (big ? 0.12 : 0.045),
+          base: 0.62, flare: 0.4, seed: sd + i, steps: 5, ramp: 'plaster',
+        });
+        const capR = S * (big ? 0.36 : 0.14);
+        for (let y = Math.round(S - 1 - hgt - capR * 0.8); y <= Math.round(S - 1 - hgt + capR * 0.2); y++) {
+          const t = clamp((y - (S - 1 - hgt - capR * 0.8)) / (capR), 0, 1);
+          const hw = capR * Math.sqrt(Math.max(0, 1 - (1 - t) * (1 - t)));
+          for (let x = Math.round(cx - hw); x <= Math.round(cx + hw); x++) {
+            const side = (x - cx) / Math.max(1, hw);
+            const l = qb(0.60 - side * 0.30 - t * 0.36 + (valueNoise2(x, y, sd) - 0.5) * 0.3, 5);
+            fput(p, x, y, rampSample(big ? 'arcane' : 'blood', l));
+            if (y >= 0 && y < S && x >= 0 && x < S) mask[y * S + x] = 1;
+          }
+        }
+      }
+      break;
+    }
+    case 'rock': case 'rock_small':
+      paintRock(p, mask, rnd, { ...o, n: 3, ramp: 'stone' });
+      break;
+    case 'rock_large':
+      paintRock(p, mask, rnd, { ...o, n: 4, ramp: 'stone' });
+      break;
+    case 'boulder':
+      paintRock(p, mask, rnd, { ...o, n: 2, ramp: 'grey' });
+      break;
+    default:
+      // The workhorse broadleaf. MM6 swapped tree sprites by season - tree01,
+      // tree04 and tree10 each had an autumn and a winter variant - so the
+      // autumn tree is the same silhouette painted out of the fire ramp.
+      paintBroadleaf(p, mask, rnd, {
+        ...o, leaf: 'foliage', crownY: 0.52, crownR: 0.42, branches: 5, ring: 6,
+        lo: 0.18, hi: 0.94, holes: 0.30,
+      });
+      break;
+  }
+
+  bleedAlpha(p, 3);
+  // dither 0: MM6's software renderer never dithered - it swapped between 32
+  // pre-darkened palettes, so its art bands instead. An ordered dither on a
+  // sprite this small reads as a checkerboard fringe along the silhouette.
+  const tex = toTexture(p, { dither: 0, repeat: false, mips: true });
   _floraCache.set(key, tex);
   return tex;
 }

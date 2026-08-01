@@ -324,16 +324,23 @@ export class Session {
     const indoor = this.map.indoor;
     const k = indoor ? 1 : this.hazeTint();
 
-    // Haze is the same grey the sky is drawn at, so geometry dissolves into the
-    // horizon instead of fogging toward a separate colour.
-    const c = indoor
-      ? this.map.fog.color.clone()
-      : new THREE.Color(k, k, k);
+    // Haze is the region's own horizon colour, dimmed by the hour - not a flat
+    // grey. hazeTint() is a *dimming level*, and using it as a colour made the
+    // fog pure white at midday, so distant hills and treelines bleached out
+    // into a pale ghost instead of dissolving into the skyline.
+    const c = this.map.fog.color.clone();
+    if (!indoor) c.multiplyScalar(k);
 
     let near = this.map.fog.near, far = this.map.fog.far;
     if (!indoor) {
       const b = this.fogBands();
-      near = b.near; far = Math.min(b.far, 8192);
+      near = b.near;
+      // MM6 caps haze at 84.7% on geometry, so the furthest thing you can see
+      // is still a shape and not the sky colour. three's linear fog has no cap,
+      // so push the far plane past the view distance until the mix at the far
+      // clip works out to that ceiling.
+      far = Math.min(b.far, 8192);
+      far = near + (far - near) / 0.847;
     }
 
     if (!scene.fog) scene.fog = new THREE.Fog(c.getHex(), near, far);
