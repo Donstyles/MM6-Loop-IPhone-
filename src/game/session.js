@@ -286,12 +286,16 @@ export class Session {
   }
 
   /**
-   * The flat multiply applied to the whole scene. Daytime is left alone - MM6's
-   * days are bright and it is distance, not the sun, that greys the world out.
-   * Night drops everything to #272727.
+   * The flat multiply applied to the whole scene - and it is the *same* value
+   * the sky and the distance haze take, which is the single thing that makes
+   * MM6 read as one image rather than as sprites pasted onto terrain.
+   *
+   * This used to hold a flat 1.0 from 06:00 to 20:00 and then fall off a cliff.
+   * The sky baked its own hour, so at 19:45 the sky was evening and everything
+   * under it was still full noon: trees brighter than the meadow they stood in.
    */
   dayTint() {
-    return 0.153 + 0.847 * this.sunLevel();
+    return this.hazeTint();
   }
 
   /**
