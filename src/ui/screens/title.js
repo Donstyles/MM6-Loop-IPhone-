@@ -12,7 +12,7 @@
 
 import { layout } from '../../core/layout.js';
 import { rampCss, ramp } from '../../core/palette.js';
-import { clamp, Rand, fbm2, valueNoise2 } from '../../core/rng.js';
+import { clamp, Rand, fbm2, valueNoise2, hash2 } from '../../core/rng.js';
 import * as F from '../../art/font.js';
 import { Screen, A, baked, glow, poly, washPixels, vignette, MM6, C_WHITE, C_GOLD, C_DIM } from './dialogue.js';
 
@@ -43,7 +43,9 @@ export function paintTitleArt(g, w, h) {
     const cold = ramp('sky', Math.round(clamp(1.5 + t * 5.5 + streak, 0, 12)));
     if (heat <= 0.02) return cold;
     const hot = ramp('fire', Math.round(clamp(2 + heat * 11 + streak, 1, 15)));
-    const k = clamp(heat * 1.25, 0, 1);
+    // Quantise the cross-fade into eight steps: the sun's light has to land in
+    // hard bands, because an indexed palette has nowhere to put a smooth one.
+    const k = Math.round(clamp(heat * 1.25, 0, 1) * 7) / 7;
     return [cold[0] + (hot[0] - cold[0]) * k,
       cold[1] + (hot[1] - cold[1]) * k,
       cold[2] + (hot[2] - cold[2]) * k];
@@ -85,9 +87,17 @@ export function paintTitleArt(g, w, h) {
   g.quadraticCurveTo(cx, horizon - 66, cx + 200, horizon + 30);
   g.closePath();
   g.fill();
-  // Curtain wall.
+  // Curtain wall, coursed: every block gets its own value so the mass reads as
+  // stone rather than as a filled rectangle.
   g.fillStyle = dark;
   g.fillRect(cx - 118, cy - 44, 236, 52);
+  for (let by = 0; by < 52; by += 6) {
+    const off = ((by / 6) & 1) * 7;
+    for (let bx = -118 + off; bx < 118; bx += 14) {
+      const v = hash2(bx, by, 41);
+      MM6.rct(g, cx + bx, cy - 44 + by, 13, 5, MM6.shade(MM6.hexRGB(0x2a2620), 0.7 + v * 0.9));
+    }
+  }
   for (let i = 0; i < 20; i++) g.fillRect(cx - 118 + i * 12, cy - 52, 7, 9);
   g.fillStyle = rim;
   g.fillRect(cx - 118, cy - 44, 1, 52);
@@ -96,6 +106,17 @@ export function paintTitleArt(g, w, h) {
   for (const [tx, th, tw] of [[cx - 128, 96, 30], [cx + 98, 108, 32], [cx - 18, 150, 44]]) {
     g.fillStyle = darker;
     g.fillRect(tx, cy - th, tw, th + 10);
+    // Coursed masonry, lit down the windward edge and falling into shadow on
+    // the far side of the drum.
+    for (let by = 0; by < th + 10; by += 6) {
+      const off = ((by / 6) & 1) * 6;
+      for (let bx = off; bx < tw; bx += 12) {
+        const v = hash2(tx + bx, by, 17);
+        const lit = 1 - (bx / tw) * 0.55;
+        MM6.rct(g, tx + bx, cy - th + by, Math.min(11, tw - bx), 5,
+          MM6.shade(MM6.hexRGB(0x2e2a24), (0.62 + v * 0.7) * lit));
+      }
+    }
     for (let i = 0; i < tw / 10; i++) g.fillRect(tx + i * 10, cy - th - 8, 6, 9);
     // Conical roof, dark against the sky with a lit windward edge.
     poly(g, [tx - 5, cy - th - 8, tx + tw + 5, cy - th - 8, tx + tw / 2, cy - th - 40], rampCss('blood', 1));

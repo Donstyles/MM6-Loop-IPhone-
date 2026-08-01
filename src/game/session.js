@@ -164,18 +164,23 @@ export class Session {
       }
     }
 
-    // Face the clearest direction: sample eight headings and take the one with
-    // the most unobstructed distance in front of it.
-    let yaw = s.yaw || 0, bestOpen = -1;
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2;
+    // Face the most interesting direction: sample sixteen headings and score
+    // each by how far it stays unobstructed, penalised by how steeply the
+    // ground climbs along it - otherwise the party opens the game nose-first
+    // against a hillside, which is technically "open" but shows nothing.
+    let yaw = s.yaw || 0, bestScore = -Infinity;
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2;
       const fx = -Math.sin(a), fz = -Math.cos(a);
-      let open = 0;
-      for (let d = 200; d <= 1600; d += 200) {
-        if (map.blocked(best.x + fx * d, best.y + 60, best.z + fz * d, R, H)) break;
+      let open = 0, climb = 0;
+      for (let d = 200; d <= 2400; d += 200) {
+        const px = best.x + fx * d, pz = best.z + fz * d;
+        if (map.blocked(px, best.y + 60, pz, R, H)) break;
         open = d;
+        climb = Math.max(climb, map.groundAt(px, pz, best.y) - best.y);
       }
-      if (open > bestOpen) { bestOpen = open; yaw = a; }
+      const score = open - climb * 2.5;
+      if (score > bestScore) { bestScore = score; yaw = a; }
     }
     return { ...best, yaw };
   }

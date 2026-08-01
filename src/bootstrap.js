@@ -238,13 +238,28 @@ export async function loadRegion(session, regionId, seed, entry = null) {
   // Tell the spawner the region has already planted its own trees.
   region.hasFloraField = (region.floraPlan || []).length > 0;
   const map = outdoorMap(region);
-  session.setMap(map, regionId, entry || region.spawnPoint || null);
+  session.setMap(map, regionId, entry || region.spawnPoint || townEntry(region) || null);
   populateRegion(session, region, seed);
   session.musicTrack = region.music || 'field';
   session.ambienceId = region.ambience || 'amb_forest';
   if (session.music) session.music.play(session.musicTrack);
   if (session.audio && session.audio.setAmbience) session.audio.setAmbience(session.ambienceId);
   session.message(`You arrive in ${region.name}.`);
+}
+
+/**
+ * Fallback entry point when a region does not nominate one: the first town's
+ * plaza. The region's own `spawnPoint` is preferred because it is placed on
+ * open ground looking into the map rather than inside the built-up centre.
+ */
+function townEntry(region) {
+  const town = (region.towns || [])[0];
+  if (!town) return null;
+  const c = town.center || town.plaza || town.bounds?.center;
+  if (c && isFinite(c.x) && isFinite(c.z)) {
+    return { x: c.x, y: region.heightAt ? region.heightAt(c.x, c.z) : 0, z: c.z, yaw: 0 };
+  }
+  return null;
 }
 
 /** Generate and enter a dungeon. */

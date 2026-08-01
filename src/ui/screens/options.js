@@ -102,12 +102,15 @@ export class OptionsScreen extends Screen {
     F.drawText(ctx, 'Game Options', px(PANEL.w / 2), py(38),
       { face: 'title', align: 'center', color: CANARY });
 
-    // Knotwork either side of the cartouche, painted rather than stroked.
+    // A brass chain of lozenges either side of the cartouche - a painted
+    // ornament, not a dashed rule.
     for (const s of [-1, 1]) {
-      for (let i = 0; i < 5; i++) {
-        const x = px(PANEL.w / 2) + s * (cw / 2 + 10 + i * 9);
-        M.rct(ctx, x - 3, py(43), 6, 3, [122, 96, 44]);
-        M.rct(ctx, x - 3, py(43), 6, 1, [190, 158, 84]);
+      for (let i = 0; i < 4; i++) {
+        const x = px(PANEL.w / 2) + s * (cw / 2 + 12 + i * 12);
+        for (let k = 0; k < 5; k++) {
+          const kw = 5 - Math.abs(k - 2) * 2;
+          M.rct(ctx, x - kw, py(43) + k, kw * 2, 1, k < 2 ? [206, 174, 96] : [116, 90, 40]);
+        }
       }
     }
 

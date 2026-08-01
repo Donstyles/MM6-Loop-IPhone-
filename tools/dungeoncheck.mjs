@@ -84,6 +84,9 @@ async function stats() {
 const rows = [];
 let fail = 0;
 for (const theme of THEMES) {
+ // Swiftshader occasionally loses the context between pages; one retry.
+ for (let attempt = 0; attempt < 3; attempt++) {
+  try {
   await freshPage();
   await p.evaluate((t) => window.__mm6.dungeon({
     id: 'dc_' + t, name: t, theme: t, rooms: 14, levels: 2,
@@ -125,13 +128,21 @@ for (const theme of THEMES) {
   const ok = avg >= BAND[0] && avg <= BAND[1];
   if (!ok) fail++;
   rows.push({ theme, avg: +avg.toFixed(1), views, ok });
-  console.log(
+  report(
     `${ok ? 'PASS' : 'FAIL'} ${theme.padEnd(8)} avg ${avg.toFixed(1).padStart(6)} ` +
     `dim ${JSON.stringify(views[0].dims)} tris ${views[0].tris}   ` +
     views.map((v) => `${v.label}: avg ${String(v.avg).padStart(5)} med ${String(v.median).padStart(3)} ` +
       `p05 ${String(v.p05).padStart(3)} p95 ${String(v.p95).padStart(3)} blk ${String(v.blackPct).padStart(5)}%`).join('  |  '),
   );
+  break;
+  } catch (err) {
+    console.log(`  retry ${theme} (${attempt + 1}): ${String(err.message).split('\n')[0].slice(0, 90)}`);
+    if (attempt === 2) { fail++; rows.push({ theme, avg: 0, views: [], ok: false }); }
+  }
+ }
 }
+
+function report(line) { console.log(line); }
 
 console.log('');
 console.log(`band ${BAND[0]}..${BAND[1]}   ${rows.length - fail}/${rows.length} themes pass`);

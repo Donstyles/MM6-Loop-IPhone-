@@ -73,7 +73,7 @@ export function paintRestPanel(g, w, h) {
   for (let i = 0; i < 5; i++) {
     MM6.flame(g, fx - 18 + i * 9, fy + 2, 16 + (i % 3) * 6, 34 + (i % 4) * 11, i * 1.9);
   }
-  glow(g, fx, fy - 12, 120, '#ff7818', 0.9);
+  glow(g, fx, fy - 12, 86, '#ff7818', 0.75);
 
   // Bedrolls in the foreground.
   for (let i = 0; i < 3; i++) {
@@ -354,7 +354,7 @@ export class RestScreen extends Screen {
     if (busy) {
       ctx.fillStyle = rampCss('sand', 12);
       ctx.fillRect(g.x + g.w / 2 - 1, g.y + g.h / 2, 2, g.h / 2 - 4 - botH);
-      F.drawText(ctx, `${Math.ceil(this.pending.left / 60)}h left`, g.x + g.w / 2, g.y + g.h + 8,
+      F.drawText(ctx, `${Math.ceil(this.pending.left / 60)}h`, g.x + g.w / 2, g.y + g.h + 10,
         { face: 'small', align: 'center', color: C_CANARY });
     }
   }
@@ -405,26 +405,32 @@ export class RestScreen extends Screen {
     F.drawText(ctx, `Food: ${p.food | 0}`, x + 8, y + 28,
       { face: 'small', color: (p.food | 0) > 0 ? INK : '#a02008', shadow: EMB });
     const list = members(this.session);
+    // Measure the widest name first: the serif face is proportional, so the
+    // column has to be sized from the real strings.
+    let nameW = 0;
+    for (const ch of list) nameW = Math.max(nameW, F.measure(charName(ch), 'small').w);
+    nameW = Math.min(nameW, w - 70);
     list.forEach((ch, i) => {
       const ry = y + 44 + i * 19;
       const mh = this.safe(() => maxHP(ch), ch.maxHP || 1);
       const ms = this.safe(() => maxSP(ch), ch.maxSP || 0);
       F.drawText(ctx, charName(ch), x + 8, ry, { face: 'small', color: INK, shadow: EMB });
       // Painted gauges: a cut groove with a hard bar in it, square ended.
+      const bw = Math.max(24, Math.round((w - nameW - 26) / 2));
       const bar = (bx, frac, col) => {
-        MM6.rct(ctx, bx, ry + 1, 52, 6, [58, 44, 26]);
-        MM6.rct(ctx, bx, ry + 1, 52, 1, [34, 24, 12]);
-        const fw = Math.max(0, Math.round(50 * Math.max(0, Math.min(1, frac))));
+        MM6.rct(ctx, bx, ry + 1, bw, 6, [58, 44, 26]);
+        MM6.rct(ctx, bx, ry + 1, bw, 1, [34, 24, 12]);
+        const fw = Math.max(0, Math.round((bw - 2) * Math.max(0, Math.min(1, frac))));
         if (fw) {
           MM6.rct(ctx, bx + 1, ry + 2, fw, 4, col);
           MM6.rct(ctx, bx + 1, ry + 2, fw, 1, MM6.mix(col, [255, 255, 255], 0.35));
         }
       };
       const f = (ch.hp | 0) / Math.max(1, mh);
-      bar(x + 66, f, f > 0.5 ? [40, 200, 40] : f > 0.25 ? [224, 208, 32] : [208, 32, 16]);
-      bar(x + 124, ms ? (ch.sp | 0) / ms : 0, [40, 72, 216]);
-      F.drawText(ctx, `${ch.hp | 0}`, x + w - 8, ry,
-        { face: 'small', align: 'right', color: (ch.hp | 0) < mh ? '#a02008' : '#166b16', shadow: EMB });
+      // The two gauges fill whatever the longest name leaves - MM6 never lets
+      // a readout run off its own sheet.
+      bar(x + 10 + nameW, f, f > 0.5 ? [40, 200, 40] : f > 0.25 ? [224, 208, 32] : [208, 32, 16]);
+      bar(x + 14 + nameW + bw, ms ? (ch.sp | 0) / ms : 0, [40, 72, 216]);
     });
 
     if (this.messageT < 8 && this.message) {

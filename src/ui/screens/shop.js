@@ -264,17 +264,29 @@ export function paintShopInterior(g, w, h, kind) {
 
   // Worn rug on the boards - dark and small, so it reads as floor covering
   // rather than as a painted disc.
+  // A woven rug: a bordered field with a repeating figure and a fringe, laid
+  // in perspective. Not one flat ellipse.
   const rugRamp = kind === 'magic' ? 'arcane' : 'blood';
-  const rugLo = kind === 'magic' ? 1 : 2, rugHi = kind === 'magic' ? 2 : 4;
-  g.save();
-  g.globalAlpha = 0.6;
-  g.fillStyle = rampCss(rugRamp, rugLo);
-  g.beginPath(); g.ellipse(w * 0.34, h - 86, 92, 17, 0, 0, Math.PI * 2); g.fill();
-  g.fillStyle = rampCss(rugRamp, rugHi);
-  g.beginPath(); g.ellipse(w * 0.34, h - 86, 74, 12, 0, 0, Math.PI * 2); g.fill();
-  g.fillStyle = rampCss('sand', 6);
-  g.beginPath(); g.ellipse(w * 0.34, h - 86, 40, 6, 0, 0, Math.PI * 2); g.fill();
-  g.restore();
+  const rx0 = Math.round(w * 0.34), ry0 = h - 86;
+  const rw = 96, rh = 20;
+  for (let dy = -rh; dy <= rh; dy++) {
+    const k = Math.round(rw * Math.sqrt(Math.max(0, 1 - (dy * dy) / (rh * rh))));
+    const t = (dy + rh) / (rh * 2);
+    MM6.rct(g, rx0 - k, ry0 + dy, k * 2, 1, rampCss(rugRamp, 2 + Math.round(t * 2)));
+    // Border band and centre field.
+    if (k > 22) {
+      MM6.rct(g, rx0 - k + 8, ry0 + dy, k * 2 - 16, 1, rampCss(rugRamp, 4 + Math.round(t * 2)));
+      MM6.rct(g, rx0 - k + 20, ry0 + dy, k * 2 - 40, 1, rampCss('sand', 4 + Math.round(t * 2)));
+    }
+    // Woven figure: a row of lozenges every few courses.
+    if (k > 30 && (dy + rh) % 6 === 3) {
+      for (let x = -k + 26; x < k - 26; x += 14) {
+        MM6.rct(g, rx0 + x, ry0 + dy, 5, 1, rampCss(rugRamp, 7));
+      }
+    }
+  }
+  // Fringe along the near edge.
+  for (let x = -rw + 6; x < rw - 6; x += 4) MM6.rct(g, rx0 + x, ry0 + rh, 2, 3, rampCss('sand', 8));
 
   // The shopkeeper, large enough to read, behind a heavy counter.
   const cy = h - 64;

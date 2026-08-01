@@ -34,13 +34,20 @@ const spawn = (list) => CLEAR + list.map(([k, d]) => `
     if (e) e.yaw = Math.atan2(__mm6.session.player.pos.x - e.pos.x,
                               __mm6.session.player.pos.z - e.pos.z); }`).join('');
 
+// Enough downward pitch to put the ground in front of the party in frame. The
+// party spawns on rolling terrain, so a dead-level camera often looks over the
+// top of anything standing 6 m away downhill.
+const AIM = ' __mm6.look(0, 0.16);';
+
 export default [
-  ['00-world', '__mm6.newGame(); __mm6.setTime(12,0); __mm6.session.toggleTurnBased()', 2600],
+  ['00-world',
+    '__mm6.newGame(); __mm6.setTime(12,0); __mm6.session.toggleTurnBased();' + AIM, 2600],
 
   // A goblin at melee range, filling as much of the viewport as it ever will.
-  ['01-goblin-close', spawn([['GoblinA', 600]]), 1400],
+  ['01-goblin-close', spawn([['GoblinA', 600]]) + AIM, 1400],
   // The judge's frame: a pack at mixed range on lit ground at noon.
   ['02-goblin-pack', spawn([['GoblinA', 700], ['GoblinB', 1000], ['GoblinA', 1350]]), 1600],
+  ['02b-pack-level', '__mm6.look(0, -0.16)', 700],
   // Small creatures, where legibility is hardest.
   ['03-critters', spawn([['RatA', 620], ['BatA', 800], ['RatB', 1050]]), 1600],
   // A mixed line-up: four families that must not be confusable with each other.

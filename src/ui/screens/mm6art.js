@@ -920,7 +920,7 @@ export function spellSigilGhost(ctx, school, tier, x, y, s = 24) {
 // --- painted item bitmaps ---------------------------------------------------
 
 const MAT = {
-  steel: { d: [46, 52, 56], m: [128, 136, 142], l: [226, 232, 238] },
+  steel: { d: [36, 42, 48], m: [104, 114, 122], l: [206, 216, 224] },
   iron: { d: [38, 38, 40], m: [104, 104, 108], l: [186, 188, 192] },
   bronze: { d: [64, 42, 18], m: [162, 116, 52], l: [238, 198, 122] },
   silver: { d: [70, 78, 86], m: [172, 182, 192], l: [244, 248, 252] },
@@ -945,11 +945,14 @@ function paintBlade(g, cx, top, len, wdt, M) {
     // Point over the first fifth, then near-parallel with a slight taper.
     const k = Math.max(1, Math.round(wdt * (t < 0.18 ? t / 0.18 : 1 - (t - 0.18) * 0.10)));
     const y = top + i;
+    // Most of the blade is the mid tone: a bright edge one pixel wide, a dark
+    // flat two wide, and a fuller down the middle. Any more highlight and the
+    // blade reads as a white stick.
     rct(g, cx - k, y, k * 2, 1, M.m);
     rct(g, cx - k, y, 1, 1, M.l);                     // lit edge
-    rct(g, cx - k + 1, y, Math.max(1, k - 1), 1, mix(M.m, M.l, 0.45));
+    rct(g, cx - k + 1, y, 1, 1, mix(M.m, M.l, 0.40));
     rct(g, cx + k - 2, y, 2, 1, M.d);                 // shadowed flat
-    if (k > 2) rct(g, cx, y, 1, 1, shade(M.m, 0.78));  // fuller
+    if (k > 2) rct(g, cx, y, 1, 1, shade(M.m, 0.70));  // fuller
   }
   // The point is a hard chevron, not a curve.
   rct(g, cx - 1, top - 1, 2, 1, M.l);
@@ -981,7 +984,7 @@ export function paintItem(g, kind, w, h, opts = {}) {
     case 'sword': case 'blade': case 'longsword': {
       const gripLen = Math.max(6, Math.round(h * 0.20));
       const bladeLen = h - gripLen - 6;
-      paintBlade(g, cx, 2, bladeLen, Math.max(2, Math.round(w * 0.16)), M);
+      paintBlade(g, cx, 2, bladeLen, Math.max(2, Math.round(w * 0.20)), M);
       const gy = 2 + bladeLen;
       rct(g, cx - Math.round(w * 0.34), gy, Math.round(w * 0.68), 3, B.m);      // crossguard
       rct(g, cx - Math.round(w * 0.34), gy, Math.round(w * 0.68), 1, B.l);

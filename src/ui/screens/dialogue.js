@@ -185,13 +185,10 @@ export function optionList(ui, ctx, items, o = {}) {
       : { hover: false, click: false };
     const col = !on ? C_DIM : hit.hover ? C_GOLD : C_WHITE;
     if (hit.hover && on) {
-      // A dim plate under the hot option; the original lights the text only,
-      // but the painted panel behind ours is busier than a flat bitmap.
-      ctx.save();
-      ctx.globalAlpha = 0.22;
-      ctx.fillStyle = '#000000';
-      ctx.fillRect(x, y + 2, w, h - 4);
-      ctx.restore();
+      // A dim patch under the hot option; the original lights the text only,
+      // but the painted panel behind ours is busier than a flat bitmap. It is
+      // stippled, because a translucent slab is not an 8-bit thing.
+      MM6.stipple(ctx, x, y + 2, w, h - 4, [10, 8, 6], 0.34);
     }
     const ty = it.note ? y + 4 : y + Math.round((h - F.lineHeightOf('normal')) / 2);
     F.drawText(ctx, it.label, x + w / 2, ty, { align: 'center', color: col, maxWidth: w - 6 });
@@ -569,17 +566,29 @@ export class HouseScreen extends Screen {
    */
   drawPanelInfo(ctx) {
     const d = dlgRect();
-    const lines = this.panelInfo ? this.panelInfo() : [];
-    if (!lines.length) return;
-    const optCount = this.options ? this.options().length : 0;
-    let y = Math.min(EXIT_BTN.y - 12 - lines.length * 11,
-      this.optionY + optCount * OPTION.step + 14);
-    A.divider(ctx, d.x + 14, y - 8, d.w - 28);
-    for (const l of lines) {
+    const raw = this.panelInfo ? this.panelInfo() : [];
+    if (!raw.length) return;
+    // Wrap first, then fit. The serif face is proportional, so the number of
+    // rows is only known after measuring; anything that will not fit between
+    // the last option and the Exit button is dropped, never clipped or
+    // truncated mid-word.
+    const colW = d.w - 24;
+    const rows = [];
+    for (const l of raw) {
       const s = typeof l === 'string' ? l : l.text;
-      F.drawText(ctx, s, d.x + d.w / 2, y, {
-        face: 'small', align: 'center', maxWidth: d.w - 16,
-        color: (l && l.color) || C_WHITE,
+      const color = (l && l.color) || C_WHITE;
+      for (const line of wrapLines(s, colW, 'small')) rows.push({ line, color });
+    }
+    const optCount = this.options ? this.options().length : 0;
+    const top = this.optionY + optCount * OPTION.step + 14;
+    const room = Math.max(0, Math.floor((EXIT_BTN.y - 10 - top) / 11));
+    const shown = rows.slice(0, Math.min(rows.length, room));
+    if (!shown.length) return;
+    let y = Math.min(EXIT_BTN.y - 10 - shown.length * 11, top);
+    A.divider(ctx, d.x + 14, y - 8, d.w - 28);
+    for (const r of shown) {
+      F.drawText(ctx, r.line, d.x + d.w / 2, y, {
+        face: 'small', align: 'center', color: r.color,
       });
       y += 11;
     }

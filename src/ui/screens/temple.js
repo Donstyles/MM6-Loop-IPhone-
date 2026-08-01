@@ -111,7 +111,7 @@ export function paintTempleInterior(g, w, h, tint = '#e1cd23') {
 
   // A robed acolyte to one side.
   figure(g, w * 0.80, horizon + 44, 96, null, null, {
-    robe: true, hood: true, cloth: [58, 52, 74], skin: [204, 160, 122], hair: [48, 34, 22],
+    robe: true, hood: true, cloth: [148, 142, 128], skin: [212, 170, 132], hair: [72, 52, 32],
   });
 
   paintClutter(g, 22, h - 8, 'crate', 22);
