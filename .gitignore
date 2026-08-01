@@ -4,3 +4,8 @@ shots/
 .vite/
 *.log
 .DS_Store
+
+# Scratch capture scripts. Every agent writing a screenshot check drops one of
+# these; they are named per-task and deleted when that task is done, so they
+# should never be committed.
+tools/scripts/_*.mjs
