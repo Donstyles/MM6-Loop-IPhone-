@@ -218,7 +218,7 @@ function buildFace(name, glyphSrc, cellW, cellH, baseline, spacing, spaceAdv) {
 }
 
 export const FACES = {
-  small: buildFace('small', SMALL, 7, 9, 7, 1, 3),
+  small: buildFace('small', SMALL, 10, 9, 7, 1, 3),
   // normal/title are attached below once their glyph tables are defined.
 };
 

@@ -497,19 +497,31 @@ export function bookSpine(ctx, x, y, w, h, opts = {}) {
 function bl(u, v, cx, cy, r) { const a = u - cx, b = v - cy; return a * a + b * b <= r * r; }
 
 /** The crag's skyline: a main peak left of centre and a lower shoulder right. */
-const CRAG = [[-1.02, 0.80], [-0.62, 0.06], [-0.16, -0.88], [0.14, -0.20],
-  [0.42, -0.56], [1.02, 0.80]];
+const CRAG = [[-1.02, 0.78], [-0.68, 0.12], [-0.34, -0.52], [-0.12, -0.90],
+  [0.10, -0.30], [0.32, -0.64], [0.56, -0.06], [1.02, 0.78]];
+
+/**
+ * A tongue of flame: a width profile up a curving axis. `p` runs 0 at the tip
+ * to 1 at the root, so the tongue is fat low and drawn to a point, and the axis
+ * leans away as it climbs - which is what makes a flame a flame and not a blob.
+ */
+function tongue(u, v, base, tip, cxo, lean, wide) {
+  const p = (v - tip) / (base - tip);
+  if (p < 0 || p > 1) return false;
+  const ax = cxo + lean * Math.pow(1 - p, 1.7);
+  return Math.abs(u - ax) <= wide * Math.pow(p, 0.55);
+}
 
 const EMBLEM = {
   // A flame: a fat root, a tongue licking up and curling to the right, one
   // small secondary lick at the left. Bright core, root sunk in its own smoke.
   fire(u, v) {
-    if (!(bl(u, v, 0.02, 0.36, 0.58) || bl(u, v, 0.10, -0.04, 0.40)
-      || bl(u, v, 0.24, -0.42, 0.24) || bl(u, v, 0.32, -0.68, 0.12)
-      || bl(u, v, -0.42, 0.22, 0.26) || bl(u, v, -0.50, -0.04, 0.14))) return -1;
-    const a = u - 0.02, b = v - 0.22;
-    let t = 1.12 - Math.sqrt(a * a + b * b) * 1.30;
-    if (v > 0.46) t -= (v - 0.46) * 1.6;
+    if (!(bl(u, v, 0.00, 0.42, 0.52)
+      || (v <= 0.72 && tongue(u, v, 0.85, -0.95, 0.00, 0.36, 0.58))
+      || (v <= 0.60 && tongue(u, v, 0.62, -0.34, -0.42, -0.18, 0.26)))) return -1;
+    const a = u - 0.02, b = v - 0.18;
+    let t = 1.16 - Math.sqrt(a * a + b * b) * 1.30;
+    if (v > 0.36) t -= (v - 0.36) * 1.7;
     return t;
   },
 
@@ -550,9 +562,9 @@ const EMBLEM = {
       }
     }
     if (v < top) return -1;
-    if (v > 0.60) return 0.22;
-    const fall = -0.16 + (v + 0.84) * 0.26;
-    return u < fall ? 0.92 - (v - top) * 0.34 : 0.38 - (v - top) * 0.12;
+    if (v > 0.58) return 0.20;                                 // the scree foot
+    const fall = -0.12 + (v + 0.90) * 0.24;
+    return u < fall ? 0.94 - (v - top) * 0.36 : 0.38 - (v - top) * 0.12;
   },
 
   // An ankh: a rolled loop over a barred stem, each member bevelled.
@@ -590,8 +602,8 @@ const EMBLEM = {
     const lobes = bl(u, v, -0.36, -0.26, 0.44) || bl(u, v, 0.36, -0.26, 0.44);
     const point = v >= -0.26 && v <= 0.88 && Math.abs(u) <= 0.80 * (1 - (v + 0.26) / 1.16);
     if (!(lobes || point)) return -1;
-    const a = u + 0.36, b = v + 0.42;
-    if (a * a + b * b < 0.048) return 1.25;
+    const a = u + 0.38, b = v + 0.40;
+    if (a * a + b * b < 0.030) return 1.25;
     let t = 0.68 - u * 0.28 - v * 0.30;
     if (Math.abs(u) < 0.13 && v < -0.12) t -= 0.34;
     return t;
@@ -601,14 +613,14 @@ const EMBLEM = {
   // turn, each one lit on the side facing the light.
   light(u, v) {
     const r = Math.sqrt(u * u + v * v);
-    if (r <= 0.40) return 1.18 - r * 0.80 - u * 0.14 - v * 0.16;
+    if (r <= 0.34) return 1.18 - r * 0.90 - u * 0.16 - v * 0.18;
     const k = Math.atan2(v, u) / (Math.PI / 4);
     const kk = Math.round(k);
-    const len = (((kk % 8) + 8) % 8) % 2 ? 0.70 : 0.99;
+    const len = (((kk % 8) + 8) % 8) % 2 ? 0.68 : 1.00;
     if (r > len) return -1;
     const off = k - kk;
-    if (Math.abs(off) > 0.42 * (1 - (r - 0.34) / (len - 0.30))) return -1;
-    return (off < 0 ? 0.94 : 0.44) - (r - 0.40) * 0.36;
+    if (Math.abs(off) > 0.50 * (1 - (r - 0.26) / (len - 0.22))) return -1;
+    return (off < 0 ? 0.96 : 0.42) - (r - 0.34) * 0.34;
   },
 
   // A crescent moon: bright along the outer limb, falling into the terminator,
