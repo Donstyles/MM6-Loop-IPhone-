@@ -336,24 +336,35 @@ export function buildSky(scene, opts = {}) {
 
   /** Recompute tint, haze and fog. Cheap enough to run every frame. */
   function refresh() {
-    const g = timeTint(state.tod);
+    // The time-of-day grey is reported for anyone who wants to know the hour's
+    // dimming level, but nothing in this file multiplies by it any more: the
+    // post pass applies that one multiply to the whole frame, and the sky
+    // doing it as well squared it on the sky and on the haze the world fades
+    // into - so the horizon dimmed at twice the rate the ground did.
+    const g = 1;
     const st = sunTerms(state.tod);
-    state.tint = g;
+    state.tint = timeTint(state.tod);
     state.ambient = st.ambient;
     state.diffuse = st.diffuse;
     state.night = st.night;
 
-    // Sky tint: the region's colour cast times the time-of-day grey, capped at
-    // 248/255 the way the engine pins sky fog.
+    // Sky tint: the region's colour cast only, capped at 248/255 the way the
+    // engine pins sky fog.
+    //
+    // The time-of-day grey deliberately does *not* appear here. The post pass
+    // multiplies the whole frame by it, and MM6's whole tonal unity rests on
+    // sky, terrain and sprites taking that one multiply together. Applying it
+    // here as well squared it on the sky alone: at 19:45 the sky came out at
+    // 22% instead of 47%, and its cloud structure collapsed to ten colours.
     //
     // The tint multiplies an already-decoded (linear) texture sample, but MM6's
     // multiply happens on 8-bit sRGB palette values, so raise it to 2.2 to get
     // the same visual result. Skipping this washes every sky out by ~40%.
     const skyCap = 248 / 255;
     mat.uniforms.uTint.value.setRGB(
-      Math.pow(Math.min(skyCap, g * state.skyTintRGB[0]), 2.2),
-      Math.pow(Math.min(skyCap, g * state.skyTintRGB[1]), 2.2),
-      Math.pow(Math.min(skyCap, g * state.skyTintRGB[2]), 2.2),
+      Math.pow(Math.min(skyCap, state.skyTintRGB[0]), 2.2),
+      Math.pow(Math.min(skyCap, state.skyTintRGB[1]), 2.2),
+      Math.pow(Math.min(skyCap, state.skyTintRGB[2]), 2.2),
     );
 
     // Two separate systems, exactly as the engine has them.
