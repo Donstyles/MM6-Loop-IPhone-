@@ -522,11 +522,11 @@ const EMBLEM = {
     // Three tongues off one root, at three heights and leaning three ways, so
     // the skyline is notched. A single smooth tongue is a droplet.
     if (!(bl(u, v, 0.00, 0.46, 0.50)
-      || (v <= 0.80 && tongue(u, v, 0.86, -0.96, 0.02, 0.26, 0.36))
-      || (v <= 0.72 && tongue(u, v, 0.80, -0.40, -0.40, -0.20, 0.28))
-      || (v <= 0.72 && tongue(u, v, 0.80, -0.56, 0.44, 0.14, 0.24)))) return -1;
+      || (v <= 0.80 && tongue(u, v, 0.86, -0.96, 0.02, 0.30, 0.40))
+      || (v <= 0.72 && tongue(u, v, 0.80, -0.16, -0.42, -0.16, 0.30))
+      || (v <= 0.72 && tongue(u, v, 0.80, -0.34, 0.44, 0.12, 0.26)))) return -1;
     const a = u - 0.02, b = v - 0.18;
-    let t = 1.12 - Math.sqrt(a * a + b * b) * 1.02;
+    let t = Math.max(0.34, 1.12 - Math.sqrt(a * a + b * b) * 1.02);
     if (v > 0.36) t -= (v - 0.36) * 1.3;
     return t;
   },
@@ -550,9 +550,9 @@ const EMBLEM = {
   water(u, v) {
     const hw = 0.60 * (1 - Math.pow(clamp((0.30 - v) / 1.26, 0, 1), 2.5));
     if (!(bl(u, v, 0, 0.30, 0.60) || (v <= 0.30 && Math.abs(u) <= hw))) return -1;
-    const a = u + 0.24, b = v - 0.04;
-    if (a * a + b * b < 0.034) return 1.30;
-    return 0.88 - u * 0.48 - v * 0.42;
+    const a = u + 0.26, b = v - 0.02;
+    if (a * a + b * b < 0.030) return 1.30;
+    return 1.12 - Math.sqrt(a * a + b * b) * 0.78;
   },
 
   // A crag: two peaks, a face in the light and a face in shadow either side of
@@ -608,9 +608,9 @@ const EMBLEM = {
     const lobes = bl(u, v, -0.36, -0.26, 0.44) || bl(u, v, 0.36, -0.26, 0.44);
     const point = v >= -0.26 && v <= 0.88 && Math.abs(u) <= 0.80 * (1 - (v + 0.26) / 1.16);
     if (!(lobes || point)) return -1;
-    const a = u + 0.38, b = v + 0.40;
-    if (a * a + b * b < 0.030) return 1.25;
-    let t = 0.68 - u * 0.28 - v * 0.30;
+    const a = u + 0.38, b = v + 0.34;
+    if (a * a + b * b < 0.028) return 1.25;
+    let t = 1.06 - Math.sqrt(a * a + b * b) * 0.72;
     if (Math.abs(u) < 0.13 && v < -0.12) t -= 0.34;
     return t;
   },
@@ -676,7 +676,7 @@ function emblemCanvas(school, s, cols, key) {
       for (let x = 0; x < s; x++) T[y * s + x] = f((x + 0.5 - R) * inv, (y + 0.5 - R) * inv);
     }
     const on = (x, y) => (x >= 0 && y >= 0 && x < s && y < s && T[y * s + x] >= 0);
-    const sh = Math.max(1, Math.round(s / 16));
+    const sh = Math.min(2, Math.max(1, Math.round(s / 16)));
     const cast = shade(cols[0], 0.55);
     // One step below the ramp, for the few places an emblem needs a true dark
     // accent - a pupil, a crease - rather than its own shadow side.
@@ -686,7 +686,7 @@ function emblemCanvas(school, s, cols, key) {
       if (t < 0) {
         // The silhouette thrown down-right. A 256-colour frame has no partial
         // coverage, so the shadow is half a Bayer tile, not an alpha.
-        if (on(x - sh, y - sh) && bay(x, y) < 0) return cast;
+        if (on(x - sh, y - sh) && bay(x, y) < -0.14) return cast;
         return null;
       }
       let col = t < 0.06 ? deep : cols[Math.round(band(clamp(t, 0, 1), 5) * 4)];
@@ -2606,21 +2606,43 @@ export function paintItem(g, kind, w, h, opts = {}) {
   }
 }
 
-/** Ring the painted pixels in near-black, the way MM6's item bitmaps are cut. */
-export function outlineArt(g, w, h) {
+/**
+ * Seat a painted item on whatever it is lying on: roll the underside of the
+ * silhouette into its own shadow and throw a hard contact shadow one pixel down
+ * and right.
+ *
+ * This replaces the key line that used to ring every item bitmap. MM6's items
+ * are not cut out with a border - they separate from the counter, the rack or
+ * the inventory field by value and by the shadow they cast, and a sprite that
+ * carries a 1px black ring around it reads as a sticker no matter how well the
+ * inside is painted.
+ */
+export function seatArt(g, w, h) {
   const img = g.getImageData(0, 0, w, h);
   const d = img.data;
   const src = new Uint8Array(w * h);
   for (let i = 0; i < w * h; i++) src[i] = d[i * 4 + 3] > 8 ? 1 : 0;
+  // The underside: the last row and column of the silhouette turn away from
+  // the light, which is what gives the shape its edge without drawing one.
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const i = y * w + x;
-      if (src[i]) continue;
-      const near = (x > 0 && src[i - 1]) || (x < w - 1 && src[i + 1])
-        || (y > 0 && src[i - w]) || (y < h - 1 && src[i + w]);
-      if (!near) continue;
+      if (!src[i]) continue;
+      if (!(y === h - 1 || !src[i + w] || x === w - 1 || !src[i + 1])) continue;
       const p = i * 4;
-      d[p] = 12; d[p + 1] = 10; d[p + 2] = 8; d[p + 3] = 255;
+      const c = snapC(d[p] * 0.66, d[p + 1] * 0.64, d[p + 2] * 0.62);
+      d[p] = c[0]; d[p + 1] = c[1]; d[p + 2] = c[2];
+    }
+  }
+  // The contact shadow, stippled: a 256-colour frame has no partial coverage,
+  // so a shadow is a Bayer pattern of one dark colour, never an alpha.
+  const sc = snapC(26, 22, 18);
+  for (let y = 1; y < h; y++) {
+    for (let x = 1; x < w; x++) {
+      const i = y * w + x;
+      if (src[i] || !src[i - w - 1] || bay(x, y) >= -0.08) continue;
+      const p = i * 4;
+      d[p] = sc[0]; d[p + 1] = sc[1]; d[p + 2] = sc[2]; d[p + 3] = 255;
     }
   }
   g.putImageData(img, 0, 0);
@@ -2634,7 +2656,7 @@ export function itemArt(kind, w, h, opts = {}) {
     const g = c.getContext('2d', { willReadFrequently: true });
     g.imageSmoothingEnabled = false;
     paintItem(g, kind, w, h, opts);
-    outlineArt(g, w, h);
+    seatArt(g, w, h);
     return c;
   });
 }
