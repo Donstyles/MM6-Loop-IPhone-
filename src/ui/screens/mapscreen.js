@@ -28,7 +28,7 @@ function coastPad(t) { return 0.18 + t * 0.80; }
  * `centre + (world - party) * zoom / 65536`, so 384 fits the whole 65536-unit
  * region into 384 pixels and 3072 is eight times into it. Reading them as a
  * world span is what turned the map book into four flat quadrants of one tile
- * blown up eighteen times; `spanOf` does the conversion once.
+ * blown up eighteen times; `span()` does the conversion once.
  */
 export const ZOOMS = [384, 768, 1536, 3072];
 const WORLD = 65536;
@@ -47,7 +47,7 @@ export class MapScreen extends Screen {
   onOpen() {
     this.pan.x = 0; this.pan.z = 0;
     // The book opens at its closest zoom - 1536 outdoors, 3072 indoors.
-    this.zoom = 0; // TEMPCHECK
+    this.zoom = this.session.map && this.session.map.indoor ? 3 : 2;
     this.sound('page');
   }
 
