@@ -307,6 +307,23 @@ window.__mm6 = {
     const z = p.pos.z - Math.cos(p.yaw) * dist;
     return session.spawner.spawnMonster(kind, x, session.map.groundAt(x, z, p.pos.y), z);
   },
+  /**
+   * Re-seat the party somewhere with a view, from wherever they are standing.
+   * A scripted walk routinely ends nose-first against a building or inside a
+   * canopy, and a screenshot taken there shows a wall - which says nothing
+   * about how the game looks. Reuses the same scoring the map entry does.
+   */
+  clearView() {
+    if (!session || !session.map) return null;
+    const p = session.player;
+    const spot = session.findClearSpot(session.map, { x: p.pos.x, z: p.pos.z, y: p.pos.y });
+    p.pos.set(spot.x, spot.y, spot.z);
+    p.vel.set(0, 0, 0);
+    p.yaw = spot.yaw;
+    p.pitch = 0;
+    p.applyTo(engine.camera);
+    return { x: spot.x, z: spot.z, yaw: spot.yaw };
+  },
   region: (id) => import('./bootstrap.js').then((m) => m.loadRegion(session, id, 12345)),
   dungeon: (spec) => import('./bootstrap.js').then((m) => m.loadDungeon(session, spec || { theme: 'cave' }, 999)),
   stats: () => ({ ...perf, screen: screens.top ? screens.top.id : null }),

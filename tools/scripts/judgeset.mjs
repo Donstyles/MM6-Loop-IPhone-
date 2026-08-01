@@ -14,10 +14,11 @@ export default [
   ['07-outdoor-dusk', '__mm6.setTime(19,45)', 900],
   ['08-outdoor-night', '__mm6.setTime(23,30)', 900],
   ['09-outdoor-dawn', '__mm6.setTime(5,45)', 900],
-  // Back out of wherever the walk ended before spawning: frame 06 often stops
-  // with the camera inside a canopy, and a fight nobody can see says nothing
-  // about how the fight looks.
-  ['10-combat', '__mm6.walk(-1,0,1800); __mm6.setTime(12,0); __mm6.spawn("GoblinA",800); __mm6.spawn("GoblinB",1150); __mm6.spawn("GoblinA",1400)', 2600],
+  // Re-seat before spawning: frame 06 often ends with the camera inside a
+  // canopy or against a building corner, and monsters spawned straight ahead
+  // land inside the wall. A fight nobody can see says nothing about how the
+  // fight looks.
+  ['10-combat', '__mm6.clearView(); __mm6.setTime(12,0); __mm6.spawn("GoblinA",700); __mm6.spawn("GoblinB",950); __mm6.spawn("GoblinA",1250)', 2600],
   ['11-combat-attack', '__mm6.attack()', 700],
   ['12-combat-turnbased', '__mm6.session.toggleTurnBased(); __mm6.attack()', 900],
   ['13-charsheet', '__mm6.session.toggleTurnBased(); __mm6.open("charsheet")', 900],
