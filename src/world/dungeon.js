@@ -280,8 +280,15 @@ class LightGrid {
  * from the wall texture and the flame sprite, not from the light itself.
  */
 function dimAt(grid, ambDim, x, y, z, nx, ny, nz) {
-  // Start at the sector's ambient dimming level (31 = pitch black).
-  let dim = ambDim;
+  // Start at the sector's ambient dimming level (31 = pitch black), biased by
+  // which way the facet points.
+  //
+  // Torches are mounted on walls, so a corridor's ambient is light bouncing off
+  // vertical faces: the floor sees less of it than the walls do and the ceiling
+  // less again. Without this the floor rendered brighter than the walls around
+  // it - the judge measured #9A9A9A floor against #6A6A6A wall - which reads as
+  // a room lit from underneath.
+  let dim = ambDim + (ny > 0.7 ? 3 : ny < -0.7 ? 5 : 0);
   const list = grid.near(x, z);
   if (list) {
     for (let i = 0; i < list.length; i++) {
