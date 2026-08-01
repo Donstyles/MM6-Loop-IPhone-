@@ -237,7 +237,12 @@ export class Spawner {
       action: 'stand',
     });
     e.mon = mon;
-    if (def && def.size && sh.worldH) e.scale = def.size / sh.worldH;
+    // The quad is taller than the creature inside it, so scaling by worldH
+    // renders every monster short. scaleFor() measures against the model.
+    if (def && def.size) {
+      e.scale = sh.scaleFor ? sh.scaleFor(def.size)
+        : (sh.height ? def.size / sh.height : (sh.worldH ? def.size / sh.worldH : 1));
+    }
     e.home.set(x, y, z);
     return this.session.entities.add(e);
   }

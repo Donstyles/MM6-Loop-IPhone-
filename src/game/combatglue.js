@@ -76,6 +76,7 @@ export function installCombat(session) {
   // --- monsters hitting back ----------------------------------------------
 
   session.onMonsterAttackCb = (e) => {
+    if (typeof window !== 'undefined') window.__monsterAttacks = (window.__monsterAttacks || 0) + 1;
     const victim = pickVictim(session, rnd);
     if (!victim) return;
     const def = e.data || {};

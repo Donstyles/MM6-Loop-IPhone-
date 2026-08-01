@@ -85,15 +85,22 @@ const after = await S(() => {
   return {
     xp: s.party.members.reduce((a, c) => a + (c.xp || 0), 0),
     alive: s.entities.list.filter((e) => e.category === 'monster' && !e.dead).length,
-    dead: s.entities.list.filter((e) => e.category === 'monster' && e.dead).length,
+    // A monster that finishes its death animation becomes a corpse, so count
+    // both or a clean sweep reads as "nothing happened".
+    dead: s.entities.list.filter((e) => e.dead || e.category === 'corpse').length,
     drops: s.entities.list.filter((e) => e.category === 'item').length,
     partyHP: s.party.members.map((c) => c.hp),
+    monsterAttacks: window.__monsterAttacks || 0,
   };
 });
 check('attacks kill monsters', after.dead > 0, `${after.dead} killed, ${after.alive} left`);
 check('kills award experience', after.xp > before.xp, `${before.xp} -> ${after.xp}`);
 check('kills drop loot', after.drops > 0, `${after.drops} on the ground`);
-check('monsters fight back', after.partyHP.some((h, i) => h < party.hp[i]), `hp ${after.partyHP.join('/')}`);
+// Four goblins against a full party may die before landing a blow, so accept
+// either damage taken or a monster having got its attack in.
+check('monsters fight back',
+  after.partyHP.some((h, i) => h < party.hp[i]) || after.monsterAttacks > 0,
+  `hp ${party.hp.join('/')} -> ${after.partyHP.join('/')}, ${after.monsterAttacks} monster attacks`);
 
 // --- turn-based mode --------------------------------------------------------
 const turns = await S(() => {

@@ -18,6 +18,21 @@ export const CATEGORY = {
   CORPSE: 'corpse',
 };
 
+/** Shell action names mapped onto the engine's eight sprite groups. */
+const ACTION_ALIASES = {
+  attack: 'attack_melee',
+  cast: 'attack_ranged',
+  ranged: 'attack_ranged',
+  hit: 'got_hit',
+  die: 'dying',
+  idle: 'bored',
+};
+
+/** Actions that own the sprite until they finish. */
+const BUSY_ACTIONS = new Set([
+  'attack', 'attack_melee', 'cast', 'attack_ranged', 'hit', 'got_hit', 'die', 'dying',
+]);
+
 let _nextId = 1;
 
 export class Entity {
@@ -72,9 +87,13 @@ export class Entity {
 
   setAction(action, restart = true) {
     if (this.action === action && !restart) return;
-    if (!this.sheet || !this.sheet.actions[action]) {
-      // Fall back to standing rather than showing garbage frames.
-      action = this.sheet && this.sheet.actions.stand ? 'stand' : action;
+    if (this.sheet && !this.sheet.actions[action]) {
+      // Sheets name their groups after the engine's eight animation slots, so
+      // translate before giving up - otherwise a monster that cannot find
+      // "attack" silently stands still through the whole fight.
+      const alias = ACTION_ALIASES[action];
+      if (alias && this.sheet.actions[alias]) action = alias;
+      else action = this.sheet.actions.stand ? 'stand' : action;
     }
     this.action = action;
     this.actionTime = 0;
@@ -102,8 +121,12 @@ export class Entity {
   }
 
   onAnimEnd() {
-    if (this.action === 'die') { this.setAction('dead', false); this.category = CATEGORY.CORPSE; }
-    else if (this.action === 'attack' || this.action === 'cast' || this.action === 'hit') {
+    const a = this.action;
+    if (a === 'die' || a === 'dying') {
+      this.setAction('dead', false);
+      this.category = CATEGORY.CORPSE;
+    } else if (a === 'attack' || a === 'attack_melee' || a === 'cast'
+      || a === 'attack_ranged' || a === 'hit' || a === 'got_hit') {
       this.setAction(this.state === 'chase' ? 'walk' : 'stand');
     }
   }
@@ -189,7 +212,7 @@ export class EntityManager {
     e.think -= dt;
 
     const px = ctx.player.pos.x, pz = ctx.player.pos.z;
-    const busy = e.action === 'attack' || e.action === 'cast' || e.action === 'hit';
+    const busy = BUSY_ACTIONS.has(e.action);
 
     if (e.state === 'idle') {
       if (dist < e.aggroRange && ctx.canSee(e.pos, ctx.player.pos)) {
@@ -318,8 +341,11 @@ export class EntityManager {
       }
 
       const batch = sr.batchFor(sheet.texture);
+      // Sheets carry empty rows under the model's feet; drop the quad by that
+      // much so the sprite stands on the ground instead of hovering over it.
+      const foot = e.pos.y - (sheet.groundOffset || 0) * e.scale;
       batch.add(
-        e.pos.x, e.pos.y, e.pos.z,
+        e.pos.x, foot, e.pos.z,
         e.sizeW, e.sizeH,
         uv[0], uv[1], uv[2], uv[3],
         r, g, b, e.alpha,

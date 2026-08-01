@@ -13,7 +13,7 @@ import * as F from '../../art/font.js';
 import {
   HouseScreen, PANEL, A, plate, baked, glow, figure, gold, hotText, paintWall, paintFloor,
   paintShelf, paintCounter, paintClutter, vignette, partyGold, spend, earn, C_WHITE, C_GOLD,
-  C_CANARY, C_DIM, C_GREEN,
+  C_CANARY, C_DIM, C_GREEN, MM6,
 } from './dialogue.js';
 
 const WEEK = 7 * 24 * 60;      // game minutes
@@ -41,25 +41,30 @@ export function paintBankInterior(g, w, h) {
   const vx = w * 0.62, vy = 44, vr = 76;
   g.fillStyle = rampCss('grey', 3);
   g.fillRect(vx - vr - 10, vy - 6, vr * 2 + 20, vr * 2 + 12);
-  g.fillStyle = rampCss('grey', 6);
-  g.beginPath(); g.arc(vx, vy + vr, vr, 0, Math.PI * 2); g.fill();
-  g.fillStyle = rampCss('grey', 9);
-  g.beginPath(); g.arc(vx, vy + vr, vr - 8, 0, Math.PI * 2); g.fill();
-  g.fillStyle = rampCss('grey', 5);
-  g.beginPath(); g.arc(vx, vy + vr, vr - 20, 0, Math.PI * 2); g.fill();
-  // Spokes and the wheel.
-  g.strokeStyle = rampCss('gold', 8); g.lineWidth = 3;
+  // A modelled steel door: each ring is lit at the upper left and falls into
+  // shadow at the lower right, painted scanline by scanline.
+  const cyv = vy + vr;
+  for (const [rad, lo, hi] of [[vr, [46, 46, 50], [148, 150, 156]],
+    [vr - 8, [70, 70, 76], [186, 190, 196]], [vr - 20, [40, 40, 44], [126, 128, 134]]]) {
+    for (let dy = -rad; dy <= rad; dy++) {
+      const k = Math.round(Math.sqrt(Math.max(0, rad * rad - dy * dy)));
+      for (let dx = -k; dx <= k; dx++) {
+        const t = MM6.band(0.5 - (dx + dy) / (rad * 3), 6);
+        MM6.rct(g, vx + dx, cyv + dy, 1, 1, MM6.mix(lo, hi, t));
+      }
+    }
+  }
+  // Spokes and the wheel, drawn as painted bars with a lit top edge.
   for (let i = 0; i < 6; i++) {
     const a = (i / 6) * Math.PI * 2;
-    g.beginPath();
-    g.moveTo(vx, vy + vr);
-    g.lineTo(vx + Math.cos(a) * (vr - 14), vy + vr + Math.sin(a) * (vr - 14));
-    g.stroke();
+    MM6.lineH(g, vx, cyv, vx + Math.cos(a) * (vr - 14), cyv + Math.sin(a) * (vr - 14),
+      MM6.pc([84, 62, 24]), 4);
+    MM6.lineH(g, vx, cyv - 1, vx + Math.cos(a) * (vr - 14), cyv + Math.sin(a) * (vr - 14) - 1,
+      MM6.pc([176, 142, 66]), 2);
   }
-  g.fillStyle = rampCss('gold', 10);
-  g.beginPath(); g.arc(vx, vy + vr, 11, 0, Math.PI * 2); g.fill();
-  g.fillStyle = rampCss('gold', 13);
-  g.beginPath(); g.arc(vx - 3, vy + vr - 3, 4, 0, Math.PI * 2); g.fill();
+  MM6.disc(g, vx, cyv, 11, MM6.pc([132, 100, 38]));
+  MM6.disc(g, vx, cyv, 8, MM6.pc([186, 150, 68]));
+  MM6.disc(g, vx - 3, cyv - 3, 4, MM6.pc([236, 208, 130]));
   for (let i = 0; i < 12; i++) {
     const a = (i / 12) * Math.PI * 2;
     g.fillStyle = rampCss('grey', 11);
@@ -86,14 +91,17 @@ export function paintBankInterior(g, w, h) {
   // Counter with a cage grille, scales and a coin stack.
   const cy = h - 78;
   paintCounter(g, 0, cy, w, 30, { cloth: 'foliage' });
+  // Brass bars: a lit face, a dark side and a shadow cast on the wall behind.
   for (let x = 12; x < w - 12; x += 22) {
-    g.fillStyle = rampCss('gold', 6);
-    g.fillRect(x, cy - 54, 3, 54);
+    MM6.rct(g, x + 3, cy - 54, 2, 54, [0, 0, 0]);
+    MM6.rct(g, x, cy - 54, 3, 54, [116, 88, 36]);
+    MM6.rct(g, x, cy - 54, 1, 54, [188, 152, 72]);
   }
-  g.fillStyle = rampCss('gold', 8);
-  g.fillRect(0, cy - 56, w, 4);
+  MM6.rct(g, 0, cy - 56, w, 4, [116, 88, 36]);
+  MM6.rct(g, 0, cy - 56, w, 1, [188, 152, 72]);
+  MM6.rct(g, 0, cy - 53, w, 1, [58, 42, 16]);
   // A teller behind the grille.
-  figure(g, w * 0.30, cy + 2, 84, 'rgba(20,18,22,0.9)', 'rgba(255,224,160,0.45)');
+  figure(g, w * 0.30, cy + 2, 88, null, null, { cloth: [62, 60, 78], skin: [206, 162, 124], robe: false, hood: false });
   // Scales on the counter.
   const sx = w - 96;
   g.fillStyle = rampCss('gold', 7);

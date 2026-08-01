@@ -17,7 +17,7 @@
 // ---------------------------------------------------------------------------
 
 import { layout } from '../../core/layout.js';
-import { Rand, clamp, smoothstep, fbm2, valueNoise2 } from '../../core/rng.js';
+import { Rand, clamp, smoothstep, fbm2, valueNoise2, hash2 } from '../../core/rng.js';
 import { rampCss, ramp, snap } from '../../core/palette.js';
 import * as F from '../../art/font.js';
 import { PORTRAIT_W, PORTRAIT_H } from '../../art/portraits.js';
@@ -348,7 +348,9 @@ export function poly(ctx, pts, css) {
  * comes out is a painted figure, not a blob.
  */
 export function figure(ctx, x, y, h, bodyCss, rimCss, o = {}) {
-  const seed = Math.abs(Math.round(x * 7 + y * 13 + h));
+  // Spread the seed hard, or two people standing at the same table come out in
+  // the same coat.
+  const seed = Math.round(hash2(Math.round(x), Math.round(y * 3 + h), 91) * 4096);
   const CLOTHS = [
     [96, 62, 40], [72, 66, 92], [104, 88, 52], [66, 84, 66],
     [110, 70, 66], [58, 62, 74], [92, 78, 96], [84, 96, 78],

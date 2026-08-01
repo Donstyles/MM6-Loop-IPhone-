@@ -229,8 +229,11 @@ export class SpriteRenderer {
  * camera is. Index 0 is the front view; the sequence walks around the model.
  */
 export function angleIndex(entityYaw, camX, camZ, entX, entZ, angles = 8) {
+  // Entity yaw follows the player's convention where 0 looks down -Z, so the
+  // half turn belongs here: without it a monster charging the party selects
+  // its own back view.
   const toCam = Math.atan2(camX - entX, camZ - entZ);
-  let rel = toCam - entityYaw;
+  let rel = toCam - entityYaw + Math.PI;
   rel = ((rel % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
   return Math.round((rel / (Math.PI * 2)) * angles) % angles;
 }

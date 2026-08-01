@@ -136,7 +136,15 @@ export function outdoorMap(region) {
       if (waterY === null) return null;
       return heightAt(region.hm, x, z) < waterY ? waterY : null;
     },
-    lightAt: region.lightAt || (() => ({ r: 1, g: 1, b: 1 })),
+    // The region's light term folds in time of day, but the post pass already
+    // applies that globally - taking it raw multiplied sprites down twice and
+    // left them black after dusk. Keep only the local variation.
+    lightAt(x, y, z) {
+      if (!region.lightAt) return { r: 1, g: 1, b: 1 };
+      const l = region.lightAt(x, y, z);
+      const k = Math.max(0.62, Math.min(1.25, (l.r + l.g + l.b) / 3));
+      return { r: k, g: k, b: k };
+    },
     surfaceAt: region.surfaceAt || (() => 'grass'),
     drawMinimap: region.drawMinimap || null,
     setTimeOfDay: region.setTimeOfDay ? (h) => region.setTimeOfDay(h) : null,
