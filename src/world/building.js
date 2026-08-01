@@ -52,7 +52,10 @@ function faceShade(nx, ny, nz, tintR = 1, tintG = 1, tintB = 1, extra = 1) {
   const up = Math.max(0.30, SUN.y);
   // `extra` is floored: an overhang underside should read as shadow, not as
   // a hole in the building.
-  const g = quantiseShade(clamp((0.50 + 0.50 * clamp(ndl / up, 0, 1)) * (DIFFUSE > 0 ? 1 : 0.38) * Math.max(0.62, extra), 0, 1));
+  // Floors chosen so a wall facing away from the sun still reads as painted
+  // stone rather than a silhouette: MM6's shadowed walls sit around half the
+  // texture value, never a quarter of it.
+  const g = quantiseShade(clamp((0.58 + 0.42 * clamp(ndl / up, 0, 1)) * (DIFFUSE > 0 ? 1 : 0.38) * Math.max(0.80, extra), 0, 1));
   const l = SRGB_TO_LIN(g);
   return [l * tintR, l * tintG, l * tintB];
 }

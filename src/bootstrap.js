@@ -230,10 +230,13 @@ export async function loadRegion(session, regionId, seed, entry = null) {
     session.setMap(emptyMap(), regionId);
     return;
   }
-  // The region draws its own stand-in flora billboards by default; we turn that
-  // off and place the real baked sprites from its `floraPlan` instead, so every
-  // tree in the world is a Y-locked billboard rather than a leaning mesh.
-  const region = await regionMod.generateRegion(regionId, seed, null, { flora: false });
+  // The region plants its own flora as batched, Y-locked billboard fields -
+  // one draw call per species rather than one per tree - so we let it do that
+  // and the shell skips flora entirely. Turning it off here would also empty
+  // `floraPlan`, since the plan is a by-product of building the fields.
+  const region = await regionMod.generateRegion(regionId, seed, null);
+  // Tell the spawner the region has already planted its own trees.
+  region.hasFloraField = (region.floraPlan || []).length > 0;
   const map = outdoorMap(region);
   session.setMap(map, regionId, entry || region.spawnPoint || null);
   populateRegion(session, region, seed);

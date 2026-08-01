@@ -368,12 +368,14 @@ export function lightPool(ctx, cx, cy, r, colorHex, strength = 1) {
   const c = hexRGB(colorHex);
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
-  const rings = [[0.30, 0.55], [0.55, 0.28], [0.80, 0.13]];
+  // Two steps and a stippled skirt. Any more rings and the pool reads as a
+  // bullseye; any brighter and additive blending burns the middle to white.
+  const rings = [[0.34, 0.26], [0.66, 0.13]];
   for (const [k, a] of rings) {
     ctx.globalAlpha = clamp(a * strength, 0, 1);
     disc(ctx, cx, cy, r * k, css(c));
   }
-  ctx.globalAlpha = clamp(0.16 * strength, 0, 1);
+  ctx.globalAlpha = clamp(0.11 * strength, 0, 1);
   // Skirt: a 1-bit stippled ring, so the edge of the light is dithered, not soft.
   const R = Math.round(r);
   ctx.fillStyle = css(c);
@@ -396,11 +398,13 @@ export function lightPool(ctx, cx, cy, r, colorHex, strength = 1) {
  * no falloff at all - the silhouette is cut, not faded.
  */
 export function flame(ctx, cx, baseY, w, h, phase = 0) {
+  // Four painted tongues, each a hard silhouette inside the last. The pale
+  // core is small: a flame that is mostly white core reads as a light bulb.
   const layers = [
     { k: 1.00, c: [122, 20, 8] },
-    { k: 0.74, c: [255, 60, 30] },
-    { k: 0.46, c: [255, 156, 40] },
-    { k: 0.20, c: [255, 232, 168] },
+    { k: 0.70, c: [255, 60, 30] },
+    { k: 0.40, c: [255, 148, 36] },
+    { k: 0.15, c: [255, 226, 150] },
   ];
   for (const L of layers) {
     ctx.fillStyle = pc(L.c);
@@ -478,14 +482,19 @@ export function paintedHead(ctx, cx, topY, w, h, o = {}) {
     rct(ctx, cx - k, topY + i, k * 2, 1, i < 2 ? mix(hair, [255, 230, 190], 0.28) : hair);
   }
   if (o.hood) {
-    // Hood: cloth over the crown and down both cheeks.
+    // Hood: cloth over the crown and down both cheeks, leaving the face open.
     const hc = o.hood;
-    for (let i = -2; i < h * 0.62; i++) {
-      const t = clamp((i + 2) / (h * 0.62 + 2), 0, 1);
-      const k = Math.max(2, Math.round(hw * (0.80 + t * 0.62)));
-      rct(ctx, cx - k, topY + i, Math.max(1, Math.round(k * 0.45)), 1, i < 2 ? mix(hc, [255, 255, 255], 0.22) : hc);
-      rct(ctx, cx + Math.round(k * 0.42), topY + i, Math.max(1, k - Math.round(k * 0.42)), 1,
-        shade(hc, 0.72));
+    const depth = Math.round(h * 0.72);
+    for (let i = -2; i < depth; i++) {
+      const t = clamp((i + 2) / (depth + 2), 0, 1);
+      const k = Math.max(2, Math.round(hw * (0.86 + t * 0.55)));
+      const inner = Math.max(1, Math.round(hw * 0.66));
+      // Only the brim and the two cheek falls are cloth; the face shows through.
+      const cloth1 = i < 2 ? mix(hc, [255, 244, 220], 0.18) : hc;
+      rct(ctx, cx - k, topY + i, k - inner, 1, cloth1);
+      rct(ctx, cx + inner, topY + i, k - inner, 1, shade(hc, 0.66));
+      if (i < 2) rct(ctx, cx - k, topY + i, k * 2, 1, cloth1);
+      if (i === depth - 1) rct(ctx, cx - k, topY + i, k * 2, 1, shade(hc, 0.55));
     }
   }
 }
@@ -500,16 +509,19 @@ export function paintedFigure(ctx, cx, baseY, hgt, o = {}) {
   const skin = o.skin || SKIN.mid;
   const H = Math.max(18, Math.round(hgt));
   cx = Math.round(cx); baseY = Math.round(baseY);
-  const headH = Math.round(H * 0.17);
-  const headW = Math.round(H * 0.13);
-  const shoulderY = baseY - H + headH + Math.round(H * 0.03);
-  const hipY = baseY - Math.round(H * 0.42);
-  const bodyW = Math.round(H * 0.24);
+  // Human proportions: about seven heads tall, shoulders a quarter of the
+  // height across. Anything wider reads as a barrel, which is what the old
+  // silhouettes did.
+  const headH = Math.round(H * 0.15);
+  const headW = Math.round(H * 0.125);
+  const shoulderY = baseY - H + headH + Math.round(H * 0.035);
+  const hipY = baseY - Math.round(H * 0.44);
+  const bodyW = Math.max(3, Math.round(H * 0.115));
 
   // Legs / skirt of the robe.
   for (let y = hipY; y < baseY; y++) {
     const t = (y - hipY) / Math.max(1, baseY - hipY);
-    const k = Math.round(bodyW * (o.robe ? 0.9 + t * 0.55 : 0.86 - t * 0.10));
+    const k = Math.round(bodyW * (o.robe ? 0.98 + t * 0.42 : 0.92 - t * 0.16));
     const c = o.robe ? cloth : (o.legs || shade(cloth, 0.78));
     rct(ctx, cx - k, y, k * 2, 1, c);
     rct(ctx, cx - k, y, Math.max(1, Math.round(k * 0.5)), 1, mix(c, [255, 240, 210], 0.14));
@@ -531,7 +543,8 @@ export function paintedFigure(ctx, cx, baseY, hgt, o = {}) {
   // Torso.
   for (let y = shoulderY; y < hipY; y++) {
     const t = (y - shoulderY) / Math.max(1, hipY - shoulderY);
-    const k = Math.round(bodyW * (0.72 + t * 0.30));
+    // Chest broad, waist in: a sine pinch rather than a straight taper.
+    const k = Math.round(bodyW * (1.02 - Math.sin(t * Math.PI) * 0.16));
     rct(ctx, cx - k, y, k * 2, 1, cloth);
     rct(ctx, cx - k, y, Math.max(1, Math.round(k * 0.55)), 1, mix(cloth, [255, 236, 200], 0.20));
     rct(ctx, cx + Math.round(k * 0.40), y, k - Math.round(k * 0.40), 1, cloth2);
@@ -543,10 +556,10 @@ export function paintedFigure(ctx, cx, baseY, hgt, o = {}) {
   rct(ctx, cx - 3, hipY - 5, 6, 6, [176, 146, 72]);
 
   // Arms, hanging slightly out from the body.
-  const armLen = Math.round(H * 0.32);
+  const armLen = Math.round(H * 0.34);
   for (const s of [-1, 1]) {
-    const ax = cx + s * Math.round(bodyW * 0.92);
-    const aw = Math.max(2, Math.round(bodyW * 0.34));
+    const ax = cx + s * Math.round(bodyW * 1.05);
+    const aw = Math.max(2, Math.round(bodyW * 0.42));
     for (let i = 0; i < armLen; i++) {
       const y = shoulderY + 2 + i;
       const c = i < armLen * 0.62 ? cloth : skin;

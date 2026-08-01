@@ -465,12 +465,14 @@ export function paintClutter(g, x, y, kind, s = 20) {
  * grids straight onto the painting, with the art dimmed behind them.
  */
 export function plate(ctx, x, y, w, h, alpha = 0.62) {
-  ctx.save();
-  ctx.globalAlpha = alpha;
-  ctx.fillStyle = '#0a0a0c';
-  ctx.fillRect(x | 0, y | 0, w | 0, h | 0);
-  ctx.restore();
-  A.bevel(ctx, x | 0, y | 0, w | 0, h | 0, { depth: 1, raised: false });
+  // A 256-colour frame cannot hold a translucent slab, so the art is knocked
+  // back with a Bayer stipple instead - the same trick the originals use to
+  // darken a painting under a block of text - and the edge is a carved lip.
+  MM6.stipple(ctx, x | 0, y | 0, w | 0, h | 0, [10, 9, 8], Math.min(0.92, alpha + 0.22));
+  MM6.rct(ctx, x | 0, y | 0, w | 0, 1, [26, 22, 18]);
+  MM6.rct(ctx, x | 0, y | 0, 1, h | 0, [26, 22, 18]);
+  MM6.rct(ctx, x | 0, (y + h - 1) | 0, w | 0, 1, [104, 92, 74]);
+  MM6.rct(ctx, (x + w - 1) | 0, y | 0, 1, h | 0, [104, 92, 74]);
 }
 
 // ---------------------------------------------------------------------------

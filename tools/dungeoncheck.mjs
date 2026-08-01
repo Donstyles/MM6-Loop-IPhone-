@@ -30,7 +30,13 @@ async function freshPage() {
   await p.goto('http://127.0.0.1:5174/', { waitUntil: 'domcontentloaded' });
   await p.waitForFunction('window.__gameReady === true', { timeout: 300000 });
   await p.evaluate(() => window.__mm6.newGame());
-  await p.waitForTimeout(800);
+  // startGame() sets __gameReady before it finishes generating the opening
+  // region; enter a dungeon too early and that load lands on top of it a few
+  // seconds later, replacing the frame with a loading screen mid-measurement.
+  await p.waitForFunction(
+    "window.__session && window.__session.mapId && window.__session.mapId !== 'void'",
+    { timeout: 300000 });
+  await p.waitForTimeout(500);
 }
 
 // Read the whole render target and reduce it to a luminance histogram. Done in
@@ -84,14 +90,32 @@ for (const theme of THEMES) {
   }), theme);
   await p.waitForTimeout(3500);
 
-  // Three vantages: spawn point, a quarter-turn off it, and a few steps in.
+  // Four vantages: spawn point, a quarter-turn off it, a few steps in, and one
+  // framed squarely on the nearest wall torch so the pool can be judged.
   const views = [];
   for (const [label, act] of [
     ['spawn', null],
     ['turn', () => window.__mm6.look(1.1, 0)],
     ['walk', () => window.__mm6.walk(1, 0, 1400)],
+    ['torch', () => {
+      const d = window.__session.map.dungeon;
+      const p0 = window.__session.player.pos;
+      let best = null;
+      for (const t of d.torches) {
+        if (t.kind === 'lava') continue;
+        const dist = Math.hypot(t.x - p0.x, t.z - p0.z);
+        if (dist > 400 && (!best || dist < best.dist)) best = { t, dist };
+      }
+      if (!best) return;
+      const { t, dist } = best;
+      const k = Math.min(0.85, 1100 / dist);
+      window.__mm6.teleport(
+        t.x + (p0.x - t.x) * k, d.floorAt(t.x + (p0.x - t.x) * k, t.z + (p0.z - t.z) * k) + 160,
+        t.z + (p0.z - t.z) * k,
+        Math.atan2(t.x - p0.x, t.z - p0.z) + Math.PI);
+    }],
   ]) {
-    if (act) { await p.evaluate(act); await p.waitForTimeout(act === null ? 400 : 2000); }
+    if (act) { await p.evaluate(act); await p.waitForTimeout(label === 'walk' ? 2000 : 700); }
     const s = await stats();
     views.push({ label, ...s });
     await p.screenshot({ path: `${OUT}/${theme}-${label}.png` });

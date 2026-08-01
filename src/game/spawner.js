@@ -9,6 +9,16 @@ import { Rand } from '../core/rng.js';
 // handles respawning when the party comes back a few days later.
 // ---------------------------------------------------------------------------
 
+// The world generator predates some of the model library's ids; map the old
+// short names on so a prop is never silently dropped.
+const KIND_ALIASES = {
+  tree: 'oak', trees: 'oak', bush: 'bush_berry', shrub: 'bush_berry',
+  flowers: 'flowers_white', flower: 'flowers_white', grass: 'grass_tuft',
+  rock: 'rock_small', rocks: 'rock_small', stone: 'rock_small',
+  stall: 'market_stall', ruins: 'gravestone', sign: 'signpost',
+  lamp: 'lamppost', cart: 'cart', fire: 'campfire', torch: 'torch_wall',
+};
+
 export class Spawner {
   constructor(session) {
     this.session = session;
@@ -27,6 +37,7 @@ export class Spawner {
 
   sheet(category, kind, seed = 1) {
     if (!this.sheets || !this.sheets.getSheet) return null;
+    kind = KIND_ALIASES[kind] || kind;
     try {
       return this.sheets.getSheet(this.renderer, category, kind, seed);
     } catch (e) {
@@ -45,19 +56,20 @@ export class Spawner {
     const rnd = new Rand(seed ^ 0x5eed);
     const ground = (x, z) => S.map.groundAt(x, z, 0);
 
-    // `floraPlan` is the region's placement list: one entry per instance with
-    // the world height it should stand at. Scale each baked sheet to that
-    // height so a 900-unit oak really is 900 units tall.
-    for (const f of region.floraPlan || region.flora || []) {
-      const sh = this.sheet('flora', f.kind, f.seed || 1);
-      if (!sh) continue;
-      const e = new Entity({
-        category: CATEGORY.FLORA, kind: f.kind, sheet: sh, static: true,
-        x: f.x, y: f.y ?? ground(f.x, f.z), z: f.z,
-        radius: f.radius ?? 70, solid: f.solid ?? true, action: 'stand',
-      });
-      e.scale = f.height && sh.worldH ? f.height / sh.worldH : (f.scale || 1);
-      S.entities.add(e);
+    // Flora is the region's own batched billboard field - see loadRegion. Only
+    // place trees here if it did not, so the two can never both plant a wood.
+    if (!region.hasFloraField) {
+      for (const f of region.floraPlan || region.flora || []) {
+        const sh = this.sheet('flora', f.kind, f.seed || 1);
+        if (!sh) continue;
+        const e = new Entity({
+          category: CATEGORY.FLORA, kind: f.kind, sheet: sh, static: true,
+          x: f.x, y: f.y ?? ground(f.x, f.z), z: f.z,
+          radius: f.radius ?? 70, solid: f.solid ?? true, action: 'stand',
+        });
+        e.scale = f.height && sh.worldH ? f.height / sh.worldH : (f.scale || 1);
+        S.entities.add(e);
+      }
     }
 
     for (const p of region.props || []) {

@@ -59,7 +59,7 @@ export class HUD {
     this.session = session;
     this.ui = ui;
     this.buttons = [];
-    this.minimapZoom = 512;
+    this.minimapZoom = 8192;   // world units across the automap
     this.showTouch = false;
     this._chromeCache = null;
     this._chromeKey = '';
@@ -203,8 +203,8 @@ export class HUD {
     const zo = this.ui.region('map:zoomout', ZOOM_OUT_X + this.dx, ZOOM_Y, 20, 18, 'Zoom out');
     UI.drawIcon(ctx, 'zoom_in', ZOOM_IN_X + this.dx, ZOOM_Y, 18);
     UI.drawIcon(ctx, 'zoom_out', ZOOM_OUT_X + this.dx, ZOOM_Y, 18);
-    if (zi.click) this.minimapZoom = Math.max(256, this.minimapZoom / 2);
-    if (zo.click) this.minimapZoom = Math.min(4096, this.minimapZoom * 2);
+    if (zi.click) this.minimapZoom = Math.max(2048, this.minimapZoom / 2);
+    if (zo.click) this.minimapZoom = Math.min(65536, this.minimapZoom * 2);
 
     const dt = this.ui.region('map:datetime', m.x, m.y, m.w, m.h, `${this.session.clock.format()}  ${this.session.clock.formatDate()}`);
     this.buttons.push({ id: 'datetime', hit: dt });

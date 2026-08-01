@@ -18,6 +18,22 @@ console.log(await p.evaluate(() => {
     counts[k] = (counts[k] || 0) + 1;
   });
   const top = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,8);
-  return JSON.stringify({ perf: window.__perf, mapMeshes: meshes, sceneChildren: s.engine.scene.children.length, top }, null, 1);
+  const cat = {};
+  for (const e of s.entities.list) cat[e.category] = (cat[e.category]||0)+1;
+  const kinds = {};
+  for (const e of s.entities.list) kinds[e.kind] = (kinds[e.kind]||0)+1;
+  const reg = s.map.region || {};
+  return JSON.stringify({
+    perf: window.__perf, mapMeshes: meshes, top,
+    entityCategories: cat,
+    entityKinds: Object.entries(kinds).sort((a,b)=>b[1]-a[1]).slice(0,12),
+    floraPlan: (reg.floraPlan||[]).length,
+    regionSpawns: (reg.spawns||[]).length,
+    regionProps: (reg.props||[]).length,
+    towns: (reg.towns||[]).length,
+    townShops: (reg.towns||[]).reduce((a,t)=>a+((t.shops||[]).length),0),
+    townNpcs: (reg.towns||[]).reduce((a,t)=>a+((t.npcSpawns||[]).length),0),
+    missingSheets: [...(s.spawner?.missing||[])].slice(0,10),
+  }, null, 1);
 }));
 await b.close();

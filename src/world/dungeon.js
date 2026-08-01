@@ -60,7 +60,7 @@ export const PARTY_TORCH_POWER = 1;
  * actually be measured off the frame and hold the unlit floor at the bottom of
  * MM6's quoted band; torches then take it up from there.
  */
-const AMBIENT_TARGET = 0.135;
+const AMBIENT_TARGET = 0.145;
 
 /**
  * Rendered sRGB value a surface at the centre of a torch pool should land on.
@@ -73,7 +73,7 @@ const AMBIENT_TARGET = 0.135;
  * to make that theme - keeps an ice cave brighter than a mine without letting
  * it wash out.
  */
-const LIT_TARGET = 0.42;
+const LIT_TARGET = 0.40;
 
 const THEME = {
   cave: {
@@ -617,15 +617,17 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
     // light with black corridor either side of it; space them closer than
     // about two light radii apart and the pools merge into flat room lighting,
     // which is the single easiest way to lose the look.
-    const density = c.kind === 'corridor' ? 3 : (rm && rm.boss ? 3 : 4);
-    if ((c.i * 7 + c.j * 13) % density !== 0) continue;
+    if ((c.i * 7 + c.j * 13) % 3 !== 0) continue;
     // Hang the torch on whichever side has a wall.
     const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
     for (const [di, dj] of dirs) {
       if (!solid(c.i + di, c.j + dj)) continue;
-      if (hash2(c.i, c.j, 99) < 0.18) continue;
+      if (hash2(c.i, c.j, 99) < 0.12) continue;
       const tx = wx + di * (CELL / 2 - 60), tz = wz + dj * (CELL / 2 - 60);
-      addTorch(tx, c.fy + 330, tz, T.torch, 1.45, T.torchRange, 'wall');
+      // A cathedral-height cave room swallows a corridor-sized pool, so let the
+      // radius follow the headroom it has to fill.
+      const reach = T.torchRange * clamp(c.h / 620, 1, 1.45);
+      addTorch(tx, c.fy + 330, tz, T.torch, 1.45, reach, 'wall');
       torches[torches.length - 1].nx = -di; torches[torches.length - 1].nz = -dj;
       break;
     }

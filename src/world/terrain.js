@@ -638,7 +638,7 @@ function faceGrey(nx, ny, nz, sun, ambient, diffuse, upness) {
   // MM6's sun has no north/south component at all, so a north- or south-facing
   // slope shades identically to flat ground and the landform vanishes. A small
   // steepness term stands in for the occlusion the engine baked per-vertex.
-  const steep = 1 - 0.14 * (1 - clamp(upness === undefined ? ny : upness, 0, 1));
+  const steep = 1 - 0.10 * (1 - clamp(upness === undefined ? ny : upness, 0, 1));
   // Only night darkens globally; the shell owns the day/night multiply and
   // applying our own on top of it would darken everything twice.
   const night = diffuse > 0 ? 1 : 0.38;

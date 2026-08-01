@@ -67,13 +67,23 @@ export function paintTavernInterior(g, w, h) {
   // Bar counter along the left, bottles behind it.
   paintShelf(g, 16, 96, 150, { th: 4 });
   paintShelf(g, 16, 130, 150, { th: 4 });
+  // Bottles: painted glass with a shoulder, a neck, a cork and a specular
+  // stripe - not 3px bars.
   for (let i = 0; i < 12; i++) {
     const x = 22 + i * 12;
-    const bh = 14 + (i % 3) * 5;
-    g.fillStyle = 'rgba(190,210,220,0.45)';
-    g.fillRect(x, 96 - bh, 7, bh);
-    g.fillStyle = ['#8a4020', '#c07030', '#6a3a18'][i % 3];
-    g.fillRect(x + 1, 96 - bh * 0.6, 5, bh * 0.6 - 1);
+    const bh = 15 + (i % 3) * 5;
+    const liq = [[138, 64, 32], [192, 112, 48], [106, 58, 24], [72, 96, 60]][i % 4];
+    const top = 96 - bh;
+    MM6.rct(g, x + 2, top, 3, 5, [58, 70, 62]);                 // neck
+    MM6.rct(g, x + 1, top - 2, 5, 3, [96, 66, 34]);             // cork
+    for (let y = top + 5; y < 96; y++) {
+      const t = (y - top - 5) / Math.max(1, bh - 5);
+      const k = Math.max(2, Math.round(1 + t * 3.4));
+      MM6.rct(g, x + 3 - k, y, k * 2, 1, t > 0.35 ? liq : [70, 88, 78]);
+      MM6.rct(g, x + 3 - k, y, 1, 1, [148, 176, 168]);
+      MM6.rct(g, x + 2 + k, y, 1, 1, [30, 40, 34]);
+    }
+    MM6.rct(g, x + 1, top + 8, 1, Math.max(2, bh - 12), [200, 224, 220]);
     if (i < 10) { g.fillStyle = rampCss('wood', 6); g.fillRect(x + 2, 128 - 12, 4, 12); }
   }
   paintCounter(g, 0, horizon - 6, 176, 26, { cloth: null });

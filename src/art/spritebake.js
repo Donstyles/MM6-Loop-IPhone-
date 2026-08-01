@@ -678,18 +678,18 @@ export function bakeCreatureSheet(renderer, kind, seed = 1, opts = {}) {
   const h = def ? def.height : 192;
   return bakeSheet(renderer, (s) => buildCreature(kind, s), {
     kind, seed, actions: ACTIONS, maxCellH: cellBudget(h, 56, 128, CREATURE_CELL_K), maxAtlas: 1024,
-    // Creatures dither far less than scenery does. A monster is a small,
-    // saturated, curved mass; a Bayer pattern strong enough to smooth a sky
-    // gradient turns a demon's chest into a visible red checkerboard at 4x.
-    // MM6's own sprites were palettised without dither for exactly this reason.
-    margin: 1.03, dither: 2, aspect: def ? def.aspect : 0, ...opts,
+    // Creatures are palettised without dither. A monster is a small, saturated,
+    // curved mass: a Bayer pattern strong enough to smooth a sky gradient turns
+    // a demon's chest into a visible red checkerboard, and MM6's own sprites
+    // band rather than dither - spec 16 calls the banding part of the look.
+    margin: 1.03, dither: 0, aspect: def ? def.aspect : 0, ...opts,
   });
 }
 
 export function bakeNPCSheet(renderer, archetype, seed = 1, opts = {}) {
   return bakeSheet(renderer, (s) => buildNPC(archetype, s), {
     kind: archetype, seed, actions: ACTIONS, maxCellH: 128, maxAtlas: 1024,
-    margin: 1.03, dither: 2, aspect: 0.60, ...opts,
+    margin: 1.03, dither: 0, aspect: 0.60, ...opts,
   });
 }
 

@@ -370,16 +370,15 @@ export class InventoryScreen extends Screen {
     // `fr_inven` is a painted hide panel with the cells embossed into it - the
     // cell edges are a hair lighter and darker than the field, never a drawn
     // wireframe.
-    M.paper(ctx, gx - 2, gy - 2, w + 4, h + 4, 'sheet', 71);
-    M.stipple(ctx, gx - 2, gy - 2, w + 4, h + 4, [34, 22, 12], 0.62);
+    M.paper(ctx, gx - 2, gy - 2, w + 4, h + 4, 'hide', 71);
     A.bevel(ctx, gx - 2, gy - 2, w + 4, h + 4, { sunken: true, size: 1 });
     for (let c = 0; c <= COLS; c++) {
-      M.stipple(ctx, gx + c * CELL, gy, 1, h, [22, 16, 10], 0.45);
-      if (c < COLS) M.stipple(ctx, gx + c * CELL + 1, gy, 1, h, [176, 152, 116], 0.20);
+      M.rct(ctx, gx + c * CELL, gy, 1, h, [30, 22, 13]);
+      if (c < COLS) M.rct(ctx, gx + c * CELL + 1, gy, 1, h, [104, 86, 60]);
     }
     for (let r = 0; r <= ROWS; r++) {
-      M.stipple(ctx, gx, gy + r * CELL, w, 1, [22, 16, 10], 0.45);
-      if (r < ROWS) M.stipple(ctx, gx, gy + r * CELL + 1, w, 1, [176, 152, 116], 0.20);
+      M.rct(ctx, gx, gy + r * CELL, w, 1, [30, 22, 13]);
+      if (r < ROWS) M.rct(ctx, gx, gy + r * CELL + 1, w, 1, [104, 86, 60]);
     }
 
     const carried = this.ui.cursorItem;
