@@ -18,3 +18,4 @@ vite.*.config.js
 !vite.capture.config.js
 tools/_*.mjs
 tools/mycap.sh
+.mkshot.sh

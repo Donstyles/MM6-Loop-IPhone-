@@ -148,8 +148,8 @@ export class SpellbookScreen extends Screen {
       // A hand-drawn school device branded straight into the leather - no
       // plaque behind it, and never a word. A school the character has not
       // learned gets the same mark in blind tooling rather than in colour.
-      const gs = 22;
-      M.schoolMark(ctx, s.id, x + 7, y + ((TAB_H - gs) >> 1), gs,
+      const gs = 26;
+      M.schoolMark(ctx, s.id, x + 5, y + ((TAB_H - gs) >> 1), gs,
         known ? '#f4e6c0' : M.shade(M.hexRGB(SCHOOL_COLORS[s.id]), 0.5));
     }
   }

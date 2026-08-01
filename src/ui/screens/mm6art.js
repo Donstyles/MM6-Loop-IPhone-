@@ -509,7 +509,10 @@ function tongue(u, v, base, tip, cxo, lean, wide) {
   const p = (v - tip) / (base - tip);
   if (p < 0 || p > 1) return false;
   const ax = cxo + lean * Math.pow(1 - p, 1.7);
-  return Math.abs(u - ax) <= wide * Math.pow(p, 0.55);
+  // The taper is held back until the last quarter: at sixteen pixels a shape
+  // that thins evenly is a one-pixel whisker for half its length, and a
+  // one-pixel whisker is not a silhouette.
+  return Math.abs(u - ax) <= wide * (1 - Math.pow(1 - p, 2.4));
 }
 
 const EMBLEM = {
@@ -542,8 +545,8 @@ const EMBLEM = {
 
   // A droplet: round belly, drawn point, one bead of light in the near shoulder.
   water(u, v) {
-    const hw = 0.58 * Math.pow(clamp((v + 0.94) / 1.22, 0, 1), 1.6);
-    if (!(bl(u, v, 0, 0.30, 0.58) || (v <= 0.30 && Math.abs(u) <= hw))) return -1;
+    const hw = 0.60 * (1 - Math.pow(clamp((0.30 - v) / 1.26, 0, 1), 2.5));
+    if (!(bl(u, v, 0, 0.30, 0.60) || (v <= 0.30 && Math.abs(u) <= hw))) return -1;
     const a = u + 0.22, b = v - 0.06;
     if (a * a + b * b < 0.030) return 1.30;
     return 0.74 - u * 0.34 - v * 0.32;

@@ -41,7 +41,7 @@ export const TEXT_BLUE = TEXT_LEARN;
 
 // --- small: the body face, a rasterised Lucida at ~11 px --------------------
 //
-// 7x9 cell, 7-row cap height, 5-row x-height, 2-row descender, baseline 7.
+// 10x9 cell, 7-row cap height, 5-row x-height, 2-row descender, baseline 7.
 // Cap-to-descender is 9 rows plus the baked shadow row, which is the ~10-11 px
 // the original lucida.fnt occupies on a 640x480 frame.
 //
@@ -60,9 +60,9 @@ export const TEXT_BLUE = TEXT_LEARN;
 //      the horizontal arms of E/F/L/T/Z carry end serifs rather than running
 //      flat into space. That thick/thin alternation is what separates printed
 //      type from a game font.
-//   3. Genuinely proportional widths. i/l/j/. /, are 3-4 px, r/t/f 5, most
-//      lowercase and caps 6, and m/w/M/W/N 7-8. Advance is derived from the
-//      ink box, so the fitting follows the drawing automatically.
+//   3. Genuinely proportional widths. i/l/j and the punctuation are 3-4 px,
+//      r/t/f 5, most lowercase and caps 6-7, m/w 8 and M/W 10. Advance is
+//      derived from the ink box, so the fitting follows the drawing.
 //
 // Rows 0-6 sit above the baseline, rows 7-8 are the descender.
 const SMALL = {
