@@ -313,7 +313,8 @@ export class Session {
     // Let the map cull its own batched content against the camera and advance
     // its sky. Hours, not the 0-1 fraction, since that is what it bakes against.
     if (this.map && this.map.update) {
-      this.map.update(this.engine.camera, dt, this.clock.hour + this.clock.minute / 60);
+      this.map.update(this.engine.camera, dt, this.clock.hour + this.clock.minute / 60,
+        this.torchPower());
     }
 
     this.updateCombatState();
@@ -322,6 +323,15 @@ export class Session {
     this.updateTint();
 
     this.hoverEntity = this.pickEntity(input.pointer);
+  }
+
+  /**
+   * How wide a light the party carries underground. One by default - the torch
+   * every party is assumed to hold - widened by Torch Light's power.
+   */
+  torchPower() {
+    const b = this.party && this.party.buffs && this.party.buffs.torch_light;
+    return b && b.expires > 0 ? Math.max(1, b.power || 1) : 1;
   }
 
   entityCtx(dt) {

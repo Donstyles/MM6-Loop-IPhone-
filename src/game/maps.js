@@ -194,7 +194,12 @@ export function dungeonMap(dungeon) {
     drawMinimap: dungeon.drawMinimap || null,
     setTimeOfDay: null,
     setFogColor() {},
-    update(camera, dt) { if (dungeon.update) dungeon.update(dt || 0.016, camera); },
+    // Fourth argument is the party's torch power: Torch Light widens the pool
+    // the party carries with it, so it rides in where the outdoor map takes
+    // weather.
+    update(camera, dt, timeOfDay, torchPower) {
+      if (dungeon.update) dungeon.update(dt || 0.016, camera, torchPower);
+    },
     populate(entities) { if (dungeon.populate) dungeon.populate(entities); },
     dispose() { if (dungeon.dispose) dungeon.dispose(); },
   };

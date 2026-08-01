@@ -17,7 +17,7 @@ import * as F from '../../art/font.js';
 import * as UI from '../../art/uiart.js';
 import * as PORTRAITS from '../../art/portraits.js';
 import { mulberry32 } from '../../core/rng.js';
-import { rampCss } from '../../core/palette.js';
+import { rampCss, quantizeImageData } from '../../core/palette.js';
 import * as M from './mm6art.js';
 
 // --- geometry ---------------------------------------------------------------
@@ -91,14 +91,23 @@ function guard(name, fn, fallback) {
   }
 }
 
+// Snapped to the palette once at bake time, for the same reason `baked()` is:
+// the UI canvas sits over the WebGL output and never sees the palette post
+// pass, so anything the 2D context antialiased would otherwise reach the screen
+// in a colour MM6's frame has no index for.
 function scratch(key, w, h, paint) {
   let c = _cache.get(key);
   if (c && c.width === w && c.height === h) return c;
   c = document.createElement('canvas');
   c.width = Math.max(1, w | 0); c.height = Math.max(1, h | 0);
-  const g = c.getContext('2d');
+  const g = c.getContext('2d', { willReadFrequently: true });
   g.imageSmoothingEnabled = false;
   paint(g, c.width, c.height);
+  try {
+    const img = g.getImageData(0, 0, c.width, c.height);
+    quantizeImageData(img);
+    g.putImageData(img, 0, 0);
+  } catch { /* leave the plate as painted */ }
   _cache.set(key, c);
   return c;
 }

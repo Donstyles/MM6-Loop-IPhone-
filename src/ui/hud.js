@@ -434,8 +434,10 @@ export class HUD {
     // Turn-based indicator in the window's bottom-right corner.
     if (S.turnBased) {
       const ap = Math.max(0, Math.min(5, Math.floor((S.turnPoints ?? 130) / 26)));
+      // The engine blits the turn sprite at a fixed (394,288) in frame space,
+      // not relative to the window's corner.
       UI.drawIcon(ctx, S.turnActor === 'monsters' ? 'turnhour' : `turn${5 - ap}`,
-        v.x + v.w - 52, v.y + v.h - 60, 44);
+        394, 288, 44);
     }
 
     // No world-space nameplates and no monster health bars: MM6 puts the

@@ -18,7 +18,7 @@
 
 import { layout } from '../../core/layout.js';
 import { Rand, clamp, smoothstep, fbm2, valueNoise2, hash2 } from '../../core/rng.js';
-import { rampCss, ramp, snap } from '../../core/palette.js';
+import { rampCss, ramp, snap, quantizeImageData } from '../../core/palette.js';
 import * as F from '../../art/font.js';
 import { PORTRAIT_W, PORTRAIT_H } from '../../art/portraits.js';
 import { Screen, A, PANEL, portraitOf, wrapLines, drawWrapped } from './screenbase.js';
@@ -315,16 +315,31 @@ export function washPixels(ctx, x, y, w, h, f, seed = 5, step = 2) {
 
 const _baked = new Map();
 
-/** Cache a painted backdrop by key. Painters are far too slow for a frame. */
+/**
+ * Cache a painted backdrop by key. Painters are far too slow for a frame.
+ *
+ * The finished plate is snapped to the 256-entry palette before it is cached.
+ * That is not a nicety: the UI is a 2D canvas layered over the WebGL output, so
+ * it never passes through the palette post pass the 3D world does, and anything
+ * canvas antialiases - a curve, a diagonal, a half-transparent wash - would
+ * otherwise put colours on screen that MM6's frame could not contain. Snapping
+ * once at bake time costs nothing per frame and makes the whole painted room
+ * genuinely 8-bit no matter how it was drawn.
+ */
 export function baked(key, w, h, painter) {
   const k = `${key}|${w}x${h}`;
   let c = _baked.get(k);
   if (c) return c;
   c = document.createElement('canvas');
   c.width = Math.max(1, w | 0); c.height = Math.max(1, h | 0);
-  const g = c.getContext('2d');
+  const g = c.getContext('2d', { willReadFrequently: true });
   g.imageSmoothingEnabled = false;
   painter(g, c.width, c.height);
+  try {
+    const img = g.getImageData(0, 0, c.width, c.height);
+    quantizeImageData(img);
+    g.putImageData(img, 0, 0);
+  } catch { /* tainted or zero-sized canvas: leave the plate as painted */ }
   _baked.set(k, c);
   return c;
 }
