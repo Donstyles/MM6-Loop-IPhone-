@@ -33,8 +33,12 @@ async function freshPage() {
   // startGame() sets __gameReady before it finishes generating the opening
   // region; enter a dungeon too early and that load lands on top of it a few
   // seconds later, replacing the frame with a loading screen mid-measurement.
+  // ...and while the loading screen is up main.js does not call engine.render()
+  // at all, so the render target still holds the boot frame - measure then and
+  // every view comes back identical and far too bright.
   await p.waitForFunction(
-    "window.__session && window.__session.mapId && window.__session.mapId !== 'void'",
+    "window.__session && window.__session.mapId !== 'void' && window.__mm6.screen() === null"
+    + " && window.__mm6.stats().tris > 0",
     { timeout: 300000 });
   await p.waitForTimeout(500);
 }

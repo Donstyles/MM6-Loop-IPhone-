@@ -121,7 +121,8 @@ const clock = await S(async () => {
   s.clock.advanceMinutes(8 * 60);
   return { moved: s.clock.minutes - t0, date: s.clock.formatDate(), time: s.clock.format() };
 });
-check('clock advances', clock.moved >= 480, `${clock.date} ${clock.time}`);
+// Elapsed minutes are a float, so compare with a tolerance rather than exactly.
+check('clock advances', clock.moved > 479.9, `+${clock.moved.toFixed(1)}min -> ${clock.date} ${clock.time}`);
 
 // --- every panel opens ------------------------------------------------------
 const screens = ['charsheet', 'inventory', 'spellbook', 'questlog', 'mapscreen',
