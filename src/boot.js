@@ -217,7 +217,7 @@ export class Boot {
     const fill = Math.round((bw - 4) * Math.max(0, Math.min(1, this.progress)));
     // Four bands across the bar's height, not a per-column gradient: the light
     // catches the top of a moulding and falls away down its face.
-    const BANDS = [10, 8, 6, 4];
+    const BANDS = [11, 8, 5, 3];
     const step = (bh - 4) / BANDS.length;
     for (let b = 0; b < BANDS.length; b++) {
       ctx.fillStyle = rampCss('gold', BANDS[b]);
@@ -232,7 +232,8 @@ export class Boot {
     const dots = '.'.repeat(1 + (Math.floor(Math.abs(this.t) * 2) % 3));
     if (font && font.drawText) {
       font.drawText(ctx, label + dots, cx, by + bh + 8, { align: 'center', color: '#e8dcb0' });
-      if (this.detail) font.drawText(ctx, this.detail, cx, by + bh + 22, { face: 'small', align: 'center', color: '#8a7f60' });
+      // No detail line: it printed internal asset ids ("title #4B4B4B") at the
+      // player, and nothing in MM6 ever shows one.
     } else {
       ctx.fillStyle = '#e8dcb0';
       ctx.font = '13px monospace';
@@ -246,12 +247,13 @@ export class Boot {
     const c = document.createElement('canvas');
     c.width = W; c.height = H;
     const g = c.getContext('2d');
-    // A vertical fade in eight hard steps, not a per-scanline ramp: this frame
-    // is the first thing anyone sees, and a smooth gradient with a radial
-    // vignette is exactly the idiom a 256-colour game cannot produce.
-    const STEPS = 8;
+    // A vertical fade in hard steps, not a per-scanline ramp: this frame is the
+    // first thing anyone sees, and a smooth gradient with a radial vignette is
+    // exactly the idiom a 256-colour game cannot produce. Sixteen steps, so the
+    // bands read as tonal steps rather than as stacked rectangles.
+    const STEPS = 16;
     for (let s = 0; s < STEPS; s++) {
-      const col = ramp('stone', 1 + (s / (STEPS - 1)) * 3.2);
+      const col = ramp('stone', 1 + (s / (STEPS - 1)) * 2.6);
       g.fillStyle = `rgb(${col[0] | 0},${col[1] | 0},${col[2] | 0})`;
       g.fillRect(0, Math.round((s * H) / STEPS), W, Math.ceil(H / STEPS) + 1);
     }
@@ -268,7 +270,10 @@ export class Boot {
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
         const r = Math.hypot(x - hw, y - hh) / rmax;
-        const d = Math.max(0, (r - 0.42) / 0.58) * 0.85;
+        // Only the outer third darkens, and only to about half: the frame is
+        // scaled up for display, so the 8x8 pattern is several screen pixels
+        // across and a dense stipple reads as a screen door rather than shade.
+        const d = Math.max(0, (r - 0.66) / 0.34) * 0.5;
         if (d <= 0) continue;
         if (B[((y & 7) << 3) | (x & 7)] / 64 + 0.0078 >= d) continue;
         const o = (y * W + x) * 4;
