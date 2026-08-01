@@ -519,12 +519,15 @@ const EMBLEM = {
   // A flame: a fat root, a tongue licking up and curling to the right, one
   // small secondary lick at the left. Bright core, root sunk in its own smoke.
   fire(u, v) {
-    if (!(bl(u, v, 0.00, 0.42, 0.52)
-      || (v <= 0.72 && tongue(u, v, 0.85, -0.95, 0.00, 0.36, 0.58))
-      || (v <= 0.60 && tongue(u, v, 0.62, -0.34, -0.42, -0.18, 0.26)))) return -1;
+    // Three tongues off one root, at three heights and leaning three ways, so
+    // the skyline is notched. A single smooth tongue is a droplet.
+    if (!(bl(u, v, 0.00, 0.46, 0.50)
+      || (v <= 0.80 && tongue(u, v, 0.86, -0.96, 0.02, 0.26, 0.36))
+      || (v <= 0.72 && tongue(u, v, 0.80, -0.40, -0.40, -0.20, 0.28))
+      || (v <= 0.72 && tongue(u, v, 0.80, -0.56, 0.44, 0.14, 0.24)))) return -1;
     const a = u - 0.02, b = v - 0.18;
-    let t = 1.16 - Math.sqrt(a * a + b * b) * 1.30;
-    if (v > 0.36) t -= (v - 0.36) * 1.7;
+    let t = 1.14 - Math.sqrt(a * a + b * b) * 0.74;
+    if (v > 0.36) t -= (v - 0.36) * 1.1;
     return t;
   },
 
@@ -547,9 +550,9 @@ const EMBLEM = {
   water(u, v) {
     const hw = 0.60 * (1 - Math.pow(clamp((0.30 - v) / 1.26, 0, 1), 2.5));
     if (!(bl(u, v, 0, 0.30, 0.60) || (v <= 0.30 && Math.abs(u) <= hw))) return -1;
-    const a = u + 0.22, b = v - 0.06;
-    if (a * a + b * b < 0.030) return 1.30;
-    return 0.74 - u * 0.34 - v * 0.32;
+    const a = u + 0.24, b = v - 0.04;
+    if (a * a + b * b < 0.034) return 1.30;
+    return 0.86 - u * 0.30 - v * 0.26;
   },
 
   // A crag: two peaks, a face in the light and a face in shadow either side of
@@ -565,9 +568,9 @@ const EMBLEM = {
       }
     }
     if (v < top) return -1;
-    if (v > 0.58) return 0.20;                                 // the scree foot
+    if (v > 0.58) return 0.30;                                 // the scree foot
     const fall = -0.12 + (v + 0.90) * 0.24;
-    return u < fall ? 0.94 - (v - top) * 0.36 : 0.38 - (v - top) * 0.12;
+    return u < fall ? 0.94 - (v - top) * 0.30 : 0.46 - (v - top) * 0.10;
   },
 
   // An ankh: a rolled loop over a barred stem, each member bevelled.
@@ -647,8 +650,11 @@ const EMBLEM = {
  */
 function markRamp(school, colorHex) {
   if (colorHex) {
+    // The floor is kept off the bottom of the range on purpose: a tinted mark
+    // is branded onto coloured leather, and a band darker than the leather is
+    // a hole in the shape rather than a shadow on it.
     const b = hexRGB(colorHex);
-    return [shade(b, 0.30), shade(b, 0.54), shade(b, 0.80),
+    return [shade(b, 0.44), shade(b, 0.64), shade(b, 0.84),
       mix(b, [255, 255, 255], 0.34), mix(b, [255, 255, 255], 0.72)];
   }
   const P = SIGIL_INK[school] || SIGIL_INK.spirit;
@@ -672,6 +678,9 @@ function emblemCanvas(school, s, cols, key) {
     const on = (x, y) => (x >= 0 && y >= 0 && x < s && y < s && T[y * s + x] >= 0);
     const sh = Math.max(1, Math.round(s / 16));
     const cast = shade(cols[0], 0.55);
+    // One step below the ramp, for the few places an emblem needs a true dark
+    // accent - a pupil, a crease - rather than its own shadow side.
+    const deep = shade(cols[0], 0.66);
     return paintCanvas(s, s, (x, y) => {
       const t = T[y * s + x];
       if (t < 0) {
@@ -680,7 +689,7 @@ function emblemCanvas(school, s, cols, key) {
         if (on(x - sh, y - sh) && bay(x, y) < 0) return cast;
         return null;
       }
-      let col = cols[Math.round(band(clamp(t, 0, 1), 5) * 4)];
+      let col = t < 0.06 ? deep : cols[Math.round(band(clamp(t, 0, 1), 5) * 4)];
       const up = !on(x, y - 1), lf = !on(x - 1, y);
       if (up || lf) col = mix(col, cols[4], t > 0.2 ? 0.5 : 0.28);
       else if (!on(x, y + 1) || !on(x + 1, y)) col = mix(col, cols[1], 0.45);

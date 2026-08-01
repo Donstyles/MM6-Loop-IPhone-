@@ -145,12 +145,14 @@ export class SpellbookScreen extends Screen {
         known ? `${s.name} magic` : `${s.name} magic - not learned`);
       if (hit.click) this.turnTo(s.id);
       M.bookmarkTab(ctx, x, y, w, TAB_H, SCHOOL_COLORS[s.id], { open: on || hit.hover });
-      // A hand-drawn school device branded straight into the leather - no
-      // plaque behind it, and never a word. A school the character has not
-      // learned gets the same mark in blind tooling rather than in colour.
+      // A painted school device branded straight into the leather - no plaque
+      // behind it, and never a word. A school the character has not learned is
+      // painted in the same ivory gone grey and dusty, not in the tab's own
+      // colour: a device that sinks to the value of the leather it sits on is
+      // not a device, and every tab has to be readable to be chosen.
       const gs = 26;
       M.schoolMark(ctx, s.id, x + 5, y + ((TAB_H - gs) >> 1), gs,
-        known ? '#f4e6c0' : M.shade(M.hexRGB(SCHOOL_COLORS[s.id]), 0.5));
+        known ? '#f4e6c0' : '#a4988a');
     }
   }
 

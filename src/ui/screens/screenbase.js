@@ -382,7 +382,12 @@ export function leaderRow(ctx, label, value, x, y, w, opts = {}) {
   const face = opts.face || 'small';
   const color = opts.color || WHITE;
   const vcolor = opts.valueColor || color;
-  F.drawText(ctx, label, x, y, { face, color });
+  // Forward the caller's shadow. Panels on cream parchment pass an embossed
+  // #ece0c2 so their ink reads as engraved; without this the row fell back to
+  // the default black shadow, which on parchment is the single worst thing for
+  // legibility on the sheet.
+  const shadow = opts.shadow;
+  F.drawText(ctx, label, x, y, { face, color, shadow });
   const lw = F.measure(label, face).w;
   const vw = F.measure(value, face).w;
   const dotStart = x + lw + 3;
@@ -394,7 +399,7 @@ export function leaderRow(ctx, label, value, x, y, w, opts = {}) {
     ctx.fillStyle = M.pc(M.mix(M.hexRGB(color), [168, 144, 104], 0.5));
     for (let dx = dotStart; dx < dotEnd; dx += 3) ctx.fillRect(dx | 0, (y + 6) | 0, 1, 1);
   }
-  F.drawText(ctx, value, (x + w) | 0, y, { face, color: vcolor, align: 'right' });
+  F.drawText(ctx, value, (x + w) | 0, y, { face, color: vcolor, align: 'right', shadow });
 }
 
 // --- tabs -------------------------------------------------------------------
