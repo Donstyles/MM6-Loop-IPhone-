@@ -595,9 +595,12 @@ export function drawStatBar(ctx, x, y, w, h, frac, kind = 'hp') {
   const iw = w - 2, ih = h - 2;
 
   if (h > w) {
-    // Vertical tube, anchored at the bottom.
-    const fh = Math.max(1, Math.round(ih * f));
-    const top = y + 1 + (ih - fh);
+    // Vertical tube. The engine clips the whole 5 x 49 bar texture to
+    // `height = ratio * 49` and anchors that at the BOTTOM of the slot, so the
+    // fill is measured against the full slot height, not the height inside the
+    // bevel - at ratio 1 the tube really is solid from lip to lip.
+    const fh = Math.max(1, Math.min(h, Math.round(h * f)));
+    const top = y + h - fh;
     for (let col = 0; col < iw; col++) {
       // Round tube shading: bright just left of centre, dark at both rims.
       const u = iw === 1 ? 0.5 : col / (iw - 1);
@@ -606,6 +609,9 @@ export function drawStatBar(ctx, x, y, w, h, frac, kind = 'hp') {
     }
     // Meniscus at the top of the fill.
     rect(ctx, x + 1, top, iw, 1, tex(1));
+    // Re-assert the carved rim so even a full tube still sits in a slot.
+    vline(ctx, x, y, h, hexC(0x14100c));
+    vline(ctx, x + w - 1, y, h, STONE(0.72));
     return;
   }
 
@@ -706,6 +712,294 @@ export function drawTubeWell(ctx, x, y, w = 5, h = 49) {
   // Brass collars top and bottom, the fitting that holds the tube.
   hline(ctx, x - 1, y - 2, w + 2, BRASS(0.72));
   hline(ctx, x - 1, y + h + 1, w + 2, BRASS(0.30));
+}
+
+// --- right panel: compass ribbon -------------------------------------------
+
+// IB-COMP is a ~240 px panoramic strip of painted compass markings that slides
+// behind a 26 px aperture at (541, 136) - a ribbon, never a rotating needle.
+// 240 / 2048 = 0.1171875, the engine's scroll constant, so one full turn of the
+// party scrolls the strip exactly once.
+const COMPASS_W = 240, COMPASS_H = 20;
+// Strip coordinates of the four cardinals; the intercardinals fall halfway.
+const COMPASS_MARKS = [['N', 30], ['E', 90], ['S', 150], ['W', 210]];
+
+function compassStrip() {
+  return cached('comp:strip', () => {
+    const pix = new Pix(COMPASS_W, COMPASS_H);
+    for (let y = 0; y < COMPASS_H; y++) {
+      // The band is painted on a drum, so it catches the light across the
+      // middle and rolls away into shadow at both lips.
+      const v = 1 - Math.abs(y / (COMPASS_H - 1) - 0.40) * 1.75;
+      for (let x = 0; x < COMPASS_W; x++) {
+        const grain = hash2(x, y, 613) - 0.5;
+        const t = clamp(0.02 + clamp(v, 0, 1) * 0.15 + grain * 0.04, 0, 1);
+        pix.setArr(x, y, mixC(STONE(t), BRASS(0.06 + t * 0.30), 0.30));
+      }
+    }
+    const canvas = pix.toCanvas();
+    const g = ctx2d(canvas);
+    const cream = css(mixC(hexC(0xe6d6c1), BRASS(0.92), 0.25));
+    const dim = css(BRASS(0.62));
+
+    // Degree ticks in two lengths: a short one every 15 degrees (10 px of
+    // strip) and a long one on each of the eight compass points (30 px).
+    for (let i = 0; i < COMPASS_W; i += 10) {
+      const major = i % 30 === 0;
+      rect(g, i, major ? COMPASS_H - 8 : COMPASS_H - 5, 1, major ? 7 : 4, major ? cream : dim);
+      if (major) rect(g, i + 1, COMPASS_H - 8, 1, 7, css(BRASS(0.22)));
+    }
+    // Cardinals in painted lettering; the intercardinals get a lozenge instead,
+    // so the ribbon stays legible through a 26 px hole.
+    for (const [label, pos] of COMPASS_MARKS) {
+      drawText(g, label, pos, 1, { face: 'normal', align: 'center', color: cream, shadow: '#100c06' });
+      const half = (pos + 30) % COMPASS_W;
+      for (let k = 0; k < 3; k++) rect(g, half - k, 5 + k, 1 + k * 2, 1, dim);
+      for (let k = 0; k < 2; k++) rect(g, half - 1 + k, 8 + k, 3 - k * 2, 1, dim);
+    }
+    // Lips: the strip is inset into the panel, so it darkens at the very edges.
+    hline(g, 0, 0, COMPASS_W, css(STONE(0.02)));
+    hline(g, 0, COMPASS_H - 1, COMPASS_W, css(STONE(0.06)));
+    return quantise(canvas);
+  });
+}
+
+/**
+ * Blit the ribbon through a `w`-wide aperture at (x, y), scrolled for `yaw`
+ * (radians, 0 = north). Also paints the aperture's carved lip and the brass
+ * index mark at its centre - the mark the heading is actually read against.
+ */
+export function drawCompassRibbon(ctx, x, y, w, yaw = 0) {
+  x |= 0; y |= 0; w = Math.max(8, w | 0);
+  const strip = compassStrip();
+  const sm = ctx.imageSmoothingEnabled;
+  ctx.imageSmoothingEnabled = false;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, y, w, COMPASS_H);
+  ctx.clip();
+  // Heading `yaw` must land under the index mark at the aperture centre.
+  const p = (((30 + (yaw / (Math.PI * 2)) * COMPASS_W) % COMPASS_W) + COMPASS_W) % COMPASS_W;
+  const base = Math.round(x + w / 2 - p);
+  for (let r = -1; r <= 1; r++) ctx.drawImage(strip, base + r * COMPASS_W, y);
+  ctx.restore();
+  ctx.imageSmoothingEnabled = sm;
+
+  // Carved aperture: shadow on the top/left lip, light on the bottom/right.
+  drawBevel(ctx, x - 1, y - 1, w + 2, COMPASS_H + 2,
+    { depth: 1, raised: false, dark: hexC(0x14100c), light: STONE(0.76) });
+
+  // Index mark: a brass chevron biting into the top of the opening, with a
+  // hairline dropped through the ribbon behind it.
+  const cx = x + (w >> 1);
+  for (let k = 0; k < 3; k++) rect(ctx, cx - 2 + k, y + k, 5 - k * 2, 1, BRASS(0.92 - k * 0.16));
+  for (let k = 0; k < 2; k++) rect(ctx, cx - 1 + k, y + COMPASS_H - 1 - k, 3 - k * 2, 1, BRASS(0.50 + k * 0.16));
+}
+
+// --- right panel: hireling slots -------------------------------------------
+
+/**
+ * The 63 x 73 opening a hireling portrait hangs in, at (489,152)/(559,152).
+ *
+ * With no hireling engaged MM6 shows the panel art through the opening, not a
+ * filled box - so `empty` paints a shallow carved recess in the same stone as
+ * the column around it (arched head, shadow inside the top-left, lit lower
+ * lip, an empty brass hook at the crown) and nothing else. With a hireling
+ * present only the rim is drawn, leaving the portrait rect untouched.
+ */
+export function drawHirelingSlot(ctx, x, y, w, h, empty = true) {
+  x |= 0; y |= 0; w = Math.max(8, w | 0); h = Math.max(8, h | 0);
+
+  if (empty) {
+    const body = cached(`hire:${w}:${h}`, () => {
+      const pix = new Pix(w, h);
+      // A touch darker and flatter than the surrounding column, so it reads as
+      // sunk into it rather than as a separate plate laid on top.
+      stoneBody(pix, 57, 0.30, 0.16);
+      const c = pix.toCanvas();
+      const g = ctx2d(c);
+      const arch = Math.min(h >> 2, w >> 1);
+      for (let row = 0; row < h; row++) {
+        const dy = arch - row;
+        const inset = dy <= 0 ? 0
+          : Math.round(w / 2 - Math.sqrt(Math.max(0, (w / 2) * (w / 2) - dy * dy)));
+        // Outside the arch is panel face, not recess: leave it transparent so
+        // whatever stone is behind shows through.
+        if (inset > 0) {
+          g.clearRect(0, row, inset, 1);
+          g.clearRect(w - inset, row, inset, 1);
+        }
+        const l = inset, r = w - 1 - inset;
+        // Occlusion only: a soft ambient shade under the arch head, then the
+        // carved lips. The field itself stays panel stone, so an empty slot
+        // reads as the column continuing rather than as a hole cut in it.
+        const k = clamp(1 - row / (h * 0.42), 0, 1);
+        if (k > 0) {
+          g.globalAlpha = k * 0.40;
+          rect(g, l, row, r - l + 1, 1, STONE(0.06));
+          g.globalAlpha = 1;
+        }
+        rect(g, l, row, 2, 1, STONE(0.06));
+        rect(g, l + 2, row, 1, 1, STONE(0.20));
+        rect(g, r - 1, row, 2, 1, STONE(0.66));
+        rect(g, r - 2, row, 1, 1, STONE(0.42));
+        // Hard keyline right on the cut, so the arch reads as an edge in stone
+        // and not as a soft stain on the panel.
+        rect(g, l, row, 1, 1, hexC(0x14100c));
+        rect(g, r, row, 1, 1, STONE(0.86));
+      }
+      hline(g, 0, h - 1, w, hexC(0x14100c));
+      hline(g, 0, h - 2, w, STONE(0.52));
+      return quantise(c);
+    });
+    const sm = ctx.imageSmoothingEnabled;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(body, x, y);
+    ctx.imageSmoothingEnabled = sm;
+    // The empty hook a portrait plate would hang from.
+    const cx = x + (w >> 1);
+    rect(ctx, cx - 1, y + 4, 3, 2, BRASS(0.66));
+    rect(ctx, cx - 1, y + 4, 1, 1, BRASS(0.95));
+    rect(ctx, cx, y + 6, 1, 3, BRASS(0.34));
+    return;
+  }
+
+  // Occupied: a carved rim only, so the caller's portrait shows through.
+  drawBevel(ctx, x - 2, y - 2, w + 4, h + 4,
+    { depth: 2, raised: false, dark: hexC(0x14100c), light: STONE(0.80) });
+  drawBevel(ctx, x - 1, y - 1, w + 2, h + 2,
+    { depth: 1, raised: true, light: BRASS(0.62), dark: BRASS(0.18) });
+}
+
+// --- right panel: book spines ----------------------------------------------
+
+// ib-td1..ib-td5 are five overlapping tome edges along the bottom of the right
+// column, not five identical square keys. Each is bound in a different leather.
+const SPINE_LEATHER = [
+  toneRamp(0x2a1410, 0x5e2a20, 0x9a5040),   // oxblood
+  toneRamp(0x1e2418, 0x3c5030, 0x6e8a58),   // dark green
+  toneRamp(0x2a2012, 0x584028, 0x8e6c44),   // tan calf
+  toneRamp(0x141a2a, 0x2c3a5e, 0x566a9a),   // blue
+  toneRamp(0x241a26, 0x4a3452, 0x7c6088),   // purple
+];
+
+/**
+ * One book spine. opts: { tone, state, gilt, flash }
+ *   tone   0..4, picks the leather
+ *   state  'up' | 'down'
+ *   flash  dulls the gilt for the "new entry" blink
+ *
+ * Each spine lays a hard shadow down its own right edge, so a row of them
+ * overlaps into a shelf rather than reading as separate buttons.
+ */
+export function drawBookSpine(ctx, x, y, w, h, opts = {}) {
+  const { tone = 0, state = 'up', gilt = true, flash = false } = opts;
+  x |= 0; y |= 0; w = Math.max(6, w | 0); h = Math.max(8, h | 0);
+  const down = state === 'down';
+  const t0 = ((tone | 0) % SPINE_LEATHER.length + SPINE_LEATHER.length) % SPINE_LEATHER.length;
+  const key = `spine:${w}:${h}:${t0}:${down ? 1 : 0}:${gilt ? 1 : 0}:${flash ? 1 : 0}`;
+  const canvas = cached(key, () => {
+    const L = SPINE_LEATHER[t0];
+    const pix = new Pix(w, h);
+    for (let py = 0; py < h; py++) {
+      for (let px = 0; px < w; px++) {
+        // Round the spine across its width; grain it so it reads as hide.
+        const u = w === 1 ? 0.5 : px / (w - 1);
+        const round = 1 - Math.abs(u - 0.34) * 1.35;
+        const grain = tileFbm2(px * 0.6, py * 0.16, 64, 3, 0.55, 91 + t0 * 17) - 0.5;
+        const grit = hash2(px, py, 311 + t0) - 0.5;
+        let t = 0.30 + clamp(round, 0, 1) * 0.38 + grain * 0.16 + grit * 0.05;
+        // Head and tail caps roll away from the light.
+        const cap = Math.min(py, h - 1 - py);
+        if (cap < 2) t -= (2 - cap) * 0.10;
+        if (down) t -= 0.10;
+        pix.setArr(px, py, L(clamp(t, 0, 1)));
+      }
+    }
+    const c = pix.toCanvas();
+    const g = ctx2d(c);
+    // Rounded head, so the row reads as tome edges rather than as tiles.
+    g.clearRect(0, 0, 1, 1); g.clearRect(w - 1, 0, 1, 1);
+    rect(g, 1, 0, w - 2, 1, L(0.86));
+    // Lit left edge, hard shadow on the right - this is what makes them overlap.
+    vline(g, 0, 1, h - 1, L(0.90));
+    vline(g, w - 2, 0, h, L(0.10));
+    vline(g, w - 1, 0, h, hexC(0x120c08));
+    hline(g, 0, h - 1, w, hexC(0x120c08));
+
+    if (gilt && h >= 12) {
+      const gm = flash ? BRASS(0.42) : BRASS(0.74);
+      const gh = flash ? BRASS(0.58) : BRASS(0.98);
+      const gd = BRASS(0.16);
+      // Raised bands, the way a sewn-in cord shows through the covering.
+      for (const by of [Math.round(h * 0.22), Math.round(h * 0.74)]) {
+        hline(g, 1, by, w - 3, gm);
+        hline(g, 1, by + 1, w - 3, gd);
+        rect(g, 1, by, Math.max(1, w >> 2), 1, gh);
+      }
+      // Tooled title panel between the bands.
+      const ty = Math.round(h * 0.40), th = Math.max(3, Math.round(h * 0.26));
+      if (w > 7 && ty + th < h - 2) {
+        drawBevel(g, 2, ty, w - 5, th, { depth: 1, raised: true, light: gm, dark: gd });
+        for (let ly = ty + 2; ly < ty + th - 1; ly += 2) hline(g, 4, ly, w - 9, gd);
+      }
+    }
+    return quantise(c);
+  });
+  const sm = ctx.imageSmoothingEnabled;
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(canvas, x, y);
+  ctx.imageSmoothingEnabled = sm;
+  return canvas;
+}
+
+// --- bottom bar: action plates ---------------------------------------------
+
+/**
+ * ib-m1d..ib-m4d - the four ~40 x 35 keys at (476/518/560/602, 450).
+ *
+ * These are carved stone plates with a painted icon sunk into them, not flat
+ * squares with line art on top: a hard keyline, a 2 px raised arris lit from
+ * the upper left, a recessed field with its own reversed bevel, and brass pegs
+ * pinning the plate down at the corners.
+ */
+export function drawActionPlate(ctx, x, y, w, h, iconId, state = 'up') {
+  x |= 0; y |= 0; w = Math.max(12, w | 0); h = Math.max(12, h | 0);
+  const down = state === 'down';
+  const plate = cached(`plate:${w}:${h}:${down ? 1 : 0}`, () => {
+    const pix = new Pix(w, h);
+    for (let py = 0; py < h; py++) {
+      for (let px = 0; px < w; px++) {
+        const n = tileFbm2(px * 0.10, py * 0.10, 64, 3, 0.5, 137);
+        const grit = hash2(px, py, 211) - 0.5;
+        // Dome the plate: brightest along the top-left third.
+        const dome = (1 - py / h) * 0.16 + (1 - Math.abs(px / w - 0.42) * 2) * 0.05;
+        let t = 0.46 + (n - 0.5) * 0.18 + grit * 0.04 + dome;
+        if (down) t -= 0.12;
+        pix.setArr(px, py, mixC(STONE(clamp(t, 0, 1)), BRASS(0.30), 0.12));
+      }
+    }
+    const c = pix.toCanvas();
+    const g = ctx2d(c);
+    drawBevel(g, 0, 0, w, h, { depth: 1, raised: true, light: STONE(0.00), dark: STONE(0.00) });
+    drawBevel(g, 1, 1, w - 2, h - 2, { depth: 2, raised: !down, light: STONE(0.94), dark: STONE(0.08) });
+    // Sunken field the icon sits in.
+    drawGroove(g, 4, 4, w - 8, h - 8, 2);
+    for (const [cx, cy] of [[3, 3], [w - 4, 3], [3, h - 4], [w - 4, h - 4]]) drawRivet(g, cx, cy);
+    return quantise(c);
+  });
+  const sm = ctx.imageSmoothingEnabled;
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(plate, x, y);
+  ctx.imageSmoothingEnabled = sm;
+
+  if (iconId) {
+    const isz = Math.min(w - 12, h - 12, 24);
+    const o = down ? 1 : 0;
+    drawIcon(ctx, iconId, x + ((w - isz) >> 1) + o, y + ((h - isz) >> 1) + o, isz);
+  }
+  return plate;
 }
 
 // --- decorative ------------------------------------------------------------
@@ -1184,38 +1478,11 @@ const ICON_SRC2 = {
 // Monster health strip, turn-based state and the ready-marker rings. These are
 // separate bitmaps in the original (ib-statG/Y/R, turn0..5, IB-InitG/Y/R) and
 // the engine picks between them rather than tinting one image.
-const CLOCK = [
-  '', '', '.....XXXX.......', '...XX....XX.....', '..X........X....',
-  '.X..........X...', '.X..........X...', 'X............X..', 'X............X..',
-  '.X..........X...', '.X..........X...', '..X........X....', '...XX....XX.....',
-  '.....XXXX.......',
-];
-/** Clock face with the action-point hand at one of six positions. */
-function clockIcon(hand) {
-  const rows = CLOCK.slice();
-  for (const [x, y] of hand) {
-    const r = (rows[y] || '').padEnd(16, '.').split('');
-    r[x] = 'y';
-    rows[y] = r.join('');
-  }
-  return rows;
-}
 const ICON_SRC3 = {
   mhp_bg: ['', '', '', '', '', '', 'kkkkkkkkkkkkkkkk', 'k99999999999999k', 'k99999999999999k', 'kkkkkkkkkkkkkkkk'],
   mhp_grn: ['', '', '', '', '', '', 'kkkkkkkkkkkkkkkk', 'k11111111111111k', 'k22222222222222k', 'kkkkkkkkkkkkkkkk'],
   mhp_yel: ['', '', '', '', '', '', 'kkkkkkkkkkkkkkkk', 'k33333333333333k', 'k44444444444444k', 'kkkkkkkkkkkkkkkk'],
   mhp_red: ['', '', '', '', '', '', 'kkkkkkkkkkkkkkkk', 'k55555555555555k', 'k66666666666666k', 'kkkkkkkkkkkkkkkk'],
-  turn0: clockIcon([[6, 4], [6, 5], [6, 6], [6, 7]]),
-  turn1: clockIcon([[9, 4], [8, 5], [7, 6], [6, 7]]),
-  turn2: clockIcon([[9, 7], [8, 7], [7, 7], [6, 7]]),
-  turn3: clockIcon([[9, 10], [8, 9], [7, 8], [6, 7]]),
-  turn4: clockIcon([[6, 10], [6, 9], [6, 8], [6, 7]]),
-  turn5: clockIcon([[3, 10], [4, 9], [5, 8], [6, 7]]),
-  turnhour: [
-    '', '..yyyyyyyyyy....', '..ySSSSSSSSy....', '...ySSSSSSy.....', '....ySSSSy......',
-    '.....ySSy.......', '......yy........', '.....y..y.......', '....y....y......',
-    '...y..SS..y.....', '..y..SSSS..y....', '..ySSSSSSSSy....', '..yyyyyyyyyy....',
-  ],
   init_green: [
     '', '', '....111111......', '..11222222 11...', '.122......221...', '12..........21..',
     '1............1..', '1............1..', '12..........21..', '.122......221...',
@@ -1235,7 +1502,153 @@ const ICON_SRC3 = {
 
 Object.assign(ICON_SRC, ICON_SRC2, ICON_SRC3);
 
-export const ICONS = Object.keys(ICON_SRC);
+// --- painted overlay sprites -----------------------------------------------
+//
+// turn0..turn5 and turnhour are drawn at 44 px inside the 3D window, far too
+// large to survive being a 16x16 character grid blown up nearly three times: at
+// that size the original is a *painted object* - a brass clock whose hand walks
+// round as the party spends action points, and an hourglass while the monsters
+// move. So these are rendered analytically at whatever size is asked for, with
+// a lit bezel, a shaded dial, a cast shadow and a hard 1-bit silhouette.
+
+/** Shade a brass surface by how squarely it faces the upper-left key light. */
+function litBrass(nx, ny, base = 0.5, k = 0.42) {
+  return BRASS(clamp(base - (nx + ny) * k * 0.5, 0.04, 1));
+}
+
+function paintClock(size, hand) {
+  const s = Math.max(12, size | 0);
+  const pix = new Pix(s, s);
+  const cx = (s - 1) / 2, cy = (s - 1) / 2;
+  const R = s * 0.44;
+  const RIM = R * 0.80;          // inner edge of the brass bezel
+  const put = (x, y, c) => { if (x >= 0 && y >= 0 && x < s && y < s) pix.setArr(x, y, c); };
+
+  for (let y = 0; y < s; y++) {
+    for (let x = 0; x < s; x++) {
+      const dx = x - cx, dy = y - cy;
+      const d = Math.hypot(dx, dy);
+      // Cast shadow: the disc stands a couple of pixels off the wall behind it.
+      if (d > R && Math.hypot(dx - 2, dy - 2) <= R) { put(x, y, hexC(0x100c08)); continue; }
+      if (d > R) continue;
+      const nx = dx / R, ny = dy / R;
+      if (d > RIM) {
+        // Bezel: a torus, lit upper-left and dark lower-right, with a hard dark
+        // line right on the silhouette so it keys cleanly over the world.
+        put(x, y, d > R - 1.2 ? BRASS(0.06) : litBrass(nx, ny, 0.62, 0.95));
+      } else {
+        // Dial: blued steel, brightest under the bezel's upper-left reflection.
+        const g = clamp(0.16 - (nx + ny) * 0.07 - (d / RIM) * 0.05, 0.02, 1);
+        put(x, y, mixC(STONE(g), BRASS(0.08), 0.25));
+      }
+    }
+  }
+
+  const canvas = pix.toCanvas();
+  const g = ctx2d(canvas);
+  // Twelve engraved hour ticks; the quarters run longer and brighter.
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2 - Math.PI / 2;
+    const quarter = i % 3 === 0;
+    const r0 = RIM * (quarter ? 0.62 : 0.76), r1 = RIM * 0.92;
+    for (let r = r0; r <= r1; r += 0.5) {
+      const px = Math.round(cx + Math.cos(a) * r), py = Math.round(cy + Math.sin(a) * r);
+      rect(g, px, py, 1, 1, quarter ? BRASS(0.90) : BRASS(0.58));
+      rect(g, px + 1, py + 1, 1, 1, BRASS(0.16));
+    }
+  }
+  // The hand. `hand` is 0..5: 0 points straight up and each step is 60 degrees
+  // clockwise, so the sprite reads as a countdown of remaining action points.
+  const a = (hand / 6) * Math.PI * 2 - Math.PI / 2;
+  const len = RIM * 0.80;
+  const wide = Math.max(1, Math.round(s / 22));
+  for (let r = 0; r <= len; r += 0.4) {
+    const px = Math.round(cx + Math.cos(a) * r), py = Math.round(cy + Math.sin(a) * r);
+    // Taper toward the tip and keep one shaded flank so it reads as forged.
+    const half = Math.max(0, Math.round(wide * (0.4 + (1 - r / len) * 0.9)));
+    rect(g, px - half, py - half, half * 2 + 1, half * 2 + 1, BRASS(0.94));
+    rect(g, px + 1, py + 1, half + 1, half + 1, BRASS(0.34));
+  }
+  // Centre boss.
+  const bo = Math.max(1, Math.round(s / 16));
+  for (let y = -bo; y <= bo; y++) {
+    for (let x = -bo; x <= bo; x++) {
+      if (Math.hypot(x, y) > bo) continue;
+      rect(g, Math.round(cx) + x, Math.round(cy) + y, 1, 1, litBrass(x / bo, y / bo, 0.70, 0.7));
+    }
+  }
+  return quantise(canvas);
+}
+
+// The sand in the glass; warm amber against the cold blue of the bulbs.
+const HOURGLASS_SAND = toneRamp(0x6e3c0c, 0xc88820, 0xf0cc70);
+
+function paintHourglass(size) {
+  const s = Math.max(12, size | 0);
+  const pix = new Pix(s, s);
+  const put = (x, y, c) => { if (x >= 0 && y >= 0 && x < s && y < s) pix.setArr(x, y, c); };
+  const capH = Math.max(2, Math.round(s * 0.10));
+  const top = Math.round(s * 0.08), bot = s - top - 1;
+  const midY = (top + bot) / 2;
+  const halfW = s * 0.32, neck = Math.max(1, s * 0.045);
+
+  for (let y = top; y <= bot; y++) {
+    // Glass profile: two cones meeting at the waist.
+    const k = Math.abs(y - midY) / (midY - top);
+    const half = neck + (halfW - neck) * k;
+    const x0 = Math.round(s / 2 - half), x1 = Math.round(s / 2 + half);
+    const inCap = y < top + capH || y > bot - capH;
+    for (let x = x0; x <= x1; x++) {
+      const u = (x - s / 2) / Math.max(1, half);
+      if (inCap) {
+        // Turned wooden caps top and bottom.
+        put(x, y, WOOD(clamp(0.42 - u * 0.20 + (y < top + capH ? 0.10 : -0.06), 0, 1)));
+        continue;
+      }
+      // Glass: dark and cool, with a bright specular down the left third.
+      let c = mixC(STONE(clamp(0.10 - u * 0.06, 0, 1)), hexC(0x1c2630), 0.6);
+      if (u > -0.74 && u < -0.46) c = mixC(c, [226, 236, 246], 0.62);
+      if (u > 0.62) c = mixC(c, hexC(0x0a0806), 0.6);
+      // Sand: a heap in the lower bulb, a thin stream through the waist, and a
+      // shallow remnant still to fall in the upper one.
+      const below = y > midY;
+      const heapTop = bot - capH - (bot - capH - midY) * 0.62;
+      if (below && y >= heapTop) {
+        const spread = (y - heapTop) / Math.max(1, bot - capH - heapTop);
+        if (Math.abs(u) < 0.35 + spread * 0.75) {
+          c = HOURGLASS_SAND(clamp(0.42 - u * 0.28 + spread * 0.22, 0, 1));
+        }
+      } else if (Math.abs(x - s / 2) <= Math.max(0.6, neck * 0.9)) {
+        c = HOURGLASS_SAND(0.80);
+      } else if (!below && y < midY - (midY - top - capH) * 0.35 && Math.abs(u) < 0.86) {
+        c = HOURGLASS_SAND(clamp(0.34 - u * 0.22, 0, 1));
+      }
+      put(x, y, c);
+    }
+    // Brass frame posts either side of the glass.
+    put(x0 - 1, y, BRASS(0.68));
+    put(x1 + 1, y, BRASS(0.24));
+  }
+  const canvas = pix.toCanvas();
+  const g = ctx2d(canvas);
+  // Cap mouldings.
+  for (const cy of [top, top + capH - 1, bot - capH + 1, bot]) {
+    const k = Math.abs(cy - midY) / (midY - top);
+    const half = Math.round(neck + (halfW - neck) * k) + 2;
+    hline(g, Math.round(s / 2 - half), cy, half * 2 + 1, cy <= midY ? WOOD(0.85) : WOOD(0.10));
+  }
+  return quantise(canvas);
+}
+
+// Registered by name so the HUD carries on asking for `turn3` / `turnhour`.
+const PAINTED_ICONS = {
+  turn0: (s) => paintClock(s, 0), turn1: (s) => paintClock(s, 1),
+  turn2: (s) => paintClock(s, 2), turn3: (s) => paintClock(s, 3),
+  turn4: (s) => paintClock(s, 4), turn5: (s) => paintClock(s, 5),
+  turnhour: (s) => paintHourglass(s),
+};
+
+export const ICONS = Object.keys(ICON_SRC).concat(Object.keys(PAINTED_ICONS));
 
 const _iconCache = new Map();
 const _iconGrid = new Map();
@@ -1309,6 +1722,12 @@ export function iconCanvas(id, size = 16) {
   const key = id + ':' + s;
   let c = _iconCache.get(key);
   if (c) return c;
+
+  if (PAINTED_ICONS[id]) {
+    const painted = PAINTED_ICONS[id](s);
+    _iconCache.set(key, painted);
+    return painted;
+  }
 
   const canvas = makeCanvas(s, s);
   if (!ICON_SRC[id]) { _iconCache.set(key, canvas); return canvas; }

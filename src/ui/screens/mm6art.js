@@ -25,6 +25,9 @@ import { hash2, fbm2, valueNoise2, clamp } from '../../core/rng.js';
 // --- palette plumbing -------------------------------------------------------
 
 const _snapMemo = new Map();
+
+/** BAYER8 ships flat; index it as an 8x8. */
+function bay(x, y) { return BAYER8[(((y & 7) << 3) | (x & 7))]; }
 function snapC(r, g, b) {
   const R = r < 0 ? 0 : r > 255 ? 255 : r | 0;
   const G = g < 0 ? 0 : g > 255 ? 255 : g | 0;
@@ -78,12 +81,11 @@ export function paintCanvas(w, h, fn, dither = 9) {
   const img = g.createImageData(w, h);
   const d = img.data;
   for (let y = 0; y < h; y++) {
-    const brow = BAYER8[y & 7];
     for (let x = 0; x < w; x++) {
       const col = fn(x, y);
       const i = (y * w + x) * 4;
       if (!col) { d[i + 3] = 0; continue; }
-      const t = brow[x & 7] * dither;
+      const t = bay(x, y) * dither;
       const p = snapC(col[0] + t, col[1] + t, col[2] + t);
       d[i] = p[0]; d[i + 1] = p[1]; d[i + 2] = p[2];
       d[i + 3] = col[3] === undefined ? 255 : col[3];
@@ -157,7 +159,7 @@ export function stipple(ctx, x, y, w, h, c, density = 0.5) {
   x |= 0; y |= 0; w |= 0; h |= 0;
   for (let j = 0; j < h; j++) {
     for (let i = 0; i < w; i++) {
-      if (BAYER8[(y + j) & 7][(x + i) & 7] + 0.5 >= density) continue;
+      if (bay(x + i, y + j) + 0.5 >= density) continue;
       ctx.fillRect(x + i, y + j, 1, 1);
     }
   }
@@ -312,6 +314,8 @@ export const PAPER = {
   sheet: { base: '#c8b48c', lo: '#a89068', hi: '#e4d4b0' },
   spell: { base: '#d4c29c', lo: '#b0a078', hi: '#ede0c4' },
   book: { base: '#cfc0a0', lo: '#ac9c78', hi: '#e8dcbc' },
+  // Tooled hide: the inventory field and the paperdoll's backing board.
+  hide: { base: '#4a3a26', lo: '#2a2014', hi: '#6e5a3c' },
 };
 
 /**
@@ -321,6 +325,9 @@ export const PAPER = {
 export function paperCanvas(w, h, kind = 'sheet', seed = 11) {
   const K = PAPER[kind] || PAPER.sheet;
   const lo = hexRGB(K.lo), hi = hexRGB(K.hi);
+  // Dark stock has fewer palette entries to land on, so it gets less dither -
+  // otherwise the ordered pattern reads as a woven screen rather than as hide.
+  const dark = kind === 'hide';
   return paintCanvas(w, h, (x, y) => {
     const coarse = fbm2(x * 0.035, y * 0.045, 2, 4, 0.55, seed) * 0.5 + 0.5;
     // Paper fibre: long, thin, mostly horizontal streaks.
@@ -328,15 +335,15 @@ export function paperCanvas(w, h, kind = 'sheet', seed = 11) {
     const fleck = (hash2(x, y, seed + 7) - 0.5) * 0.10;
     // Blotching: a handful of stains stamped by a low-frequency ridge.
     const blot = fbm2(x * 0.012 + 4, y * 0.014, 2, 2, 0.6, seed + 91);
-    const stain = blot > 0.72 ? (blot - 0.72) * 1.9 : 0;
-    let t = 0.56 + (coarse - 0.5) * 0.85 + fibre * 0.13 + fleck - stain * 0.55;
+    const stain = blot > 0.72 ? (blot - 0.72) * (dark ? 0.7 : 1.9) : 0;
+    let t = 0.56 + (coarse - 0.5) * (dark ? 0.5 : 0.85) + fibre * 0.13 + fleck - stain * 0.55;
     // Worn edge: the rim darkens on a noisy boundary, not a straight inset.
     const wob = valueNoise2(x * 0.09, y * 0.09, seed + 5) * 5;
     const ex = Math.min(x, w - 1 - x) + wob, ey = Math.min(y, h - 1 - y) + wob;
     const e = Math.min(ex / 13, ey / 11);
-    if (e < 1) t -= (1 - clamp(e, 0, 1)) * 0.42;
+    if (e < 1) t -= (1 - clamp(e, 0, 1)) * (dark ? 0.28 : 0.42);
     return mix(lo, hi, band(clamp(t, 0, 1), 12));
-  }, 8);
+  }, dark ? 3 : 8);
 }
 
 export function paper(ctx, x, y, w, h, kind = 'sheet', seed = 11) {
@@ -377,7 +384,7 @@ export function lightPool(ctx, cx, cy, r, colorHex, strength = 1) {
     for (let dx = -k; dx <= k; dx++) {
       if (Math.abs(dx) < k0) continue;
       const xx = Math.round(cx) + dx;
-      if (BAYER8[yy & 7][xx & 7] > 0) continue;
+      if (bay(xx, yy) > 0) continue;
       ctx.fillRect(xx, yy, 1, 1);
     }
   }
@@ -686,6 +693,31 @@ export const SIGIL_INK = {
   dark: ['#160c20', '#4a3060', '#9c7cc0'],
 };
 
+/**
+ * The plaque a sigil is painted on. Four shapes, chosen by tier, so eleven
+ * spells in one school are told apart at a glance before you read the motif.
+ * `inside(dx, dy)` is the shape's own hard mask.
+ */
+function plaqueMask(shape, R) {
+  switch (shape) {
+    case 1: {                                   // cut square (octagon)
+      const cut = R * 0.42;
+      return (dx, dy) => Math.abs(dx) <= R && Math.abs(dy) <= R
+        && Math.abs(dx) + Math.abs(dy) <= R * 2 - cut;
+    }
+    case 2:                                     // diamond
+      return (dx, dy) => Math.abs(dx) + Math.abs(dy) <= R * 1.06;
+    case 3:                                     // notched disc
+      return (dx, dy) => {
+        const d = Math.sqrt(dx * dx + dy * dy);
+        const a = Math.atan2(dy, dx);
+        return d <= R - (Math.cos(a * 6) > 0.72 ? R * 0.16 : 0);
+      };
+    default:
+      return (dx, dy) => dx * dx + dy * dy <= R * R;
+  }
+}
+
 function sigilCanvas(school, tier, s) {
   const P = SIGIL_INK[school] || SIGIL_INK.spirit;
   const ink = hexRGB(P[0]), mid = hexRGB(P[1]), lit = hexRGB(P[2]);
@@ -693,22 +725,20 @@ function sigilCanvas(school, tier, s) {
   const g = c.getContext('2d');
   const cx = s / 2, cy = s / 2;
   const R = s / 2 - 1;
+  const shape = (tier + (school.length % 2)) % 4;
+  const inside = plaqueMask(shape, R);
 
-  // Every sigil is painted on a scorched, ringed medallion so 99 of them read
-  // as one set. The ring is drawn scanline-wise: no arcs, no antialiasing.
-  for (let dy = -Math.round(R); dy <= Math.round(R); dy++) {
-    const k = Math.round(Math.sqrt(Math.max(0, R * R - dy * dy)));
-    if (k <= 0) continue;
-    const y = Math.round(cy) + dy;
-    const t = band(1 - (dy + R) / (2 * R), 5);
-    rct(g, Math.round(cx) - k, y, k * 2, 1, mix(shade(ink, 1.25), ink, 1 - t * 0.8));
-  }
-  // Outer rim: lit at the top-left, dark at the bottom-right.
-  for (let a = 0; a < 96; a++) {
-    const ang = (a / 96) * Math.PI * 2;
-    const x = Math.round(cx + Math.cos(ang) * R), y = Math.round(cy + Math.sin(ang) * R);
-    const up = Math.cos(ang + Math.PI * 0.75) > 0;
-    rct(g, x, y, 1, 1, up ? mix(mid, [255, 255, 255], 0.25) : shade(ink, 0.5));
+  // Every sigil is painted on a scorched plaque so 99 of them read as one set.
+  // Painted pixel by pixel: no arcs, no strokes, no antialiasing.
+  for (let dy = -Math.ceil(R); dy <= Math.ceil(R); dy++) {
+    for (let dx = -Math.ceil(R); dx <= Math.ceil(R); dx++) {
+      if (!inside(dx, dy)) continue;
+      const inner = inside(dx + 1, dy) && inside(dx - 1, dy) && inside(dx, dy + 1) && inside(dx, dy - 1);
+      const t = band(1 - (dy + R) / (2 * R), 5);
+      let col = mix(shade(ink, 1.3), ink, 1 - t * 0.8);
+      if (!inner) col = (dx + dy < 0) ? mix(mid, [255, 255, 255], 0.3) : shade(ink, 0.45);
+      rct(g, Math.round(cx) + dx, Math.round(cy) + dy, 1, 1, col);
+    }
   }
 
   // Motif: one shape family per school, varied per tier so 11 read apart.
@@ -723,13 +753,17 @@ function sigilCanvas(school, tier, s) {
 
   switch (school) {
     case 'fire': {
-      // A flame tongue over a fan of sparks.
+      // One to three tongues over a fan of sparks; both counts move with tier.
       for (let i = 0; i < rays; i++) {
         const a = rot + (i / rays) * Math.PI * 2;
-        stroke(cx + Math.cos(a) * r2 * 0.55, cy + Math.sin(a) * r2 * 0.55,
+        stroke(cx + Math.cos(a) * r2 * 0.5, cy + Math.sin(a) * r2 * 0.5,
           cx + Math.cos(a) * r2, cy + Math.sin(a) * r2, 1, mid);
       }
-      flame(g, cx, cy + r2 * 0.7, s * 0.44, s * 0.55, v);
+      const n = 1 + (v % 3);
+      for (let i = 0; i < n; i++) {
+        const off = (i - (n - 1) / 2) * r2 * 0.62;
+        flame(g, cx + off, cy + r2 * 0.78, s * (0.34 - n * 0.04), s * (0.44 + (v % 4) * 0.07), v + i * 3);
+      }
       break;
     }
     case 'air': {
@@ -821,14 +855,23 @@ function sigilCanvas(school, tier, s) {
     }
   }
 
-  // Cut the medallion back to a circle - anything the motif pushed outside the
-  // rim is clipped, hard, with no feathering.
+  // Pips punched round the rim: one more per tier, so the eleventh spell of a
+  // school is legibly not the first even where the motifs are close.
+  const pips = 1 + (tier % 5);
+  for (let i = 0; i < pips; i++) {
+    const a = -Math.PI / 2 + (i / pips) * Math.PI * 2 + tier * 0.2;
+    const x = Math.round(cx + Math.cos(a) * R * 0.82), y = Math.round(cy + Math.sin(a) * R * 0.82);
+    rct(g, x, y + 1, 2, 2, pc(shade(ink, 0.5)));
+    rct(g, x, y, 2, 2, pc(lit));
+  }
+
+  // Cut the plaque back to its own silhouette - anything the motif pushed
+  // outside the rim is clipped, hard, with no feathering.
   const img = g.getImageData(0, 0, s, s);
   const d = img.data;
   for (let y = 0; y < s; y++) {
     for (let x = 0; x < s; x++) {
-      const dx = x + 0.5 - cx, dy = y + 0.5 - cy;
-      if (dx * dx + dy * dy > (R + 0.6) * (R + 0.6)) d[(y * s + x) * 4 + 3] = 0;
+      if (!inside(x - Math.round(cx), y - Math.round(cy))) d[(y * s + x) * 4 + 3] = 0;
     }
   }
   g.putImageData(img, 0, 0);

@@ -123,10 +123,11 @@ function slotPlacement(anchor) {
   const a = anchor;
   const hw = a.head.w, tw = a.torso.w;
   return {
-    helm: { cx: a.head.cx, cy: a.head.cy - 3, w: Math.round(hw * 1.30), h: Math.round(a.head.h * 0.92) },
+    // The helm sits on the crown and leaves the face showing, as a paperdoll must.
+    helm: { cx: a.head.cx, cy: a.head.cy - Math.round(a.head.h * 0.30), w: Math.round(hw * 1.18), h: Math.round(a.head.h * 0.68) },
     amulet: { cx: a.neck.cx, cy: a.neck.y + 8, w: 20, h: 22 },
     cloak: { cx: a.torso.cx, cy: a.torso.cy + 12, w: Math.round(tw * 2.0), h: Math.round(a.torso.h * 1.9) },
-    armor: { cx: a.torso.cx, cy: a.torso.cy + 2, w: Math.round(tw * 1.34), h: Math.round(a.torso.h * 1.16) },
+    armor: { cx: a.torso.cx, cy: a.torso.cy + 2, w: Math.round(tw * 1.16), h: Math.round(a.torso.h * 1.10) },
     belt: { cx: a.waist.cx, cy: a.waist.y + 1, w: Math.round(tw * 1.24), h: 12 },
     boots: { cx: a.feet.cx, cy: a.feet.y - 2, w: Math.round(a.feet.w * 1.15), h: 26 },
     gauntlets: { cx: a.torso.cx, cy: a.hands.left.y + 4, w: Math.round(tw * 2.1), h: 20 },

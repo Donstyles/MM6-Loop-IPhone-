@@ -27,15 +27,31 @@ import {
 import { spellById } from '../../game/spells.js';
 import { InventoryScreen, drawPaperdoll } from './inventory.js';
 
+// The sheet is #C8B48C parchment, so it is written in ink, not in the HUD's
+// white-on-dark palette: brown-gold labels, dark ink values, and the engine's
+// green / scarlet taken down a stop so they sit on paper.
+const INK = '#2c1e0c';
+const LABEL = '#5c400f';
+const HEAD = '#6b4a10';
+const INK_GOOD = '#166b16';
+const INK_BAD = '#a02008';
+const INK_RED = '#8c0808';
+const INK_DIM = '#7a6a50';
+const INK_LEARN = '#1a4f96';
+const RULE = '#7a6038';
+/** MM6's engraved text: a dark main colour over a pale shadow. */
+const EMB = '#ece0c2';
+const T = (ctx, str, x, y, o = {}) => F.drawText(ctx, str, x, y, Object.assign({ shadow: EMB }, o));
+
 const TABS = ['Stats', 'Skills', 'Inventory', 'Awards'];
 
 /** Condition colour by severity: MM6 goes white -> amber -> scarlet -> red. */
 function conditionColor(condId) {
   const c = CONDITIONS[condId];
-  if (!c || c.severity === 0) return GREEN;
-  if (c.severity >= 14) return RED;
-  if (c.severity >= 8) return SCARLET;
-  return CANARY;
+  if (!c || c.severity === 0) return INK_GOOD;
+  if (c.severity >= 14) return INK_RED;
+  if (c.severity >= 8) return INK_BAD;
+  return LABEL;
 }
 
 function fmtNum(n) {
@@ -81,13 +97,13 @@ export class CharSheetScreen extends Screen {
 
     if (ch) {
       const klass = CLASSES[ch.class] || CLASSES[ch.klass] || null;
-      F.drawText(ctx, `${ch.name || 'Unnamed'} the ${klass ? klass.name : ''}`.trim(),
-        px(26), py(12), { face: 'title', color: CANARY });
+      T(ctx, `${ch.name || 'Unnamed'} the ${klass ? klass.name : ''}`.trim(),
+        px(26), py(12), { face: 'title', color: HEAD });
       const sp = ch.skillPoints | 0;
-      F.drawText(ctx, `Skill Points: ${sp}`, px(435), py(16), {
-        align: 'right', color: sp > 0 ? BOLT : WHITE,
+      T(ctx, `Skill Points: ${sp}`, px(435), py(16), {
+        align: 'right', color: sp > 0 ? INK_LEARN : INK,
       });
-      A.rule(ctx, px(20), py(34), PANEL.w - 40, '#c8b48c', 0.35);
+      A.rule(ctx, px(20), py(34), PANEL.w - 40, RULE, 0.35);
 
       if (this.tab === 0) this.drawStats(ctx, ch);
       else if (this.tab === 1) this.drawSkills(ctx, ch);
@@ -96,11 +112,11 @@ export class CharSheetScreen extends Screen {
       // The paperdoll sits in the right column on every tab, as MM6 does.
       drawPaperdoll(ctx, this, ch);
     } else {
-      F.drawText(ctx, 'No character selected.', px(PANEL.w / 2), py(160),
-        { align: 'center', color: WHITE });
+      T(ctx, 'No character selected.', px(PANEL.w / 2), py(160),
+        { align: 'center', color: INK });
     }
 
-    this.drawHelpLine(ctx, 302);
+    this.drawHelpLine(ctx, 302, '#4a3418');
     const clicked = drawTabs(ctx, this.ui, this.id, TAB_X, TAB_Y, TAB_W, TAB_H, TABS,
       this.tab === 3 ? 3 : this.tab);
     if (clicked >= 0) {
@@ -120,32 +136,32 @@ export class CharSheetScreen extends Screen {
     for (const st of STATS) {
       const base = (ch.stats && ch.stats[st.id]) | 0;
       const cur = effectiveStat(ch, st.id);
-      const col = cur > base ? GREEN : cur < base ? SCARLET : WHITE;
+      const col = cur > base ? INK_GOOD : cur < base ? INK_BAD : INK;
       const hit = this.ui.region(`${this.id}:st:${st.id}`, px(LX), py(y - 2), LW, 13,
         `${st.name}: ${st.desc}`);
       leaderRow(ctx, st.name, `${cur} (${base})`, px(LX), py(y), LW, {
-        color: hit.hover ? HILITE : WHITE, valueColor: col,
+        color: hit.hover ? LABEL : INK, valueColor: col, shadow: EMB,
       });
       y += 14;
     }
 
     y += 6;
-    A.rule(ctx, px(LX), py(y - 4), LW, '#c8b48c', 0.3);
+    A.rule(ctx, px(LX), py(y - 4), LW, RULE, 0.3);
     const hp = maxHP(ch), sp = maxSP(ch);
     const cond = worstCondition(ch);
     const qs = typeof ch.quickSpell === 'string' ? spellById(ch.quickSpell) : ch.quickSpell;
     const left = [
-      ['Hit Points', `${ch.hp | 0} / ${hp}`, (ch.hp | 0) <= hp * 0.25 ? RED : (ch.hp | 0) < hp ? SCARLET : WHITE,
+      ['Hit Points', `${ch.hp | 0} / ${hp}`, (ch.hp | 0) <= hp * 0.25 ? INK_RED : (ch.hp | 0) < hp ? INK_BAD : INK,
         'Hit points. At zero the character falls unconscious.'],
-      ['Spell Points', `${ch.sp | 0} / ${sp}`, WHITE, 'Spell points, spent to cast spells.'],
-      ['Armour Class', String(armorClass(ch)), WHITE, 'How hard the character is to hit.'],
+      ['Spell Points', `${ch.sp | 0} / ${sp}`, INK, 'Spell points, spent to cast spells.'],
+      ['Armour Class', String(armorClass(ch)), INK, 'How hard the character is to hit.'],
       ['Condition', cond.name, conditionColor(cond.id), cond.desc || ''],
-      ['Quick Spell', qs ? qs.name : 'None', qs ? BOLT : DIM,
+      ['Quick Spell', qs ? qs.name : 'None', qs ? INK_LEARN : INK_DIM,
         'The spell cast by the quick-spell button. Set it in the spellbook.'],
     ];
     for (const r of left) {
       const hit = this.ui.region(`${this.id}:lf:${r[0]}`, px(LX), py(y - 2), LW, 13, r[3]);
-      leaderRow(ctx, r[0], r[1], px(LX), py(y), LW, { color: hit.hover ? HILITE : WHITE, valueColor: r[2] });
+      leaderRow(ctx, r[0], r[1], px(LX), py(y), LW, { color: hit.hover ? LABEL : INK, valueColor: r[2], shadow: EMB });
       y += 14;
     }
 
@@ -154,33 +170,33 @@ export class CharSheetScreen extends Screen {
     const band = ageBand(ch.age || 18);
     const xp = ch.xp !== undefined ? ch.xp : (ch.experience || 0);
     const right = [
-      ['Age', `${ch.age || 18} (${band.name})`, WHITE, `Age band ${band.name}. The old lose Might and Speed but gain wit.`],
-      ['Level', String(ch.level | 0), WHITE, 'Character level. Train in a town to raise it.'],
-      ['Experience', fmtNum(xp), WHITE,
+      ['Age', `${ch.age || 18} (${band.name})`, INK, `Age band ${band.name}. The old lose Might and Speed but gain wit.`],
+      ['Level', String(ch.level | 0), INK, 'Character level. Train in a town to raise it.'],
+      ['Experience', fmtNum(xp), INK,
         `${fmtNum(Math.max(0, xpForLevel((ch.level | 0) + 1) - xp))} experience to the next level.`],
       null,
-      ['Attack', signed(attackBonus(ch, ch.weaponSkill || null, false)), WHITE, 'Bonus to hit in melee.'],
-      ['Damage', signed(damageBonus(ch, ch.weaponSkill || null, false)), WHITE, 'Bonus damage on every melee blow.'],
-      ['Shoot', signed(attackBonus(ch, 'bow', true)), WHITE, 'Bonus to hit with a bow.'],
-      ['Shoot Damage', signed(damageBonus(ch, 'bow', true)), WHITE, 'Bonus damage with a bow. Might never helps here.'],
+      ['Attack', signed(attackBonus(ch, ch.weaponSkill || null, false)), INK, 'Bonus to hit in melee.'],
+      ['Damage', signed(damageBonus(ch, ch.weaponSkill || null, false)), INK, 'Bonus damage on every melee blow.'],
+      ['Shoot', signed(attackBonus(ch, 'bow', true)), INK, 'Bonus to hit with a bow.'],
+      ['Shoot Damage', signed(damageBonus(ch, 'bow', true)), INK, 'Bonus damage with a bow. Might never helps here.'],
     ];
     for (const r of right) {
-      if (!r) { A.rule(ctx, px(RX), py(ry + 3), RW, '#c8b48c', 0.3); ry += 10; continue; }
+      if (!r) { A.rule(ctx, px(RX), py(ry + 3), RW, RULE, 0.3); ry += 10; continue; }
       const hit = this.ui.region(`${this.id}:dv:${r[0]}`, px(RX), py(ry - 2), RW, 13, r[3]);
-      leaderRow(ctx, r[0], r[1], px(RX), py(ry), RW, { color: hit.hover ? HILITE : WHITE, valueColor: r[2] });
+      leaderRow(ctx, r[0], r[1], px(RX), py(ry), RW, { color: hit.hover ? LABEL : INK, valueColor: r[2], shadow: EMB });
       ry += 14;
     }
 
     ry += 6;
-    F.drawText(ctx, 'Resistances', px(RX), py(ry), { color: CANARY });
-    A.rule(ctx, px(RX), py(ry + 12), RW, '#c8b48c', 0.3);
+    T(ctx, 'Resistances', px(RX), py(ry), { color: HEAD });
+    A.rule(ctx, px(RX), py(ry + 12), RW, RULE, 0.3);
     ry += 17;
     for (const res of RESISTANCES) {
       const v = resistance(ch, res.id);
       const hit = this.ui.region(`${this.id}:rs:${res.id}`, px(RX), py(ry - 2), RW, 13,
         `${res.name}${res.alias ? ' (' + res.alias + ')' : ''} resistance: every point makes halving the damage likelier.`);
       leaderRow(ctx, res.name, String(v), px(RX), py(ry), RW, {
-        color: hit.hover ? HILITE : WHITE, valueColor: v > 0 ? GREEN : WHITE,
+        color: hit.hover ? LABEL : INK, valueColor: v > 0 ? INK_GOOD : INK, shadow: EMB,
       });
       ry += 14;
     }
@@ -226,12 +242,12 @@ export class CharSheetScreen extends Screen {
     for (const col of cols) {
       let y = 44;
       for (const cat of col.cats) {
-        F.drawText(ctx, SKILL_CATEGORIES[cat], px(col.x), py(y), { color: CANARY });
-        A.rule(ctx, px(col.x), py(y + 12), col.w, '#c8b48c', 0.3);
+        T(ctx, SKILL_CATEGORIES[cat], px(col.x), py(y), { color: HEAD });
+        A.rule(ctx, px(col.x), py(y + 12), col.w, RULE, 0.3);
         y += 17;
         const list = groups[cat];
         if (!list.length) {
-          F.drawText(ctx, 'None', px(col.x + 6), py(y), { face: 'small', color: DIM });
+          T(ctx, 'None', px(col.x + 6), py(y), { face: 'small', color: INK_DIM });
           y += 15;
           continue;
         }
@@ -243,17 +259,17 @@ export class CharSheetScreen extends Screen {
             `${skillDescription(s.def.id, s.level, s.mastery)}  [${cost} points to raise]`);
           if (hit.click && affordable) { this.spend(ch, s.def.id); this.sound('click'); }
           // MM6 paints a raisable skill bolt blue and everything else red.
-          const c = hit.hover ? HILITE : affordable ? BOLT : RED;
-          F.drawText(ctx, s.def.name, px(col.x), py(y), { face: 'small', color: c });
-          F.drawText(ctx, `(${s.level})`, px(col.x + col.w - 52), py(y), {
+          const c = hit.hover ? LABEL : affordable ? INK_LEARN : INK_RED;
+          T(ctx, s.def.name, px(col.x), py(y), { face: 'small', color: c });
+          T(ctx, `(${s.level})`, px(col.x + col.w - 52), py(y), {
             face: 'small', color: c, align: 'right',
           });
           // A capped skill prints its rank in canary: this is as far as the
           // class can ever take it.
           const capped = cap && s.mastery >= cap;
-          F.drawText(ctx, MASTERY_NAMES[s.mastery] || '-', px(col.x + col.w), py(y), {
+          T(ctx, MASTERY_NAMES[s.mastery] || '-', px(col.x + col.w), py(y), {
             face: 'small', align: 'right',
-            color: capped ? CANARY : s.mastery >= 2 ? BOLT : c,
+            color: capped ? HEAD : s.mastery >= 2 ? INK_LEARN : c,
           });
           y += 13;
         }
@@ -292,7 +308,7 @@ export class CharSheetScreen extends Screen {
     for (let i = 0; i < visible && i + this.awardScroll < list.length; i++) {
       const a = list[i + this.awardScroll];
       const y = top + i * rowH;
-      const color = a.kind === 'none' ? DIM : PASTELS[(i + this.awardScroll) % PASTELS.length];
+      const color = a.kind === 'none' ? INK_DIM : PASTELS[(i + this.awardScroll) % PASTELS.length];
       drawWrapped(ctx, a.text, px(x + 4), py(y), w - 8, {
         face: 'small', color, maxLines: 2, lineHeight: 9,
       });

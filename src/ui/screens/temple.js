@@ -14,7 +14,7 @@ import { healCost, worstCondition, CONDITIONS, maxHP, maxSP } from '../../game/s
 import {
   HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, paintWall, paintFloor,
   paintClutter, vignette, members, activeMember, charName, partyGold, spend, hasCondition,
-  clearCondition, conditionIds, C_WHITE, C_CANARY, C_DIM, C_RED, C_GREEN,
+  clearCondition, conditionIds, MM6, C_WHITE, C_CANARY, C_DIM, C_RED, C_GREEN,
 } from './dialogue.js';
 
 const GODS = ['The Sun', 'The Moon', 'The Sky', 'The Forge', 'The Deep'];
@@ -49,58 +49,70 @@ export function paintTempleInterior(g, w, h, tint = '#e1cd23') {
     g.fillRect(cx - 18, horizon - 12, 36, 12);
   }
 
-  // Rose window: lead cames radiating from the centre, glass in the panes.
-  const rx = w / 2, ry = 88, rr = 62;
-  g.fillStyle = rampCss('stone', 3);
-  g.beginPath(); g.arc(rx, ry, rr + 7, 0, Math.PI * 2); g.fill();
-  const cols = ['#c02818', '#2848d8', '#e0d020', '#28c828', '#9038c8', '#e08018', '#40d8d8'];
-  for (let i = 0; i < 16; i++) {
-    const a0 = (i / 16) * Math.PI * 2, a1 = ((i + 1) / 16) * Math.PI * 2;
-    g.fillStyle = cols[i % cols.length];
-    g.beginPath();
-    g.moveTo(rx, ry);
-    g.arc(rx, ry, rr, a0 + 0.02, a1 - 0.02);
-    g.closePath();
-    g.fill();
+  // Rose window. Deep jewel glass - garnet, lapis, bottle-green, amethyst,
+  // amber - in heavy black leading, painted pane by pane in hard scanlines.
+  // Nothing here is a pure hue and nothing is stroked.
+  const rx = Math.round(w / 2), ry = 88, rr = 62;
+  MM6.disc(g, rx, ry, rr + 8, rampCss('stone', 3));
+  MM6.disc(g, rx, ry, rr + 5, rampCss('stone', 6));
+  const GLASS = [
+    [96, 18, 26], [22, 38, 96], [18, 66, 44], [72, 26, 84],
+    [124, 76, 16], [26, 62, 84], [104, 40, 18], [40, 30, 78],
+  ];
+  for (let dy = -rr; dy <= rr; dy++) {
+    const k = Math.round(Math.sqrt(Math.max(0, rr * rr - dy * dy)));
+    for (let dx = -k; dx <= k; dx++) {
+      const d = Math.sqrt(dx * dx + dy * dy);
+      const a = Math.atan2(dy, dx);
+      const seg = Math.floor(((a + Math.PI) / (Math.PI * 2)) * 16);
+      const ring = d < rr * 0.28 ? 0 : d < rr * 0.62 ? 1 : 2;
+      // Leading: a fat black came between every pane and around the rim.
+      const segFrac = ((a + Math.PI) / (Math.PI * 2)) * 16 % 1;
+      const onCame = segFrac < 0.07 || segFrac > 0.93
+        || Math.abs(d - rr * 0.28) < 2.2 || Math.abs(d - rr * 0.62) < 2.2 || d > rr - 2.2;
+      if (onCame) { MM6.rct(g, rx + dx, ry + dy, 1, 1, [14, 12, 16]); continue; }
+      const base = GLASS[(seg + ring * 3) % GLASS.length];
+      // Glass is lit from behind, brightest toward the middle of each pane.
+      const lift = 0.72 + 0.55 * Math.abs(Math.sin(segFrac * Math.PI)) - ring * 0.06;
+      MM6.rct(g, rx + dx, ry + dy, 1, 1, MM6.shade(base, lift));
+    }
   }
-  g.fillStyle = '#1a1a20';
-  for (let i = 0; i < 16; i++) {
-    const a = (i / 16) * Math.PI * 2;
-    g.save();
-    g.translate(rx, ry); g.rotate(a);
-    g.fillRect(0, -1, rr, 2);
-    g.restore();
+  // The boss at the centre, an amber roundel.
+  MM6.disc(g, rx, ry, 11, MM6.shade(MM6.hexRGB(tint), 0.55));
+  MM6.disc(g, rx, ry, 8, tint);
+  MM6.lightPool(g, rx, ry, 96, tint, 0.5);
+
+  // Coloured light thrown down the nave - a stippled shaft, hard-edged.
+  const shaftTop = ry + rr;
+  for (let y = shaftTop; y < h; y++) {
+    const t = (y - shaftTop) / (h - shaftTop);
+    const halfW = rr * (1 + t * 1.1);
+    MM6.stipple(g, Math.round(rx - halfW), y, Math.round(halfW * 2), 1,
+      MM6.hexRGB(tint), 0.20 * (1 - t * 0.5));
   }
-  g.strokeStyle = '#1a1a20'; g.lineWidth = 2;
-  g.beginPath(); g.arc(rx, ry, rr * 0.55, 0, Math.PI * 2); g.stroke();
-  g.beginPath(); g.arc(rx, ry, rr, 0, Math.PI * 2); g.stroke();
-  g.fillStyle = tint;
-  g.beginPath(); g.arc(rx, ry, 13, 0, Math.PI * 2); g.fill();
-  glow(g, rx, ry, 130, tint, 0.85);
 
-  // Coloured light thrown down the nave.
-  g.save();
-  g.globalAlpha = 0.16;
-  poly(g, [rx - rr, ry + rr, rx + rr, ry + rr, rx + rr * 2.1, h, rx - rr * 2.1, h], tint);
-  g.restore();
-
-  // Altar.
+  // Altar: marble, #D0CCC0 to #F0EEE6 with #A8A498 veining.
   const ax = rx - 62, ay = horizon + 18;
-  g.fillStyle = rampCss('stone', 8); g.fillRect(ax, ay, 124, 34);
-  g.fillStyle = rampCss('stone', 12); g.fillRect(ax, ay, 124, 5);
-  g.fillStyle = rampCss('stone', 4); g.fillRect(ax, ay + 30, 124, 4);
-  g.fillStyle = rampCss('gold', 8); g.fillRect(ax + 14, ay + 12, 96, 3);
-  // Candles.
-  for (let i = 0; i < 5; i++) {
-    const cx2 = ax + 16 + i * 24;
-    g.fillStyle = rampCss('sand', 13);
-    g.fillRect(cx2, ay - 16, 4, 16);
-    g.fillStyle = '#ffd070';
-    g.fillRect(cx2 + 1, ay - 21, 2, 5);
-    glow(g, cx2 + 2, ay - 20, 16, '#ffc060', 0.9);
+  for (let y = 0; y < 34; y++) {
+    const t = 1 - y / 34;
+    MM6.rct(g, ax, ay + y, 124, 1, MM6.mix([160, 156, 146], [240, 238, 230], MM6.band(0.35 + t * 0.55, 6)));
   }
+  MM6.rct(g, ax, ay, 124, 3, [240, 238, 230]);
+  MM6.rct(g, ax, ay + 31, 124, 3, [136, 132, 122]);
+  for (let i = 0; i < 9; i++) {
+    // Veining.
+    const vy = ay + 4 + ((i * 7) % 26);
+    MM6.lineH(g, ax + 6 + i * 13, vy, ax + 22 + i * 13, vy + 3, MM6.pc([168, 164, 152]), 1);
+  }
+  MM6.rct(g, ax + 14, ay + 13, 96, 3, [186, 150, 60]);
+  MM6.rct(g, ax + 14, ay + 13, 96, 1, [236, 208, 128]);
+  // Candles, each with a real flame sprite.
+  for (let i = 0; i < 5; i++) MM6.candle(g, ax + 16 + i * 24, ay - 1, 15, i * 1.7);
+
   // A robed acolyte to one side.
-  figure(g, w * 0.80, horizon + 44, 92, 'rgba(24,20,28,0.9)', 'rgba(255,232,180,0.45)');
+  figure(g, w * 0.80, horizon + 44, 96, null, null, {
+    robe: true, hood: true, cloth: [58, 52, 74], skin: [204, 160, 122], hair: [48, 34, 22],
+  });
 
   paintClutter(g, 22, h - 8, 'crate', 22);
   vignette(g, w, h);

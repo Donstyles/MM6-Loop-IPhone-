@@ -164,11 +164,11 @@ function skinRamp(tone) {
 // still show its colour: these are the *lit* mid-tones, not the local colour of
 // a hair in shadow, which is why they read brighter than you would expect.
 const HAIR_COLOURS = {
-  black: () => mixC(rs('grey', 0.17), rs('wood', 0.22), 0.45),
-  darkbrown: () => rs('wood', 0.38),
+  black: () => mixC(rs('grey', 0.12), rs('wood', 0.17), 0.45),
+  darkbrown: () => rs('wood', 0.34),
   brown: () => rs('wood', 0.54),
-  auburn: () => mixC(rs('wood', 0.48), rs('blood', 0.46), 0.42),
-  red: () => mixC(rs('fire', 0.46), rs('wood', 0.42), 0.42),
+  auburn: () => desat(mixC(rs('wood', 0.40), rs('blood', 0.40), 0.50), 0.10),
+  red: () => mixC(rs('fire', 0.58), rs('blood', 0.52), 0.30),
   blonde: () => desat(mixC(rs('sand', 0.72), rs('gold', 0.56), 0.30), 0.08),
   sandy: () => desat(mixC(rs('sand', 0.56), rs('wood', 0.48), 0.42), 0.14),
   grey: () => rs('grey', 0.44),
@@ -283,24 +283,25 @@ export function makeFace(seed, opts = {}) {
   };
 
   const beard = sex === 'f' ? 'none' : r.weighted([
-    { v: 'none', w: young ? 6 : 3 }, { v: 'stubble', w: 4 },
+    { v: 'none', w: young ? 7 : 4.5 }, { v: 'stubble', w: 4 },
     { v: 'moustache', w: 2.5 }, { v: 'chin', w: 1.6 }, { v: 'short', w: 3.5 },
     { v: 'full', w: old ? 3.5 : 2.5 }, { v: 'long', w: old ? 3 : 1 },
   ]).v;
 
   const shp = FACE_SHAPES[shapeName];
   const fem = sex === 'f';
-  // Overall head mass, on top of the skull shape: two `round` faces of
-  // different builds should still not be confusable.
-  const mass = r.float(0.92, 1.07);
+  // Overall head mass, on top of the skull shape. This also changes how much
+  // of the plate the head fills, which at 63 px is as loud a cue as the face
+  // itself: a big head cropped close never gets confused with a small one.
+  const mass = r.float(0.86, 1.13);
   const rx = shp.rx * (fem ? 0.955 : 1) * mass * r.float(0.98, 1.02);
-  const ry = shp.ry * (fem ? 0.985 : 1) * (0.5 + mass * 0.5) * r.float(0.98, 1.02);
+  const ry = shp.ry * (fem ? 0.985 : 1) * (0.42 + mass * 0.58) * r.float(0.98, 1.02);
 
   // Head sits a touch right of centre and turns to the viewer's left, which is
   // how nearly every portrait in the original is composed.
-  const headCX = DW * 0.5 + r.float(0.0, 2.0);
-  const headTop = 8.6 + r.float(-1.0, 1.6) + (1 - mass) * 6;
-  const turn = -r.float(0.10, 0.22);
+  const headCX = DW * 0.5 + r.float(-0.6, 2.4);
+  const headTop = 8.4 + r.float(-1.2, 1.6) + (1 - mass) * 11;
+  const turn = -r.float(0.09, 0.23);
 
   const gear = classGear(klass, r, sex, age, hairStyle);
 
@@ -316,7 +317,7 @@ export function makeFace(seed, opts = {}) {
       wJaw: shp.wJaw * (fem ? 0.93 : 1) * (old ? 1.05 : 1) * r.float(0.94, 1.07),
       wChin: shp.wChin * (fem ? 0.92 : 1) * r.float(0.90, 1.12),
       turn,
-      browY: headTop + ry * (0.845 + r.float(-0.035, 0.035)),
+      browY: headTop + ry * (0.845 + r.float(-0.060, 0.055)),
       browHeavy: (fem ? 0.40 : 1.0) * (old ? 1.35 : 1) * r.float(0.60, 1.50),
       browThick: (fem ? 0.55 : 1.0) * r.float(0.70, 1.40) * (old ? 1.30 : 1),
       browArch: fem ? r.float(0.8, 1.7) : r.float(0.15, 1.0),
@@ -324,26 +325,44 @@ export function makeFace(seed, opts = {}) {
       eyeW: rx * (fem ? 0.232 : 0.218) * r.float(0.88, 1.12),
       eyeOpenBase: (fem ? 1.06 : 0.98) * r.float(0.90, 1.10),
       noseW: rx * (fem ? 0.178 : 0.205) * r.float(0.82, 1.26),
-      noseLen: r.float(0.31, 0.41),
+      noseLen: r.float(0.27, 0.44),
       noseBulb: r.float(0.5, 1.6) * (fem ? 0.85 : 1),
       noseHook: r.float(-0.5, 1.15) * (old ? 1.3 : 1),
-      mouthW: rx * (fem ? 0.295 : 0.315) * r.float(0.86, 1.14),
+      mouthW: rx * (fem ? 0.318 : 0.342) * r.float(0.86, 1.16),
+      lipTone: r.float(0.55, 1.60),
+      mouthDrop: r.float(0.215, 0.300),
       lipFull: (fem ? 1.35 : 1.0) * r.float(0.72, 1.30),
       cheekBone: r.float(0.5, 1.6) + (shapeName === 'gaunt' ? 0.40 : 0) + (old ? 0.30 : 0),
       hollow: (shapeName === 'gaunt' ? 0.90 : 0.18) + (old ? 0.45 : 0)
         + (shapeName === 'heavy' ? -0.18 : 0),
       jowl: (old ? r.float(0.4, 1.0) : 0) + (shapeName === 'heavy' ? 0.45 : 0),
       ears: r.float(0.75, 1.30),
+      eyeDeep: r.float(0.55, 1.45) * (old ? 1.2 : 1),
+      // Resting expression. Everybody painted with a dead level mouth and
+      // level brows reads as the same tired person; a set jaw, a faint smile
+      // or a sour downturn is character, and it survives the downsample.
+      mouthMood: r.float(-0.55, 0.75),
+      browSet: r.float(-0.5, 0.8),
+      eyeTilt: r.float(-0.5, 0.5),
+      lidHeavy: r.float(0, 1) * (old ? 1.3 : 1),
     },
     marks: {
       wrinkle: old ? r.float(1.00, 1.35) : (age === 'middle' ? r.float(0.18, 0.55) : 0.06),
       freckles: r.bool(0.24) && !darkSkin ? r.float(0.4, 1) : 0,
       scar: r.bool(0.22) ? { side: r.bool() ? 1 : -1, y: r.float(-0.3, 0.5), len: r.float(0.5, 1) } : null,
       stubbleTone: r.float(0.8, 1.2),
-      weather: r.float(0.5, 1.1),
+      weather: r.float(0.35, 0.85),
     },
     gear,
-    bgTint: classBgTint(klass),
+    // The plate behind the head is class-tinted, but every sitting also gets
+    // its own light and wall: two identically-classed characters side by side
+    // in the bar should not share a background as well as a silhouette.
+    bgTint: (() => {
+      const c = classBgTint(klass);
+      const k = r.float(0.68, 1.14);
+      const warm = r.float(-0.12, 0.14);
+      return [c[0] * k * (1 + warm), c[1] * k, c[2] * k * (1 - warm)];
+    })(),
     noiseSeed: (typeof key === 'string' ? 7919 : key | 0) ^ 0x2f1b,
   };
 }
@@ -380,12 +399,16 @@ function classGear(klass, r, sex, age, hairStyle) {
   const robeRamps = ['plaster', 'stone', 'dirt', 'wood', 'swamp', 'blood', 'sky'];
   g.robe = { ramp: r.pick(robeRamps), t: r.float(0.20, 0.42) };
   const hoodOf = (ramp, t, peak, tight) => ({
-    ramp, t, peak, tight,
+    ramp, t,
+    // Peak and tightness wander per hood: a slouched cowl and a tall pointed
+    // one are different silhouettes even in the same cloth.
+    peak: Math.max(0, peak + r.float(-0.15, 0.40)),
+    tight: tight + r.float(-0.06, 0.07),
     // Every hood gets its own irregular opening: an off-centre, slightly
     // rotated hole with a couple of lobes, so the face is never a clean oval
     // mask set in a clean oval hole.
-    ox: r.float(-1.1, 0.9), oy: r.float(-0.8, 1.0), rot: r.float(-0.28, 0.28),
-    lobe1: r.float(0.05, 0.13), lobe2: r.float(0.03, 0.09), ph: r.float(0, 6.28),
+    ox: r.float(-1.4, 1.2), oy: r.float(-1.0, 1.2), rot: r.float(-0.34, 0.34),
+    lobe1: r.float(0.09, 0.20), lobe2: r.float(0.05, 0.13), ph: r.float(0, 6.28),
     drapeL: r.float(0.85, 1.25), drapeR: r.float(0.85, 1.25),
   });
 
@@ -393,8 +416,8 @@ function classGear(klass, r, sex, age, hairStyle) {
     case 'knight': {
       g.collar = 'plate';
       const k = r.float(0, 1);
-      if (k < 0.20) g.helm = { kind: 'open', nasal: r.bool(0.8), cheek: r.bool(0.4), gold: 0 };
-      else if (k < 0.38) g.coif = true;
+      if (k < 0.18) g.helm = { kind: 'open', nasal: r.bool(0.8), cheek: r.bool(0.4), gold: 0 };
+      else if (k < 0.34) g.coif = true;
       break;
     }
     case 'paladin': {
@@ -402,30 +425,36 @@ function classGear(klass, r, sex, age, hairStyle) {
       g.trim = 'gold';
       g.symbol = r.bool(0.45) ? 'sun' : null;
       const k = r.float(0, 1);
-      if (k < 0.18) g.helm = { kind: 'open', nasal: r.bool(0.75), cheek: r.bool(0.3), gold: 1 };
-      else if (k < 0.34) g.coif = true;
+      if (k < 0.16) g.helm = { kind: 'open', nasal: r.bool(0.75), cheek: r.bool(0.3), gold: 1 };
+      else if (k < 0.31) g.coif = true;
       break;
     }
     case 'archer':
       g.collar = 'leather';
-      if (r.bool(0.15)) g.hood = hoodOf('foliage', r.float(0.30, 0.46), 0.25, 0.0);
+      if (r.bool(0.13)) g.hood = hoodOf(r.pick(['foliage', 'grass', 'wood']), r.float(0.26, 0.46), 0.25, 0.0);
       break;
     case 'cleric':
       g.collar = 'robe';
       g.symbol = 'cross';
-      if (r.bool(0.42)) g.hood = hoodOf(r.bool(0.5) ? 'plaster' : 'stone', r.float(0.26, 0.46), 0.10, 0.05);
+      if (r.bool(0.35)) {
+        g.hood = hoodOf(r.pick(['plaster', 'stone', 'sand', 'blood', 'dirt']),
+          r.float(0.20, 0.46), 0.10, 0.05);
+      }
       break;
     case 'sorcerer': {
       g.collar = 'arcane';
       g.mantle = r.bool(0.55);
       const k = r.float(0, 1);
-      if (k < 0.11) g.hat = { tilt: r.float(-1.5, -0.5), len: r.float(0.9, 1.15) };
-      else if (k < 0.20) g.hood = hoodOf('sky', r.float(0.14, 0.26), 0.5, 0.02);
+      if (k < 0.10) g.hat = { tilt: r.float(-1.5, -0.5), len: r.float(0.9, 1.15) };
+      else if (k < 0.18) g.hood = hoodOf('sky', r.float(0.14, 0.26), 0.5, 0.02);
       break;
     }
     case 'druid':
       g.collar = 'robe';
-      if (r.bool(0.36)) g.hood = hoodOf('grass', r.float(0.24, 0.42), 0.42, -0.03);
+      if (r.bool(0.31)) {
+        g.hood = hoodOf(r.pick(['grass', 'foliage', 'swamp', 'wood']),
+          r.float(0.22, 0.44), 0.42, -0.03);
+      }
       break;
   }
   // A hood no longer flattens the hair to a stub: the cut still shows through
@@ -521,7 +550,18 @@ function getScratch(N) {
   return scratch;
 }
 
-function paint(face, ex, W, H) {
+function paint(face, ex0, W, H) {
+  // Fold the face's resting expression into the requested one. Applied at a
+  // fraction so a strong expression still reads as that expression, but a
+  // neutral portrait gets this character's own set of the mouth and brows.
+  const gm = face.geom;
+  const ex = Object.assign({}, ex0, {
+    mouthCurve: ex0.mouthCurve + (gm.mouthMood || 0) * 0.75,
+    browIn: ex0.browIn + (gm.browSet || 0) * 0.55,
+    browOut: ex0.browOut - (gm.browSet || 0) * 0.30,
+    browTilt: ex0.browTilt + (gm.eyeTilt || 0) * 0.45,
+    lidLow: ex0.lidLow + (gm.lidHeavy || 0) * 0.22,
+  });
   const BW = W * SS, BH = H * SS, N = BW * BH;
   const sc = getScratch(N);
   const buf = sc.buf;      // fully overwritten by the background pass
@@ -547,7 +587,7 @@ function paint(face, ex, W, H) {
   const browY = g.browY;
   const eyeY = browY + ry * 0.155;
   const noseY = eyeY + ry * g.noseLen;
-  const mouthY = noseY + ry * 0.255;
+  const mouthY = noseY + ry * (g.mouthDrop || 0.255);
   const eyeSep = g.eyeSep;
   const hairlineY = g.headTop + ry * 0.36;
 
@@ -582,14 +622,16 @@ function paint(face, ex, W, H) {
     // two headlights, which is the classic tell of a badly painted dark face.
     sclera: mixC(mixC(rs('sand', 0.62), rs('stone', 0.70), 0.46), SR.ramp[2], SR.lift * 0.85),
     vessel: rs('blood', 0.38),
-    iris: EYE_COLOURS[face.eyeName](),
+    // Irises are pulled towards the sitter's own value: a bright amber iris
+    // painted at full strength on ebony skin reads as a cat's eye.
+    iris: scl(mixC(EYE_COLOURS[face.eyeName](), SR.ramp[2], SR.lift * 0.5), 0.92),
     pupil: ex.glow ? rs('arcane', 0.85) : [11, 8, 9],
     glow: rs('arcane', 0.9),
     catch: [252, 248, 240],
     greyHair: rs('grey', 0.55),
-    lipUp: mixC(scl(SR.ramp[2], 0.86), rs('blood', 0.26), 0.16 * g.lipFull),
-    lipDn: mixC(mixC(SR.ramp[3], rs('blood', 0.34), 0.13 * g.lipFull), SR.ramp[4], 0.26),
-    lipLine: mixC(scl(SR.ramp[0], 1.10), rs('blood', 0.12), 0.25),
+    lipUp: mixC(scl(SR.ramp[2], 0.84), rs('blood', 0.26), 0.20 * g.lipFull * (g.lipTone || 1)),
+    lipDn: mixC(mixC(SR.ramp[3], rs('blood', 0.34), 0.17 * g.lipFull * (g.lipTone || 1)), SR.ramp[4], 0.26),
+    lipLine: mixC(scl(SR.ramp[0], 0.82), rs('blood', 0.10), 0.25),
     mouthIn: mixC(rs('blood', 0.08), [7, 4, 5], 0.45),
     tongue: rs('blood', 0.26),
     teeth: mixC(rs('sand', 0.80), rs('grey', 0.72), 0.45),
@@ -679,7 +721,7 @@ function paint(face, ex, W, H) {
       // eye sockets, with the ball sitting back inside
       for (const s of [-1, 1]) {
         const ex0 = dxf - s * eyeSep;
-        z -= blob(ex0, Y - eyeY, rx * 0.30, ry * 0.115) * 1.35;
+        z -= blob(ex0, Y - eyeY, rx * 0.30, ry * 0.115) * 1.35 * g.eyeDeep;
         z += blob(ex0, Y - eyeY, rx * 0.21, ry * 0.090) * 1.05;
       }
       // nose: a rounded wedge running into the bulb, plus the wings
@@ -807,7 +849,7 @@ function paint(face, ex, W, H) {
       let ao = 1;
       ao -= blob(dxf, Y - (browY + ry * 0.075), rx * 0.86, ry * 0.075) * 0.46;   // under the brow
       for (const s of [-1, 1]) {
-        ao -= blob(dxf - s * eyeSep, Y - (eyeY - ry * 0.02), rx * 0.29, ry * 0.10) * 0.34;
+        ao -= blob(dxf - s * eyeSep, Y - (eyeY - ry * 0.02), rx * 0.29, ry * 0.10) * 0.30 * g.eyeDeep;
       }
       // The nose casts: a soft core shadow down its right flank (key is from
       // the left) and a hard one onto the lip below it. Local shading alone
@@ -1302,23 +1344,23 @@ function hairParams(face, g, hairlineY, hcx, hcy, rx, ry, fx, near) {
   };
   switch (st) {
     case 'crop':
-      p.capRX = rx * 1.04 * V; p.capRY = ry * 1.05 * V;
-      p.hangLen = 0.26; p.hangW = rx * 0.01; p.taper = 3.2; p.rough = 0.22;
+      p.capRX = rx * 1.02 * V; p.capRY = ry * 1.03 * V;
+      p.hangLen = 0.24; p.hangW = rx * 0.01; p.taper = 3.2; p.rough = 0.16;
       break;
     case 'short':
       p.capRX = rx * 1.09 * V; p.capRY = ry * 1.11 * V;
-      p.hangLen = 0.44 + 0.14 * L; p.hangW = rx * 0.05; p.taper = 2.6; p.rough = 0.30;
+      p.hangLen = 0.44 + 0.14 * L; p.hangW = rx * 0.09; p.taper = 2.6; p.rough = 0.30;
       break;
     case 'medium':
       // Jaw-length: stops short of the shoulders, which is a different
       // silhouette from both a crop and a full mane.
       p.capRX = rx * 1.13 * V; p.capRY = ry * 1.13 * V;
-      p.hangLen = 0.80 + 0.55 * L; p.hangW = rx * 0.20; p.taper = 1.4;
+      p.hangLen = 0.58 + 0.42 * L; p.hangW = rx * 0.34; p.taper = 1.4;
       p.flare = 2.4; p.rough = 0.40;
       break;
     case 'long':
       p.capRX = rx * 1.15 * V; p.capRY = ry * 1.15 * V;
-      p.hangLen = 1.55 + 0.75 * L; p.hangW = rx * 0.30; p.taper = 0.85;
+      p.hangLen = 1.05 + 0.85 * L; p.hangW = rx * 0.44; p.taper = 0.85;
       p.flare = 1.7; p.rough = 0.45;
       break;
     case 'ponytail':
@@ -1336,18 +1378,32 @@ function hairParams(face, g, hairlineY, hcx, hcy, rx, ry, fx, near) {
       break;
     case 'braided':
       p.capRX = rx * 1.11 * V; p.capRY = ry * 1.11 * V;
-      p.hangLen = 0.85 + 0.35 * L; p.hangW = rx * 0.16; p.taper = 1.8;
+      p.hangLen = 0.72 + 0.45 * L; p.hangW = rx * 0.26; p.taper = 1.8;
       p.braid = { side: r.bool() ? 1 : -1 };
       break;
     case 'wild':
-      p.capRX = rx * 1.26 * V; p.capRY = ry * 1.30 * V;
-      p.hangLen = 0.70 + 0.55 * L; p.hangW = rx * 0.40; p.taper = 0.55;
-      p.flare = 3.2; p.rough = 1.05;
+      p.capRX = rx * 1.36 * V; p.capRY = ry * 1.38 * V;
+      p.hangLen = 0.62 + 0.50 * L; p.hangW = rx * 0.56; p.taper = 0.55;
+      p.flare = 3.2; p.rough = 1.55;
       break;
   }
   // No two sides of a real head of hair match. This is cheap and it is one of
   // the few cues that survives the box filter down to 63 px.
-  p.asymL = r.float(0.84, 1.20); p.asymR = r.float(0.84, 1.20);
+  p.asymL = r.float(0.80, 1.24); p.asymR = r.float(0.80, 1.24);
+  p.endTilt = r.float(-1.0, 1.0);
+  p.hangW *= cut.volume;
+  p.wobA = r.float(0.05, 0.22) * (st === 'wild' ? 1.6 : 1);
+  p.wobF = r.float(2.2, 6.5);
+  p.wobP = r.float(0, 6.28);
+  // Per-side width, and a decent chance that one side is tucked behind the
+  // ear. A mane that hangs identically on both sides is the single strongest
+  // reason two long-haired characters read as the same person.
+  p.wL = r.float(0.72, 1.30); p.wR = r.float(0.72, 1.30);
+  if (p.hangLen > 0.6) {
+    const tuck = r.float(0, 1);
+    if (tuck < 0.24) p.wL = 0.14;
+    else if (tuck < 0.48) p.wR = 0.14;
+  }
   // Hair in front of the shoulders is a separate pass over the collar; the
   // mass behind the head stops at the shoulder line as usual.
   p.front = !!cut.front && !p.bald && st !== 'crop' && st !== 'short'
@@ -1369,17 +1425,27 @@ function hangCov(p, X, Y, rough) {
   if (p.hangW <= 0) return 0;
   const s = X >= p.hcx ? 1 : -1;
   const asym = s > 0 ? p.asymR : p.asymL;
+  const wS = s > 0 ? p.wR : p.wL;
   const yTop = p.hcy - p.ry * 0.80;
-  const yEnd = p.hcy + p.ry * p.hangLen * asym;
+  const yEnd = p.hcy + p.ry * p.hangLen * asym * (0.35 + 0.65 * Math.min(1, wS * 1.4));
   if (Y > yEnd + 3) return 0;
   const t = clamp((Y - yTop) / Math.max(2, yEnd - yTop), 0, 1);
-  // Flares out over the ear, then narrows towards the ends.
+  // Flares out over the ear, then narrows towards the ends. The two ends of
+  // the taper are what stop the mass reading as a pair of straight planks.
   const flare = Math.sin(clamp(t * p.flare, 0, 1) * Math.PI * 0.5);
   const taper = Math.pow(1 - t, p.taper);
-  const w = p.rx * 0.92 + p.hangW * asym * (0.25 + 1.15 * flare) * (0.30 + 0.70 * taper);
-  const inX = smoothstep(w + 1.0, w - 0.7, Math.abs(X - p.hcx) - rough * 1.7);
+  let w = p.rx * 0.88 + p.hangW * asym * wS * (0.20 + 1.30 * flare) * (0.22 + 0.78 * taper);
+  // A slow wave down the outline: lumps, waves and a kink, different on each
+  // side and different for every character. Without it the outer contour is a
+  // smooth offset of the skull and every head of hair has the same edge.
+  w *= 1 + p.wobA * Math.sin(t * p.wobF + p.wobP + (s > 0 ? 0 : 2.1))
+    + p.wobA * 0.5 * Math.sin(t * p.wobF * 2.3 + p.wobP * 1.7);
+  const inX = smoothstep(w + 1.0, w - 0.7, Math.abs(X - p.hcx) - rough * 3.0);
+  // The ends are cut on a slant and rounded off, not squared across.
+  const endY = yEnd - (X - p.hcx) / p.rx * p.ry * 0.34 * p.endTilt
+    - sq(Math.max(0, Math.abs(X - p.hcx) / p.rx - 0.9)) * p.ry * 1.6;
   const inY = smoothstep(yTop, yTop + p.ry * 0.20, Y)
-    * (1 - smoothstep(yEnd - 3.5, yEnd, Y + rough * 2.0));
+    * (1 - smoothstep(endY - 4.0, endY, Y + rough * 2.4));
   return inX * inY;
 }
 
@@ -1416,7 +1482,7 @@ function hairCov(p, X, Y, sd) {
   const rough = (fb(X * 0.55, Y * 0.55, 3, sd + 200) - 0.5) * p.rough
     + (fb(X * 1.6, Y * 1.6, 2, sd + 201) - 0.5) * p.rough * 0.6;
 
-  const capE = cov(ell(X - p.hcx, Y - p.capCY, p.capRX, p.capRY) + rough * 0.20, 0.16);
+  const capE = cov(ell(X - p.hcx, Y - p.capCY, p.capRX, p.capRY) + rough * 0.34, 0.16);
   const hl = hairlineAt(p, X);
   let a = capE * smoothstep(hl + 0.9, hl - 0.9, Y);            // fringe, over the face
   // The cap itself only reaches the ear line; below that the hanging profile
@@ -1479,13 +1545,17 @@ function drawFrontLocks(buf, subj, face, p, ex, P) {
         if (p.frontSide !== 0 && p.frontSide !== s) continue;
         // The lock leaves the head just in front of the ear and swings out a
         // little as it falls.
-        const cx = p.hcx + s * p.rx * (0.80 + t * 0.34) + s * Math.sin(t * 2.6 + si) * 1.1;
-        const w = p.rx * (0.26 + 0.10 * Math.sin(t * 3.1 + si * 2)) * (1 - t * 0.18);
-        const wob = (fb(X * 0.45, Y * 0.40, 2, sd + 220 + si) - 0.5) * 2.4;
+        const cx = p.hcx + s * p.rx * (0.92 + t * 0.36) + s * Math.sin(t * 2.6 + si) * 1.3;
+        // Narrow where it comes off the jaw, fuller over the chest, then
+        // tapering out. A constant width reads as a plank stuck to the neck.
+        const w = p.rx * (0.10 + 0.20 * Math.sin(clamp(t * 1.8, 0, 1) * Math.PI * 0.8)
+          + 0.06 * Math.sin(t * 3.1 + si * 2));
+        const wob = (fb(X * 0.45, Y * 0.40, 2, sd + 220 + si) - 0.5) * 2.6;
         const k = smoothstep(w + 1.3, w - 0.9, Math.abs(X - cx) + wob);
-        if (k > a) { a = k; cxBest = cx; wBest = w; }
+        if (k > a) { a = k; cxBest = cx; wBest = Math.max(0.6, w); }
       }
-      a *= 1 - smoothstep(endY - 4.5, endY, Y);
+      a *= (1 - smoothstep(endY - 4.5, endY, Y))
+        * smoothstep(startY - 0.5, startY + p.ry * 0.28, Y);
       if (a <= 0.01) continue;
       // Cylinder shading: lit on the light side of each tress, dark at the
       // edges, with vertical strand strokes.
@@ -1537,11 +1607,11 @@ function hairColourAt(HC, p, X, Y, sd, LX, LY, ex) {
   const s2 = nz(X * 6.0, Y * 1.1, sd + 211);
   const clump = s1 * 0.7 + s2 * 0.3;
 
-  let shade = 0.30 + diff * 1.00;
+  let shade = 0.24 + diff * 0.90;
   shade *= 0.76 + clump * 0.54;
   shade *= ex.key;
   let c = mixC(HC.dark, HC.base, clamp(shade * 1.45, 0, 1));
-  c = mixC(c, HC.lite, clamp((shade - 0.52) * 1.5, 0, 1) * 0.8);
+  c = mixC(c, HC.lite, clamp((shade - 0.60) * 1.25, 0, 1) * 0.55);
 
   // Strand strokes: narrow arcs of light following the curve of the skull on
   // the cap, running vertically down the falling mass.
@@ -1717,8 +1787,16 @@ function drawGear(buf, subj, face, ex, P) {
         // down, leaving forehead and hairline showing. It is deliberately
         // off-centre, rotated and lobed: a clean ellipse here turns the face
         // into an oval mask set in a hole.
-        const holeM = hole(X, Y) + rough * 0.9;
-        a *= 1 - cov(holeM, 0.09);
+        // The edge noise above only exists out at the silhouette; the opening
+        // needs its own, or the face ends up an oval mask set in a clean oval
+        // hole. Two scales: a slow wander plus a fold-sized ripple.
+        const holeRaw = hole(X, Y);
+        const hr = holeRaw > 0.45 && holeRaw < 2.0
+          ? (fb(X * 0.50, Y * 0.50, 2, sd + 405) - 0.5) * 0.34
+          + (nz(X * 1.30, Y * 1.05, sd + 407) - 0.5) * 0.14
+          : 0;
+        const holeM = holeRaw + hr;
+        a *= 1 - cov(holeM, 0.07);
         if (a > 0.004) {
           const ux = (X - hcx) / orx, uy = (Y - ocy) / ory;
           const r2 = clamp(ux * ux + uy * uy, 0, 1);
@@ -1874,7 +1952,7 @@ function drawShoulders(buf, subj, face, ex, P) {
 
   const cloth = {
     plate: { base: rs('stone', 0.44), dark: null, lite: null },
-    leather: { base: rs('wood', 0.30), dark: null, lite: null },
+    leather: { base: rs('wood', 0.20 + gear.robe.t * 0.55), dark: null, lite: null },
     robe: { base: rs(gear.hood ? gear.hood.ramp : gear.robe.ramp, gear.hood ? gear.hood.t : gear.robe.t), dark: null, lite: null },
     arcane: { base: desat(mixC(rs('sky', 0.13), rs('arcane', 0.22), 0.45), 0.26), dark: null, lite: null },
     cloth: { base: rs(gear.robe.ramp, gear.robe.t), dark: null, lite: null },

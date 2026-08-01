@@ -11,6 +11,8 @@ import {
   Screen, A, px, py, TAB_Y, TAB_H, EXIT_X, EXIT_W,
   CANARY, HILITE, WHITE, DIM, BOOK_INK, PASTELS, wrapLines,
 } from './screenbase.js';
+import * as M from './mm6art.js';
+import { regionName } from '../../game/quests.js';
 
 const PAGES = ['Quests', 'Notes', 'Awards', 'History'];
 const PAGE_TITLES = ['Current Quests', 'Auto Notes', 'Awards', 'History'];
@@ -89,7 +91,9 @@ export class QuestLogScreen extends Screen {
       if (!list.length) add('You have no quests. Ask in the taverns.', INK_NOTE);
       for (const q of list) {
         add(q.title || q.name || 'Quest', INK_TITLE, 'small', 0);
-        const from = [q.giver, q.region].filter(Boolean).join(', ');
+        // Never print a raw map id: quests carry the engine id, the page prints the
+        // place name.
+        const from = [q.giver, q.region ? regionName(q.region) : ''].filter(Boolean).join(', ');
         if (from) add(from, INK_NOTE, 'small', 6);
         if (q.objective || q.text) add(q.objective || q.text, INK_BODY, 'small', 6);
         if (q.progress !== undefined && q.goal !== undefined) {
@@ -177,7 +181,6 @@ export class QuestLogScreen extends Screen {
     }
 
     this.drawSubTabs(ctx);
-    this.status = `${all.length ? '' : 'Nothing here. '}Use the tabs on the right margin.`;
     this.drawHelpLine(ctx, 306, '#3a2a10');
 
     const r = { x: px(EXIT_X), y: py(TAB_Y), w: EXIT_W, h: TAB_H };
@@ -189,21 +192,23 @@ export class QuestLogScreen extends Screen {
     this.pollPartyBar();
   }
 
+  /**
+   * MM6's five overlapping book-spine tabs down the inner margin: painted
+   * leather tongues, no numeric badges, the open one pushed proud.
+   */
   drawSubTabs(ctx) {
     const counts = [this.quests().length, this.notes().length, this.awards().length, this.history().length];
+    const tint = ['#8c5a24', '#6a6a34', '#7a4a6a', '#4a5a7a'];
     for (let i = 0; i < PAGES.length; i++) {
-      const x = px(SUB_X), y = py(SUB_Y[i]);
       const on = i === this.page;
-      const hit = this.ui.region(`${this.id}:sub${i}`, x, y, SUB_W, SUB_H, PAGE_TITLES[i]);
+      const x = px(SUB_X - (on ? 6 : 0)), y = py(SUB_Y[i]);
+      const w = SUB_W + (on ? 6 : 0);
+      const hit = this.ui.region(`${this.id}:sub${i}`, px(SUB_X - 6), y, SUB_W + 6, SUB_H, PAGE_TITLES[i]);
       if (hit.click && !on) { this.page = i; this.sound('page_turn'); }
-      A.button(ctx, x, y, SUB_W, SUB_H, null, on || hit.down ? 'down' : 'up');
-      if (on) { ctx.fillStyle = CANARY; ctx.fillRect(x + 3, y + SUB_H - 3, SUB_W - 6, 1); }
-      F.drawText(ctx, PAGES[i], (x + SUB_W / 2) | 0, (y + 8) | 0, {
+      M.bookmarkTab(ctx, x, y, w, SUB_H, tint[i], { open: on || hit.hover });
+      F.drawText(ctx, PAGES[i], (x + w / 2) | 0, (y + (SUB_H - 10) / 2) | 0, {
         face: 'small', align: 'center',
-        color: on ? CANARY : hit.hover ? HILITE : WHITE,
-      });
-      F.drawText(ctx, String(counts[i]), (x + SUB_W / 2) | 0, (y + 20) | 0, {
-        face: 'small', align: 'center', color: counts[i] ? CANARY : DIM,
+        color: on ? CANARY : hit.hover ? HILITE : counts[i] ? WHITE : DIM,
       });
     }
   }

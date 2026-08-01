@@ -96,11 +96,13 @@ export class SpellbookScreen extends Screen {
     M.paper(ctx, px(RIGHT.x), py(RIGHT.y), RIGHT.w, RIGHT.h, 'spell', 29);
     M.gutter(ctx, px(LEFT.x + LEFT.w - 1), py(LEFT.y), LEFT.h, 'left');
     M.gutter(ctx, px(RIGHT.x), py(RIGHT.y), RIGHT.h, 'right');
-    // A school-tinted wash on the leaf edges, the way MM6 tints each chapter.
-    M.stipple(ctx, px(LEFT.x), py(LEFT.y), LEFT.w, 3, M.hexRGB(tint), 0.5);
-    M.stipple(ctx, px(RIGHT.x), py(RIGHT.y), RIGHT.w, 3, M.hexRGB(tint), 0.5);
-    M.stipple(ctx, px(LEFT.x), py(LEFT.y + LEFT.h - 3), LEFT.w, 3, M.hexRGB(tint), 0.5);
-    M.stipple(ctx, px(RIGHT.x), py(RIGHT.y + RIGHT.h - 3), RIGHT.w, 3, M.hexRGB(tint), 0.5);
+    // A school-tinted rule ruled inside each leaf, the way MM6 tints a chapter.
+    for (const pg of [LEFT, RIGHT]) {
+      M.stipple(ctx, px(pg.x + 8), py(pg.y + 6), pg.w - 16, 1, M.hexRGB(tint), 0.42);
+      M.stipple(ctx, px(pg.x + 8), py(pg.y + pg.h - 8), pg.w - 16, 1, M.hexRGB(tint), 0.42);
+      M.stipple(ctx, px(pg.x + 8), py(pg.y + 6), 1, pg.h - 14, M.hexRGB(tint), 0.30);
+      M.stipple(ctx, px(pg.x + pg.w - 9), py(pg.y + 6), 1, pg.h - 14, M.hexRGB(tint), 0.30);
+    }
 
     M.rct(ctx, px(194), py(10), 8, 294, [58, 42, 20]);
     M.rct(ctx, px(197), py(10), 3, 294, [24, 16, 8]);

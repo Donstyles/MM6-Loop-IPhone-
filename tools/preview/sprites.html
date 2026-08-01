@@ -21,11 +21,19 @@ import { getSheet, ANGLES } from '/src/art/spritebake.js';
 import { CREATURE_DEFS, CREATURE_FAMILIES, CREATURE_TIERS, NPC_ARCHETYPES, ACTIONS } from '/src/art/models/creatures.js';
 import { FLORA_KINDS } from '/src/art/models/flora.js';
 import { PROP_KINDS } from '/src/art/models/props.js';
+import { MONSTERS } from '/src/game/monsters.js';
+
+// The world height the shell hands each monster (src/game/spawner.js reads
+// `def.size`), so the in-game-scale page is honest about what you will see.
+const MONSTER_SIZE = {};
+for (const m of (MONSTERS || [])) if (m && m.id) MONSTER_SIZE[m.id] = m.size;
 
 const qs = new URLSearchParams(location.search);
-const page = qs.get('page') || 'angles';
+// `field` is the default because it is the only page that tells you whether a
+// sprite works: at in-game size, over the ground it will actually stand on.
+const page = qs.get('page') || 'field';
 const from = +(qs.get('from') || 0);
-const count = +(qs.get('count') || 28);
+const count = +(qs.get('count') || (page === 'field' ? 10 : 28));
 
 const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('gl'), alpha: true, antialias: false });
 renderer.setPixelRatio(1);
@@ -101,16 +109,19 @@ function pageAngles(kinds, cat) {
   heading(`${cat}: all 8 octants (stand frame 0) - octant 0 faces the camera, 4 is the back, 5-7 are mirrors of 3-1`);
   for (const kind of kinds) {
     const sh = sheetOf(cat, kind);
-    const zoom = Math.max(1, Math.min(3, Math.floor(150 / sh.cellH) || 1));
+    // Two stacked rows of 8 rather than one row of 16, so the zoom is set by
+    // how big the sprite has to be to read, not by how wide the page is.
+    const zoom = Math.max(2, Math.min(4, Math.floor(1380 / (sh.cellW * 8)) || 2));
     const cells = [];
     for (let a = 0; a < ANGLES; a++) cells.push(['stand', 0, a]);
-    const { c, g } = makeCv(1390, sh.cellH * zoom + 16);
+    const rh = sh.cellH * zoom;
+    const { c, g } = makeCv(1390, rh * 2 + 22);
     g.fillStyle = '#14151a'; g.fillRect(0, 0, c.width, c.height);
     const nm = CREATURE_DEFS[kind] ? CREATURE_DEFS[kind].name : (CREATURE_FAMILIES[kind] ? CREATURE_FAMILIES[kind].tiers[0].name : kind);
-    label(g, `${kind} (${nm})  atlas ${sh.atlasW}x${sh.atlasH}  cell ${sh.cellW}x${sh.cellH}  ${sh.frames}f x ${sh.views}v  world ${sh.worldH | 0}u`, 4, 11);
+    label(g, `${kind} (${nm})  atlas ${sh.atlasW}x${sh.atlasH}  cell ${sh.cellW}x${sh.cellH}  ${sh.frames}f x ${sh.views}v  world ${sh.worldH | 0}u  x${zoom}`, 4, 11);
     strip(g, sh, cells, 4, 14, zoom, 'checker');
     // the same octants on magenta: any soft edge shows up instantly
-    strip(g, sh, cells, 4 + sh.cellW * zoom * 8 + 12, 14, zoom, '#c0208c');
+    strip(g, sh, cells, 4, 18 + rh, zoom, '#c0208c');
     out.appendChild(c);
   }
 }
@@ -176,11 +187,90 @@ function pageAtlas(kinds) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// The check that actually matters.
+//
+// A sprite judged on a black or checkered contact sheet is judged against a
+// background it will never be seen on. In play a monster is 30-70 px tall and
+// stands on MM6 grass (luminance 72-118) or in a dungeon corridor (#383838 to
+// #585858); if its own values sit inside that band it disappears no matter how
+// good the model is. So: every creature at the exact pixel size it occupies at
+// 3, 6 and 10 metres, over both fields, with a 4x blow-up beside it.
+// ---------------------------------------------------------------------------
+
+// 1 m ~ 107 MM6 units (the party is 192 units and about 1.8 m tall).
+const METRE = 107;
+const VIEW_H = 345;                                  // engine.js render buffer
+const VFOV = 59.73 * Math.PI / 180;                  // engine.js camera
+const TAN = Math.tan(VFOV / 2);
+
+/** Screen height in px of a `units`-tall billboard `dist` units away. */
+const pxAt = (units, dist) => (VIEW_H * units) / (2 * dist * TAN);
+
+const GRASS = '#5f7a3a';       // mid-tone MM6 grass, luminance ~104
+const GRASS_DK = '#46592b';
+const DUNGEON = '#454545';     // dimming level ~24 corridor
+const DUNGEON_DK = '#303030';
+
+/** Terrain-ish backdrop, so the sprite is never judged against a flat field. */
+function groundFill(g, x, y, w, h, a, b) {
+  g.fillStyle = a; g.fillRect(x, y, w, h);
+  g.fillStyle = b;
+  for (let i = 0; i < w * h / 90; i++) g.fillRect(x + ((i * 97) % w), y + ((i * 61) % h), 3, 2);
+}
+
+/** The world height the shell gives this sprite, so the preview lies about nothing. */
+function gameSize(cat, kind, sh) {
+  if (cat === 'creature') {
+    const s = MONSTER_SIZE[kind] || MONSTER_SIZE[kind + 'A'];
+    if (s) return s;
+  }
+  return sh.height;
+}
+
+function pageField(kinds, cat) {
+  heading(`${cat} at in-game scale over grass and over dungeon stone - 3 m / 6 m / 10 m, then 4x. `
+    + 'A creature that vanishes into either field has failed, however good it looks on black.');
+  const DISTS = [3 * METRE, 6 * METRE, 10 * METRE];
+  for (const kind of kinds) {
+    const sh = sheetOf(cat, kind);
+    const size = gameSize(cat, kind, sh);
+    const heights = DISTS.map((d) => Math.max(4, Math.round(pxAt(size, d))));
+    const widths = heights.map((h) => Math.max(3, Math.round(h * sh.cellW / sh.cellH)));
+    const rowH = Math.max(heights[0], heights[1] * 4) + 26;
+    const { c, g } = makeCv(1390, rowH);
+    const half = 690;
+    groundFill(g, 0, 0, half, rowH, GRASS, GRASS_DK);
+    groundFill(g, half, 0, 1390 - half, rowH, DUNGEON, DUNGEON_DK);
+    const r = sh.rect('stand', 0, 1);
+    const base = rowH - 12;
+    for (const x0 of [0, half]) {
+      let x = x0 + 10;
+      heights.forEach((h, i) => {
+        g.drawImage(sh.canvas, r.x, r.y, r.w, r.h, x, base - h, widths[i], h);
+        x += widths[i] + 14;
+      });
+      // 4x blow-up of the 6 m frame, so individual palette steps are visible
+      g.drawImage(sh.canvas, r.x, r.y, r.w, r.h,
+        x + 10, Math.max(2, base - heights[1] * 4), widths[1] * 4, heights[1] * 4);
+      label(g, `${kind}  ${size | 0}u quad  ${heights.join('/')} px`, x0 + 8, rowH - 2,
+        x0 ? '#e8e8c0' : '#f5f0d0');
+    }
+    out.appendChild(c);
+  }
+}
+
 const CREATURES = qs.get('tiers') ? Object.keys(CREATURE_TIERS) : Object.keys(CREATURE_FAMILIES);
 
 try {
   if (page === 'angles') pageAngles(CREATURES.slice(from, from + count), 'creature');
-  else if (page === 'anim') pageAnim(CREATURES.slice(from, from + count));
+  else if (page === 'field') pageField(CREATURES.slice(from, from + count), 'creature');
+  else if (page === 'field-npc') pageField(NPC_ARCHETYPES.slice(from, from + count), 'npc');
+  else if (page === 'fix') {
+    // One-page verification: how each creature reads in play, then its octants.
+    pageField(CREATURES.slice(from, from + count), 'creature');
+    pageAngles(CREATURES.slice(from, from + Math.min(6, count)), 'creature');
+  } else if (page === 'anim') pageAnim(CREATURES.slice(from, from + count));
   else if (page === 'flora') pageAngles(FLORA_KINDS.slice(from, from + count), 'flora');
   else if (page === 'props') pageAngles(PROP_KINDS.slice(from, from + count), 'prop');
   else if (page === 'npc') pageAngles(NPC_ARCHETYPES.slice(from, from + count), 'npc');

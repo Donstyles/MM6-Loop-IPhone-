@@ -91,7 +91,11 @@ function frame(now) {
   perf.drawCalls = engine.sceneCalls || 0;
   perf.tris = engine.sceneTris || 0;
   perf.ms = performance.now() - t0;
-  if (session) { perf.sprites = session.stats.sprites; perf.entities = session.stats.entities; }
+  if (session) {
+    perf.sprites = session.stats.sprites;
+    perf.entities = session.stats.entities;
+    perf.spriteBatches = session.sprites.drawCalls;
+  }
 
   requestAnimationFrame(frame);
 }

@@ -19,6 +19,7 @@ import { CLASS_START_SKILLS, skillById } from '../../game/skills.js';
 import {
   Screen, A, portraitOf, baked, glow, poly, plate, vignette, gold, paintWall, paintFloor,
   drawWrapped, C_WHITE, C_GOLD, C_CANARY, C_DIM, C_RED, C_GREEN, C_LEARN, hotText,
+  MM6,
 } from './dialogue.js';
 
 const POOL = 25;
@@ -274,8 +275,8 @@ export class ChargenScreen extends Screen {
       const k = CLASSES[id];
       const hit = this.ui.region(`cg:class${id}`, x + 6, ry - 2, w - 12, 16, k.desc);
       if (on) {
-        ctx.save(); ctx.globalAlpha = 0.3; ctx.fillStyle = '#e1cd23';
-        ctx.fillRect(x + 6, ry - 2, w - 12, 16); ctx.restore();
+        MM6.carvedPlate(ctx, x + 6, ry - 2, w - 12, 16,
+          { state: 'down', material: 'stone', seed: 19 });
       }
       F.drawText(ctx, k.name, x + 12, ry, { color: on ? C_GOLD : hit.hover ? C_GOLD : C_WHITE });
       if (hit.click) this.setClass(s, id);
@@ -305,15 +306,21 @@ export class ChargenScreen extends Screen {
       F.drawText(ctx, st.name, x + 10, ry, { color: C_WHITE, tip: st.desc });
       const col = v > base ? C_GREEN : v < base ? C_RED : C_WHITE;
       F.drawText(ctx, String(v), x + 148, ry, { align: 'right', color: col });
-      const b = statBonus(v);
-      F.drawText(ctx, (b >= 0 ? `+${b}` : String(b)), x + 180, ry + 1,
-        { face: 'small', align: 'right', color: C_DIM });
-
-      for (const [id, label, dir, ax] of [['dn', '-', -1, x + 194], ['up', '+', 1, x + 214]]) {
+      // Carved keys with a painted chevron cut into them - MM6 has no chips.
+      for (const [id, dir, ax] of [['dn', -1, x + 194], ['up', 1, x + 214]]) {
         const hit = this.ui.region(`cg:${st.id}${id}`, ax, ry - 2, 16, 15,
           dir > 0 ? `Costs ${costUp(v)} point${costUp(v) > 1 ? 's' : ''}` : 'Sell one point back');
-        A.button(ctx, ax, ry - 2, 16, 15, null, hit.down ? 'down' : 'up');
-        F.drawText(ctx, label, ax + 8, ry + 1, { align: 'center', color: hit.hover ? C_GOLD : C_WHITE });
+        const d = MM6.carvedPlate(ctx, ax, ry - 2, 16, 15,
+          { state: hit.down ? 'down' : hit.hover ? 'hot' : 'up', material: 'brass', seed: 7 });
+        const col = hit.hover ? [244, 224, 120] : [232, 216, 176];
+        const shd = [40, 30, 12];
+        for (let k = 0; k < 4; k++) {
+          const yy = ry + 2 + d + (dir > 0 ? k : 3 - k);
+          MM6.rct(ctx, ax + 8 - k + d, yy + 1, 1, 1, shd);
+          MM6.rct(ctx, ax + 7 + k + d, yy + 1, 1, 1, shd);
+          MM6.rct(ctx, ax + 8 - k + d, yy, 1, 1, col);
+          MM6.rct(ctx, ax + 7 + k + d, yy, 1, 1, col);
+        }
         if (hit.click) { if (dir > 0) this.raise(s, st.id); else this.lower(s, st.id); }
       }
       F.drawText(ctx, `${costUp(v)}pt`, x + w - 8, ry + 1,

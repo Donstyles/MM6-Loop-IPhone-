@@ -13,7 +13,7 @@ import { maxHP, maxSP, effectiveStat } from '../../game/stats.js';
 import {
   HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, hotText, rngFor, paintWall,
   paintFloor, paintShelf, paintCounter, paintClutter, vignette, members, activeMember,
-  charName, partyGold, spend, earn, addCondition, hasCondition, C_WHITE, C_CANARY, C_DIM,
+  charName, partyGold, spend, earn, addCondition, hasCondition, MM6, C_WHITE, C_CANARY, C_DIM,
   C_RED, C_GREEN,
 } from './dialogue.js';
 
@@ -54,14 +54,15 @@ export function paintTavernInterior(g, w, h) {
   g.fillStyle = rampCss('stone', 5); g.fillRect(hx - 16, horizon - 104, 124, 104);
   g.fillStyle = rampCss('stone', 8); g.fillRect(hx - 16, horizon - 104, 124, 6);
   g.fillStyle = '#170a03'; g.fillRect(hx, horizon - 74, 82, 74);
-  glow(g, hx + 41, horizon - 24, 96, '#ff8828', 1);
-  for (let i = 0; i < 8; i++) {
-    const fx = hx + 8 + i * 9;
-    poly(g, [fx, horizon - 4, fx + 4, horizon - 26 - (i % 3) * 8, fx + 9, horizon - 4],
-      rampCss('fire', 9 + (i % 4)));
-  }
+  // Logs first, then flames over them: an EMITS_FIRE sprite with 1-bit alpha,
+  // no soft edge and no falloff.
   g.fillStyle = rampCss('wood', 3);
   for (let i = 0; i < 4; i++) g.fillRect(hx + 6 + i * 18, horizon - 12, 16, 6);
+  MM6.rct(g, hx + 4, horizon - 8, 74, 6, [72, 46, 24]);
+  for (let i = 0; i < 5; i++) {
+    MM6.flame(g, hx + 14 + i * 14, horizon - 8, 16 + (i % 3) * 5, 32 + (i % 4) * 9, i * 2.1);
+  }
+  glow(g, hx + 41, horizon - 24, 90, '#ff8828', 0.9);
 
   // Bar counter along the left, bottles behind it.
   paintShelf(g, 16, 96, 150, { th: 4 });
@@ -76,7 +77,7 @@ export function paintTavernInterior(g, w, h) {
     if (i < 10) { g.fillStyle = rampCss('wood', 6); g.fillRect(x + 2, 128 - 12, 4, 12); }
   }
   paintCounter(g, 0, horizon - 6, 176, 26, { cloth: null });
-  figure(g, 96, horizon - 8, 80, 'rgba(22,16,12,0.92)', 'rgba(255,190,110,0.5)');
+  figure(g, 96, horizon - 8, 84, null, null, { cloth: [116, 82, 52], skin: [212, 168, 130], hood: false, robe: false });
 
   // Tables with patrons, tankards and lamps.
   const tables = [[210, horizon + 44, 1], [330, horizon + 26, 0.85], [124, horizon + 76, 1.15]];
@@ -94,14 +95,17 @@ export function paintTavernInterior(g, w, h) {
       g.fillStyle = rampCss('sand', 11);
       g.fillRect(tx - 22 * s + i * 16 * s, ty - 13 * s, 6, 2);
     }
-    // Patrons around it.
-    figure(g, tx - 40 * s, ty + 8 * s, 62 * s, 'rgba(18,14,12,0.88)', 'rgba(255,170,90,0.42)');
-    figure(g, tx + 40 * s, ty + 8 * s, 58 * s, 'rgba(18,14,12,0.88)', 'rgba(255,170,90,0.30)');
-    glow(g, tx, ty - 46 * s, 54 * s, '#ffc060', 0.5);
-    g.fillStyle = rampCss('gold', 6);
-    g.fillRect(tx - 5, ty - 56 * s, 10, 8);
-    g.fillStyle = '#ffe0a0';
-    g.fillRect(tx - 3, ty - 54 * s, 6, 5);
+    // Patrons around it, each a painted person rather than a cut-out.
+    figure(g, tx - 40 * s, ty + 8 * s, 62 * s);
+    figure(g, tx + 40 * s, ty + 8 * s, 58 * s);
+    // Hanging lamp: a brass box with a flame in it and a banded pool of light.
+    const ly = ty - 56 * s;
+    MM6.rct(g, tx - 1, 0, 2, ly, [58, 52, 44]);
+    MM6.rct(g, tx - 6, ly, 12, 10, [128, 96, 40]);
+    MM6.rct(g, tx - 6, ly, 12, 1, [196, 158, 82]);
+    MM6.rct(g, tx - 4, ly + 2, 8, 7, [30, 24, 16]);
+    MM6.flame(g, tx, ly + 9, 6, 9, tx);
+    glow(g, tx, ly + 6, 46 * s, '#ffc060', 0.55);
   }
 
   paintClutter(g, 18, h - 6, 'barrel', 34);

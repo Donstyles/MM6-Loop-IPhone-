@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { Rand, clamp, smoothstep, lerpN, hash2, valueNoise2 } from '../core/rng.js';
-import { getTexture, makeBillboardField } from './terrain.js';
+import { getTexture, makeBillboardField, textureTint } from './terrain.js';
 import { MeshBuilder, materialFor, addProp } from './building.js';
 import { Pix, toTexture, rampSample, scaleC, mixC } from '../art/texcanvas.js';
+import { quantiseShade } from './sky.js';
 
 // ---------------------------------------------------------------------------
 // Dungeons.
@@ -29,10 +30,50 @@ export const DUNGEON_THEMES = [
  */
 export const INDOOR_HFOV_DEG = 60;
 export const OUTDOOR_HFOV_DEG = 75;
-export const DUNGEON_FOG_NEAR = 512;
-export const DUNGEON_FOG_FAR = 3000;
+/**
+ * Indoor haze. MM6 has no true indoor fog - distance darkening *is* the
+ * lighting - but against a hard 8192 far clip a long corridor otherwise ends
+ * on a lit wall floating in nothing. Start the ramp beyond the party torch so
+ * the near pool is never touched, and run it out slowly so a corridor recedes
+ * into darkness instead of hitting a wall of black two steps away.
+ */
+export const DUNGEON_FOG_NEAR = 1250;
+export const DUNGEON_FOG_FAR = 4800;
+export const DUNGEON_FOG_COLOR = 0x04050a;
 /** graphics.torchlight_distance: 800 units of radius per power level. */
 export const TORCHLIGHT_RADIUS = 800;
+/**
+ * Party torch power level; the radius is 800 units per level. Deliberately 1:
+ * a wider party light washes out the static torch pools, and the pools are the
+ * whole MM6 dungeon image. Torch Light raises it.
+ */
+export const PARTY_TORCH_POWER = 1;
+
+/**
+ * Rendered sRGB value an ambient-only surface - one no torch reaches - should
+ * land on.
+ *
+ * MM6 quotes its corridors at dimming 20-28 -> #383838-#585858, but that is the
+ * *tint*, multiplied onto a texture which is itself only ~40 % grey. Taken
+ * literally it renders a corridor at luminance ~20, which is exactly the
+ * black-screen bug this replaces. So we calibrate against the number that can
+ * actually be measured off the frame and hold the unlit floor at the bottom of
+ * MM6's quoted band; torches then take it up from there.
+ */
+const AMBIENT_TARGET = 0.135;
+
+/**
+ * Rendered sRGB value a surface at the centre of a torch pool should land on.
+ *
+ * MM6 clamps lightlevel at 0 and `8*(31-0)` = 248, so nothing indoors is ever
+ * white; that alone is not enough here because the generated texture families
+ * run from mean luminance 60 (lava rock) to 170 (ice), and a light that always
+ * saturates to 248 hands the whole exposure decision to the texture. Solving
+ * for a per-theme floor on the dimming level - the brightest a light is allowed
+ * to make that theme - keeps an ice cave brighter than a mine without letting
+ * it wash out.
+ */
+const LIT_TARGET = 0.42;
 
 const THEME = {
   cave: {
@@ -95,10 +136,84 @@ const THEME = {
 const CELL = 512;
 const GRID = 56;
 const LEVEL_DROP = 620;
-const SUB = 2;              // floor/ceiling subdivision, 256-unit lighting lattice
-const SUB_V = 3;            // wall vertical subdivision
+const SUB = 3;              // floor/ceiling subdivision, ~170-unit lighting lattice
+const SUB_H = 3;            // wall horizontal subdivision
+const SUB_V = 4;            // wall vertical subdivision
 
 const SRGB_TO_LIN = (c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+
+// --- party torch -----------------------------------------------------------
+//
+// The mobile party light is the reason an MM6 dungeon is navigable at all: a
+// white light of 800 units radius per power level rides the camera, so the
+// faces immediately around the party stay legible and brighten as you walk up
+// to them. It cannot be baked - it moves - and dungeon geometry is drawn with
+// unlit MeshBasicMaterial, so it goes in as a shader term instead.
+//
+// How far a fragment is from the party *is* its view-space depth, so the whole
+// light costs one length() and needs nothing updated per object per frame.
+
+/** Live uniforms, shared by every patched dungeon material. */
+const TORCH_U = {
+  uTorchR: { value: TORCHLIGHT_RADIUS * PARTY_TORCH_POWER },
+  uTorchP: { value: 1 },
+  // Brightest dimming level any light may reach in the level being rendered;
+  // set per dungeon, and only one dungeon is ever resident.
+  uDimMin: { value: 0 },
+};
+
+/** Where the party is standing, kept current for `lightAt`. */
+const _camPos = new THREE.Vector3();
+
+const TORCH_FRAG = `
+#ifdef USE_COLOR
+  // The bake stored MM6's grey multiplier 8*(31-dim)/255, converted to linear.
+  // Undo that to recover the static dimming level, add the mobile light with
+  // the engine's own falloff, and requantise onto the same 32 steps.
+  float mStat = vColor.r < 0.0031308 ? vColor.r * 12.92
+                                     : 1.055 * pow(vColor.r, 0.41666667) - 0.055;
+  float dimS = 31.0 - clamp(mStat, 0.0, 1.0) * 31.875;
+  float dimT = clamp(dimS + min(0.0, (30.0 * length(vViewPos) / uTorchR - 30.0) * uTorchP), uDimMin, 31.0);
+  float mTot = floor(31.5 - dimT) * 0.031372549;
+  float lin = mTot < 0.04045 ? mTot / 12.92 : pow((mTot + 0.055) / 1.055, 2.4);
+  // Self-lit faces (lava) bake above 1.0; the torch may only ever brighten.
+  diffuseColor.rgb *= vColor.rgb * max(1.0, lin / max(vColor.r, 1e-5));
+#else
+  #include <color_fragment>
+#endif
+`;
+
+const _patched = new Map();
+/**
+ * Clone a shared material and splice the party torch into it. building.js
+ * hands the same material instance to towns and buildings, so it must not be
+ * mutated in place.
+ */
+function torchLitMaterial(src) {
+  const hit = _patched.get(src.uuid);
+  if (hit) return hit;
+  const m = src.clone();
+  m.onBeforeCompile = (shader) => {
+    shader.uniforms.uTorchR = TORCH_U.uTorchR;
+    shader.uniforms.uTorchP = TORCH_U.uTorchP;
+    shader.uniforms.uDimMin = TORCH_U.uDimMin;
+    shader.vertexShader = 'varying vec3 vViewPos;\n' + shader.vertexShader.replace(
+      '#include <project_vertex>',
+      '#include <project_vertex>\n\tvViewPos = mvPosition.xyz;',
+    );
+    shader.fragmentShader =
+      'uniform float uTorchR;\nuniform float uTorchP;\nuniform float uDimMin;\nvarying vec3 vViewPos;\n'
+      + shader.fragmentShader.replace('#include <color_fragment>', TORCH_FRAG);
+  };
+  m.customProgramCacheKey = () => 'mm6-dungeon-torch';
+  _patched.set(src.uuid, m);
+  return m;
+}
+
+/** Party-torch contribution to the dimming level at a distance: 0 or negative. */
+function torchDim(dist) {
+  return Math.min(0, (30 * dist / TORCH_U.uTorchR.value - 30) * TORCH_U.uTorchP.value);
+}
 
 // --- torch flame sprite ----------------------------------------------------
 let _flameTex = null;
@@ -158,7 +273,7 @@ class LightGrid {
  * light anywhere in MM6, so the warmth of a torch-lit corridor comes entirely
  * from the wall texture and the flame sprite, not from the light itself.
  */
-function shadeVertex(grid, ambDim, x, y, z, nx, ny, nz, out) {
+function dimAt(grid, ambDim, x, y, z, nx, ny, nz) {
   // Start at the sector's ambient dimming level (31 = pitch black).
   let dim = ambDim;
   const list = grid.near(x, z);
@@ -171,19 +286,62 @@ function shadeVertex(grid, ambDim, x, y, z, nx, ny, nz, out) {
       const d = Math.sqrt(d2) || 1;
       // -30 at the source, 0 at the radius, linear between.
       let contrib = (30 * d / t.range - 30) * t.power;
-      // Facing the light matters; a wall edge-on to a torch stays dark.
+      // Facing the light matters; a wall edge-on to a torch stays dark, which
+      // is what gives a pool an edge instead of a flat wash. MM6 builds its
+      // lightmaps against the facet normal for the same reason.
       const ndl = clamp((dx * nx + dy * ny + dz * nz) / d, 0, 1);
-      contrib *= 0.35 + 0.65 * ndl;
+      contrib *= 0.5 + 0.5 * ndl;
       dim += contrib;
     }
   }
-  const g = SRGB_TO_LIN((8 * (31 - clamp(Math.round(dim), 0, 31))) / 255);
+  return dim;
+}
+
+/** Linear vertex colour for a dimming level, on MM6's 32-step ramp. */
+function greyForDim(dim) {
+  return SRGB_TO_LIN(quantiseShade((8 * (31 - clamp(Math.round(dim), 0, 31))) / 255));
+}
+
+function shadeVertex(grid, ambDim, x, y, z, nx, ny, nz, out) {
+  const dim = Math.max(TORCH_U.uDimMin.value, dimAt(grid, ambDim, x, y, z, nx, ny, nz));
+  const g = greyForDim(dim);
   out[0] = g; out[1] = g; out[2] = g;
   return out;
 }
 
+/**
+ * Sector ambient for a theme, in dimming levels.
+ *
+ * MM6 authors `minAmbientLightLevel` per sector by eye, against art it can
+ * see. We cannot: the texture module is generated and its dungeon families span
+ * mean luminance 60 (lava rock) to 170 (ice), so a single hand-picked dim
+ * renders an ice cave three times brighter than a mine. So measure the art and
+ * solve for the dim that puts an unlit surface on AMBIENT_TARGET, then apply
+ * the theme's authored `ambDim` as a relative bias so a mine still reads
+ * darker than a temple.
+ */
+function exposureFor(T) {
+  const lum = (id) => {
+    const c = textureTint(id);
+    return 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;
+  };
+  let mean = 0.38;
+  try { mean = 0.45 * lum(T.wall) + 0.35 * lum(T.floor) + 0.20 * lum(T.ceil); }
+  catch (e) { /* textures.js may not be loaded; the default is a stone-ish mid */ }
+  mean = clamp(mean, 0.10, 0.90);
+  // Solve 8*(31-dim)/255 * mean = target for dim, on both ends of the range.
+  const dimFor = (target) => 31 - clamp(target / mean, 8 / 255, 1) * 31.875;
+  const bias = (T.ambDim - 25) * 0.55;
+  const lit = clamp(Math.round(dimFor(LIT_TARGET) + bias * 0.5), 0, 20);
+  const ambient = clamp(Math.round(dimFor(AMBIENT_TARGET) + bias), lit + 4, 29);
+  return { ambient, lit, mean };
+}
+
 const _c = [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]];
 const _tmp = [0, 0, 0];
+
+/** Marker tint: this face is self-lit (lava) and ignores the dimming level. */
+const EMISSIVE = 'emissive';
 
 /**
  * Emit a quad subdivided su x sv, lighting every generated vertex.
@@ -217,7 +375,14 @@ function litQuad(b, grid, ambDim, tex, p00, p10, p11, p01, su, sv, uu, vv, tint)
         shadeVertex(grid, ambDim, C[0], C[1], C[2], nx, ny, nz, [0, 0, 0]),
         shadeVertex(grid, ambDim, D[0], D[1], D[2], nx, ny, nz, [0, 0, 0]),
       ];
-      if (tint) for (const cc of cols) { cc[0] *= tint[0]; cc[1] *= tint[1]; cc[2] *= tint[2]; }
+      if (tint === EMISSIVE) {
+        // Lava is drawn at dim 0 - MM6 flags these faces self-lit and skips the
+        // sector's dimming entirely, which is why a lava room glows.
+        const g = SRGB_TO_LIN(quantiseShade(248 / 255));
+        for (const cc of cols) { cc[0] = g; cc[1] = g; cc[2] = g; }
+      } else if (tint) {
+        for (const cc of cols) { cc[0] *= tint[0]; cc[1] *= tint[1]; cc[2] *= tint[2]; }
+      }
       b.quad(tex, A.slice(), B.slice(), C.slice(), D.slice(), {
         colors: cols,
         uvs: [[u0 * uu, v0 * vv], [u1 * uu, v0 * vv], [u1 * uu, v1 * vv], [u0 * uu, v1 * vv]],
@@ -452,13 +617,13 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
     // light with black corridor either side of it; space them closer than
     // about two light radii apart and the pools merge into flat room lighting,
     // which is the single easiest way to lose the look.
-    const density = c.kind === 'corridor' ? 6 : (rm && rm.boss ? 4 : 5);
+    const density = c.kind === 'corridor' ? 3 : (rm && rm.boss ? 3 : 4);
     if ((c.i * 7 + c.j * 13) % density !== 0) continue;
     // Hang the torch on whichever side has a wall.
     const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
     for (const [di, dj] of dirs) {
       if (!solid(c.i + di, c.j + dj)) continue;
-      if (hash2(c.i, c.j, 99) < 0.35) continue;
+      if (hash2(c.i, c.j, 99) < 0.18) continue;
       const tx = wx + di * (CELL / 2 - 60), tz = wz + dj * (CELL / 2 - 60);
       addTorch(tx, c.fy + 330, tz, T.torch, 1.45, T.torchRange, 'wall');
       torches[torches.length - 1].nx = -di; torches[torches.length - 1].nz = -dj;
@@ -478,7 +643,9 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
     if (p.kind === 'lava') addTorch(p.x, -0 + (cells.get(key(Math.floor(p.x / CELL), Math.floor(p.z / CELL))) || { fy: 0 }).fy + 60, p.z, [1.0, 0.42, 0.12], 1.1, 1400, 'lava');
   }
   const grid = new LightGrid(torches);
-  const ambDim = T.ambDim;
+  const exposure = exposureFor(T);
+  const ambDim = exposure.ambient;
+  TORCH_U.uDimMin.value = exposure.lit;
 
   // --- geometry -----------------------------------------------------------
   prog(0.55, 'meshing');
@@ -496,7 +663,7 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
     litQuad(b, grid, ambDim, ftex,
       [x0, f01, z1], [x1, f11, z1], [x1, f10, z0], [x0, f00, z0], SUB, SUB, 1, 1,
       // Lava faces are self-lit: they ignore the dimming level entirely.
-      c.liquid === 'lava' ? [2.8, 2.8, 2.8] : null);
+      c.liquid === 'lava' ? EMISSIVE : null);
 
     // Ceiling.
     const cc0 = ceilOf(c, -0.5, -0.5), cc1 = ceilOf(c, 0.5, -0.5), cc2 = ceilOf(c, 0.5, 0.5), cc3 = ceilOf(c, -0.5, 0.5);
@@ -516,7 +683,7 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
       if (!nb) {
         litQuad(b, grid, ambDim, T.wall,
           [A[0], A[1], A[2]], [B[0], B[1], B[2]], [B[0], e.cb, B[2]], [A[0], e.ca, A[2]],
-          2, SUB_V, 1, Math.max(1, (e.ca - A[1]) / 400));
+          SUB_H, SUB_V, 1, Math.max(1, (e.ca - A[1]) / 400));
       } else {
         // Shared edge between two open cells: close any vertical gap.
         const na = cornerOfNeighbour(nb, e, A, cy);
@@ -588,7 +755,7 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
     geo.setAttribute('color', new THREE.Float32BufferAttribute(
       [col[0], col[1], col[2], col[0], col[1], col[2], col[0], col[1], col[2], col[0], col[1], col[2]], 3));
     const tex = ds.secret ? T.wall : 'door_dungeon';
-    const mesh = new THREE.Mesh(geo, materialFor(tex));
+    const mesh = new THREE.Mesh(geo, torchLitMaterial(materialFor(tex)));
     mesh.position.set(x, c.fy, z);
     mesh.rotation.y = Math.atan2(-ds.di, -ds.dj);
     mesh.updateMatrix();
@@ -649,10 +816,12 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
     } else {
       sub.box('dun_metal', -18, -110, -18, 18, 20, 18, { sides: 'nsew', uu: 0.2, vv: 0.3 });
     }
-    // The bracket sits inside its own light, so it is at dim 0 - full bright.
+    // The bracket sits inside its own light, so it takes the level's
+    // brightest permitted dimming level.
+    const bright = greyForDim(exposure.lit);
     for (const [, part] of sub.parts) {
       for (let vi = 0; vi < part.col.length; vi += 3) {
-        part.col[vi] = 0.92; part.col[vi + 1] = 0.92; part.col[vi + 2] = 0.92;
+        part.col[vi] = bright; part.col[vi + 1] = bright; part.col[vi + 2] = bright;
       }
     }
     b.absorb(sub, new THREE.Matrix4().setPosition(t.x, t.y, t.z));
@@ -701,7 +870,15 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
   group.name = 'dungeon:' + (spec.name || theme);
   group.position.set(OX, 0, OZ);
   const mesh = b.finish({ fog: true });
-  if (mesh) { mesh.updateMatrix(); group.add(mesh); }
+  if (mesh) {
+    mesh.updateMatrix();
+    mesh.material = mesh.material.map(torchLitMaterial);
+    // The party torch needs the camera, and nothing in the shell ticks a map
+    // per frame, so take it off the render itself: onBeforeRender fires once
+    // per mesh per frame with the live camera.
+    mesh.onBeforeRender = (renderer, scene, camera) => { camera.getWorldPosition(_camPos); };
+    group.add(mesh);
+  }
   for (const dm of doorMeshes) group.add(dm);
 
   // Flames: one instanced additive batch for every torch in the level.
@@ -710,12 +887,15 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
     tint: [1, 1, 1],
   }));
   const flames = flameInst.length ? makeBillboardField(flameTexture(), flameInst, {
-    fogColor: 0x000000, fogNear: 2000, fogFar: 3000,
+    fogColor: DUNGEON_FOG_COLOR, fogNear: DUNGEON_FOG_NEAR, fogFar: DUNGEON_FOG_FAR,
   }) : null;
   if (flames) {
     flames.material.blending = THREE.AdditiveBlending;
     flames.material.depthWrite = false;
     flames.renderOrder = 10;
+    // Same reason as the mesh above: billboard and flicker off the render, so
+    // a host that never calls update() still gets facing, animated flames.
+    flames.onBeforeRender = (renderer, scene, camera) => tickFlames(camera);
     group.add(flames);
   }
 
@@ -748,6 +928,19 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
   }
 
   let flick = 0;
+  function tickFlames(camera) {
+    if (!flames) return;
+    flames.userData.updateBillboard(camera);
+    // Flicker: jitter the per-instance tint. Cheap, no reallocation, and it is
+    // the only animation in a dungeon that matters.
+    flick = performance.now() / 1000;
+    const a = flames.geometry.attributes.iTint.array;
+    for (let i = 0; i < flameInst.length; i++) {
+      const f = 0.78 + 0.22 * Math.sin(flick * 11 + i * 2.3) + 0.10 * Math.sin(flick * 27.3 + i);
+      a[i * 3] = f; a[i * 3 + 1] = f * 0.96; a[i * 3 + 2] = f * 0.9;
+    }
+    flames.geometry.attributes.iTint.needsUpdate = true;
+  }
 
   // Automap plate. Indoors MM6 reveals the map as you walk it, so the panel
   // wants a per-cell picture rather than a bitmap crop; we hand back the same
@@ -833,11 +1026,16 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
     }
     return false;
   }
-  /** Baked light at a point, for tinting sprites the same as the geometry. */
-  const _l = [0, 0, 0];
+  /**
+   * Baked light at a point, for tinting sprites the same as the geometry. The
+   * party torch is folded in: a monster two steps away has to brighten as the
+   * party closes on it, or it reads as a cut-out pasted over the wall.
+   */
   function lightAt(x, y, z) {
-    shadeVertex(grid, ambDim, x - OX, y, z - OZ, 0, 1, 0, _l);
-    return { r: _l[0], g: _l[1], b: _l[2] };
+    let dim = dimAt(grid, ambDim, x - OX, y, z - OZ, 0, 1, 0);
+    dim += torchDim(Math.hypot(x - _camPos.x, y - _camPos.y, z - _camPos.z));
+    const g = SRGB_TO_LIN(quantiseShade((8 * (31 - clamp(Math.round(dim), 0, 31))) / 255));
+    return { r: g, g, b: g };
   }
   /** Footstep surface class under a point. */
   function surfaceAt(x, z) {
@@ -860,6 +1058,9 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
 
   return {
     drawMinimap, floorAt, ceilAt, blocked, lightAt, surfaceAt,
+    // maps.js copies these straight onto scene.fog.
+    fogColor: DUNGEON_FOG_COLOR, fogNear: DUNGEON_FOG_NEAR, fogFar: DUNGEON_FOG_FAR,
+    ambientDim: ambDim, litDim: exposure.lit,
     props: shift(props),
     cell: CELL, grid: GRID, originX: OX, originZ: OZ,
     group, theme, name: spec.name || theme,
@@ -885,19 +1086,16 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
       radius: Math.hypot(maxX - minX, maxZ - minZ) / 2,
     },
     triangles: b.tris,
-    update(dt, camera) {
-      if (flames) {
-        flames.userData.updateBillboard(camera);
-        // Flicker: jitter the per-instance tint. Cheap, no reallocation, and
-        // it is the only animation in a dungeon that matters.
-        flick += dt;
-        const a = flames.geometry.attributes.iTint.array;
-        for (let i = 0; i < flameInst.length; i++) {
-          const f = 0.78 + 0.22 * Math.sin(flick * 11 + i * 2.3) + 0.10 * Math.sin(flick * 27.3 + i);
-          a[i * 3] = f; a[i * 3 + 1] = f * 0.96; a[i * 3 + 2] = f * 0.9;
-        }
-        flames.geometry.attributes.iTint.needsUpdate = true;
+    /**
+     * Optional: the render already drives the flames and the party torch, so a
+     * host that never ticks the map still looks right. Hosts that do tick can
+     * set the torch power - Torch Light adds 800 units of radius per level.
+     */
+    update(dt, camera, torchPower) {
+      if (torchPower !== undefined) {
+        TORCH_U.uTorchR.value = TORCHLIGHT_RADIUS * Math.max(1, torchPower);
       }
+      if (camera) tickFlames(camera);
     },
     dispose() {
       group.traverse((o) => { if (o.geometry) o.geometry.dispose(); });

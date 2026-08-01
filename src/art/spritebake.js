@@ -56,16 +56,17 @@ export function octantFor(actorYaw, angleToCam) {
 // still carrying its hue; a deeper falloff turns every figure into a
 // silhouette. Hence: a large ambient term, a key that only just clips at the
 // highlight, and a wide wrap so the whole front of a cylindrical limb stays
-// above half. lit = ambient + key = 1.04 (clips to flat albedo, which is where
-// the palettised "flat highlight" look comes from); shadow = ambient = 0.34.
+// above half. lit = ambient + key = 1.06 (clips to flat albedo, which is where
+// the palettised "flat highlight" look comes from); shadow = ambient = 0.32,
+// i.e. 3.3:1.
 const LIGHT_D = {
   keyDir: [-0.52, 0.60, 0.61],
   fillDir: [0.66, -0.16, 0.34],
   fillCol: [0.34, 0.40, 0.52],
-  ambient: 0.34,
-  key: 0.70,
+  ambient: 0.32,
+  key: 0.74,
   fill: 0.17,
-  wrap: 0.45,   // how much of the key wraps past the terminator
+  wrap: 0.38,   // how much of the key wraps past the terminator
   bands: 0,
 };
 
@@ -368,7 +369,7 @@ export function bakeSheet(renderer, builderFn, opts = {}) {
     palette = true,
     dither = 5,
     margin = 1.06,
-    elevation = 0.17,
+    elevation = 0.13,
     keepModel = false,
   } = opts;
 
@@ -388,7 +389,13 @@ export function bakeSheet(renderer, builderFn, opts = {}) {
   const m = measure(model, actionNames);
   const ce = Math.cos(elevation), se = Math.sin(elevation);
   const cy = (m.minY + m.maxY) / 2;
-  let halfH = ((m.maxY - m.minY) / 2) * ce + m.R * se;
+  // The camera looks slightly down, so depth turns into screen height. `R*se`
+  // is the worst case (the deepest point at the extreme octant); charging the
+  // full worst case to every octant is what puts a long, low creature like a
+  // rat in a cell twice its own height - and since the shell anchors the quad's
+  // bottom edge to the ground, half of that surplus becomes visible float.
+  // 0.75 of it clips nothing in practice at these elevations.
+  let halfH = ((m.maxY - m.minY) / 2) * ce + m.R * se * 0.75;
   let halfW = m.R;
   halfH *= margin; halfW *= margin;
   const measured = halfW / Math.max(1e-4, halfH);
@@ -671,14 +678,18 @@ export function bakeCreatureSheet(renderer, kind, seed = 1, opts = {}) {
   const h = def ? def.height : 192;
   return bakeSheet(renderer, (s) => buildCreature(kind, s), {
     kind, seed, actions: ACTIONS, maxCellH: cellBudget(h, 56, 128, CREATURE_CELL_K), maxAtlas: 1024,
-    margin: 1.03, aspect: def ? def.aspect : 0, ...opts,
+    // Creatures dither far less than scenery does. A monster is a small,
+    // saturated, curved mass; a Bayer pattern strong enough to smooth a sky
+    // gradient turns a demon's chest into a visible red checkerboard at 4x.
+    // MM6's own sprites were palettised without dither for exactly this reason.
+    margin: 1.03, dither: 2, aspect: def ? def.aspect : 0, ...opts,
   });
 }
 
 export function bakeNPCSheet(renderer, archetype, seed = 1, opts = {}) {
   return bakeSheet(renderer, (s) => buildNPC(archetype, s), {
     kind: archetype, seed, actions: ACTIONS, maxCellH: 128, maxAtlas: 1024,
-    margin: 1.03, aspect: 0.60, ...opts,
+    margin: 1.03, dither: 2, aspect: 0.60, ...opts,
   });
 }
 

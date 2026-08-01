@@ -17,7 +17,7 @@ import * as F from '../../art/font.js';
 import { maxHP, maxSP } from '../../game/stats.js';
 import {
   Screen, PANEL, A, plate, baked, glow, poly, rngFor, paintFloor, paintClutter, vignette,
-  members, charName, hasCondition, clearCondition, say, C_WHITE, C_GOLD, C_CANARY, C_DIM,
+  members, charName, hasCondition, clearCondition, say, MM6, C_WHITE, C_GOLD, C_CANARY, C_DIM,
   C_RED, C_GREEN,
 } from './dialogue.js';
 
@@ -52,36 +52,28 @@ export function paintRestPanel(g, w, h) {
   g.fillStyle = rampCss('wood', 6);
   g.fillRect(SKY.x - PANEL.x - 6, SKY.y - PANEL.y - 6, SKY.w + 12, 4);
 
-  // Campfire on the right: a ring of stones, a leaning stack of logs and
-  // tongues of flame. The key light for the whole panel comes off it.
+  // Campfire on the right: a ring of stones, a leaning stack of logs and a
+  // flame sprite. The key light for the whole panel comes off it.
   const fx = w - 96, fy = h - 104;
   for (let i = 0; i < 11; i++) {
     const a = (i / 11) * Math.PI * 2;
     const sx = fx + Math.cos(a) * 44, sy = fy + Math.sin(a) * 17;
-    g.fillStyle = rampCss('stone', sy > fy ? 6 : 3);
-    g.beginPath(); g.ellipse(sx, sy, 9, 7, 0, 0, Math.PI * 2); g.fill();
-    g.fillStyle = rampCss('stone', sy > fy ? 9 : 5);
-    g.beginPath(); g.ellipse(sx - 2, sy - 2, 5, 3, 0, 0, Math.PI * 2); g.fill();
+    MM6.ellip(g, sx, sy, 9, 7, rampCss('stone', sy > fy ? 6 : 3));
+    MM6.ellip(g, sx - 2, sy - 2, 5, 3, rampCss('stone', sy > fy ? 9 : 5));
   }
   // Ash bed.
-  g.fillStyle = rampCss('grey', 3);
-  g.beginPath(); g.ellipse(fx, fy, 34, 12, 0, 0, Math.PI * 2); g.fill();
-  // Logs leaning into a cone.
+  MM6.ellip(g, fx, fy, 34, 12, rampCss('grey', 3));
+  // Logs leaning into a cone, painted as tapering bars with a lit top.
   for (const [ax, ay, bx2, by2] of [[fx - 26, fy + 6, fx + 4, fy - 24],
     [fx + 26, fy + 6, fx - 2, fy - 26], [fx - 18, fy + 9, fx + 14, fy - 14]]) {
-    g.strokeStyle = rampCss('wood', 3); g.lineWidth = 7;
-    g.beginPath(); g.moveTo(ax, ay); g.lineTo(bx2, by2); g.stroke();
-    g.strokeStyle = rampCss('wood', 6); g.lineWidth = 2;
-    g.beginPath(); g.moveTo(ax, ay - 2); g.lineTo(bx2, by2 - 2); g.stroke();
+    MM6.lineH(g, ax, ay, bx2, by2, rampCss('wood', 3), 7);
+    MM6.lineH(g, ax, ay - 2, bx2, by2 - 2, rampCss('wood', 6), 2);
   }
-  // Flames: overlapping tongues, hottest at the base.
-  for (let i = 0; i < 7; i++) {
-    const ox = fx - 24 + i * 8;
-    const hgt = 22 + ((i * 5) % 3) * 12 - Math.abs(i - 3) * 4;
-    poly(g, [ox - 5, fy + 2, ox, fy - hgt, ox + 5, fy + 2], rampCss('fire', 8 + (i % 3)));
-    poly(g, [ox - 2, fy + 2, ox + 1, fy - hgt * 0.6, ox + 3, fy + 2], rampCss('fire', 13));
+  // Flame sprites: tinted around #FF3C1E, 1-bit alpha, no falloff at all.
+  for (let i = 0; i < 5; i++) {
+    MM6.flame(g, fx - 18 + i * 9, fy + 2, 16 + (i % 3) * 6, 34 + (i % 4) * 11, i * 1.9);
   }
-  glow(g, fx, fy - 12, 130, '#ff7818', 0.95);
+  glow(g, fx, fy - 12, 120, '#ff7818', 0.9);
 
   // Bedrolls in the foreground.
   for (let i = 0; i < 3; i++) {
@@ -244,53 +236,57 @@ export class RestScreen extends Screen {
       ctx.fillRect(SKY.x, SKY.y + Math.floor((i * SKY.h) / 16), SKY.w, Math.ceil(SKY.h / 16) + 1);
     }
 
-    // Sun or moon, tracking the hour across the opening.
+    // Sun or moon, tracking the hour across the opening. The disc is a hard
+    // 1-bit silhouette with a couple of banded rings round it - a lemon circle
+    // with a soft alpha halo cannot exist in an indexed frame.
     const dayT = clamp((hour - 6) / 12, 0, 1);
     const nightT = clamp(((hour + 24 - 21) % 24) / 8, 0, 1);
     const bx = SKY.x + SKY.w * (night ? nightT : dayT);
     const by = SKY.y + SKY.h * 0.75 - Math.sin((night ? nightT : dayT) * Math.PI) * SKY.h * 0.55;
     if (night) {
-      glow(ctx, bx, by, 26, '#cfe2f2', 0.6);
-      ctx.fillStyle = '#e8f0f8';
-      ctx.beginPath(); ctx.arc(bx | 0, by | 0, 9, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = rampCss('water', 3);
-      ctx.beginPath(); ctx.arc((bx - 5) | 0, (by - 2) | 0, 8, 0, Math.PI * 2); ctx.fill();
-      // Stars.
+      // Stars first, so the moon sits over them.
       const r = new Rand(7);
       for (let i = 0; i < 30; i++) {
-        ctx.fillStyle = i % 4 ? '#c0d0e0' : '#ffffff';
-        ctx.fillRect(SKY.x + r.int(0, SKY.w - 1), SKY.y + r.int(0, SKY.h * 0.7), 1, 1);
+        MM6.rct(ctx, SKY.x + r.int(0, SKY.w - 1), SKY.y + r.int(0, SKY.h * 0.7), 1, 1,
+          i % 4 ? [192, 208, 224] : [255, 255, 255]);
       }
+      MM6.lightPool(ctx, bx, by, 24, '#9fb8d0', 0.45);
+      MM6.disc(ctx, bx, by, 9, '#e8f0f8');
+      MM6.disc(ctx, bx, by, 8, '#d0dcea');
+      MM6.disc(ctx, bx - 5, by - 2, 8, rampCss('water', 3));
     } else {
-      glow(ctx, bx, by, 34, dusk ? '#ff9040' : '#fff0a0', 0.75);
-      ctx.fillStyle = dusk ? '#ffb050' : '#fff4c0';
-      ctx.beginPath(); ctx.arc(bx | 0, by | 0, 11, 0, Math.PI * 2); ctx.fill();
+      MM6.lightPool(ctx, bx, by, 30, dusk ? '#c86828' : '#d8c060', 0.5);
+      MM6.disc(ctx, bx, by, 11, dusk ? '#c87838' : '#e8dc9c');
+      MM6.disc(ctx, bx, by, 8, dusk ? '#e8a050' : '#f8f0c8');
     }
 
-    // Clouds drift, faster while time is being burned.
+    // Clouds drift, faster while time is being burned. Painted as stacked
+    // scanline bars, so the silhouette is cut rather than feathered.
     const speed = this.pending ? 26 : 3;
     const off = (this.t * speed) % (SKY.w + 120);
     for (let i = 0; i < 4; i++) {
       const cx = SKY.x - 60 + ((off + i * 90) % (SKY.w + 120));
       const cy = SKY.y + 18 + (i % 3) * 22;
       const s = 0.7 + (i % 3) * 0.25;
-      ctx.fillStyle = night ? 'rgba(40,52,72,0.75)' : dusk ? 'rgba(216,150,110,0.8)' : 'rgba(238,242,248,0.85)';
+      const body = night ? [58, 70, 92] : dusk ? [190, 140, 108] : [214, 220, 230];
+      const lit = night ? [86, 100, 124] : dusk ? [226, 178, 132] : [246, 248, 252];
       for (let k = 0; k < 4; k++) {
-        ctx.beginPath();
-        ctx.ellipse((cx + k * 12 * s) | 0, (cy + (k % 2) * 3) | 0, 14 * s, 6 * s, 0, 0, Math.PI * 2);
-        ctx.fill();
+        MM6.ellip(ctx, cx + k * 12 * s, cy + (k % 2) * 3, 14 * s, 6 * s, body);
+        MM6.ellip(ctx, cx + k * 12 * s, cy + (k % 2) * 3 - 2, 12 * s, 3 * s, lit);
       }
     }
-    // Hills along the bottom of the opening.
-    ctx.fillStyle = night ? rampCss('foliage', 1) : rampCss('foliage', 4);
-    ctx.beginPath();
-    ctx.moveTo(SKY.x, SKY.y + SKY.h);
-    for (let x = 0; x <= SKY.w; x += 15) {
-      ctx.lineTo(SKY.x + x, SKY.y + SKY.h - 14 - Math.sin(x * 0.05) * 8 - ((x * 7) % 9));
+    // Hills along the bottom of the opening: two ridges with a lit crest, not
+    // flat triangles.
+    for (const [depth, ramp2, shd] of [[26, 3, 2], [14, 5, 3]]) {
+      for (let x = 0; x <= SKY.w; x++) {
+        const hgt = depth + Math.sin(x * 0.037 + depth) * 8 + Math.sin(x * 0.11 + depth) * 4;
+        const top = Math.round(SKY.y + SKY.h - hgt);
+        ctx.fillStyle = rampCss('foliage', night ? shd : ramp2);
+        ctx.fillRect(SKY.x + x, top, 1, SKY.y + SKY.h - top);
+        ctx.fillStyle = rampCss('foliage', night ? shd + 1 : ramp2 + 2);
+        ctx.fillRect(SKY.x + x, top, 1, 2);
+      }
     }
-    ctx.lineTo(SKY.x + SKY.w, SKY.y + SKY.h);
-    ctx.closePath();
-    ctx.fill();
     ctx.restore();
 
     // Window frame and bars.
@@ -327,13 +323,16 @@ export class RestScreen extends Screen {
       ctx.fillRect(g.x + ox, g.y, 3, g.h);
     }
 
-    // Glass body.
-    ctx.save();
-    ctx.globalAlpha = 0.35;
-    ctx.fillStyle = '#cfe2f2';
-    poly(ctx, [g.x + 5, g.y, g.x + g.w - 5, g.y, g.x + g.w / 2 + 3, g.y + g.h / 2,
-      g.x + g.w - 5, g.y + g.h, g.x + 5, g.y + g.h, g.x + g.w / 2 - 3, g.y + g.h / 2], '#cfe2f2');
-    ctx.restore();
+    // Glass body: two hard cones with a lit left facet. No transparency - a
+    // painted 8-bit glass is a value pattern, not an alpha.
+    for (let i = 0; i < g.h; i++) {
+      const t = i / (g.h - 1);
+      const pinch = Math.abs(t - 0.5) * 2;
+      const k = Math.max(2, Math.round((g.w / 2 - 5) * (0.16 + pinch * 0.84)));
+      MM6.rct(ctx, g.x + g.w / 2 - k, g.y + i, k * 2, 1, [96, 116, 130]);
+      MM6.rct(ctx, g.x + g.w / 2 - k, g.y + i, Math.max(1, (k * 0.5) | 0), 1, [154, 178, 194]);
+      MM6.rct(ctx, g.x + g.w / 2 + k - 1, g.y + i, 1, 1, [56, 70, 82]);
+    }
 
     // Sand: top cone empties, bottom fills.
     const topH = (g.h / 2 - 4) * frac;
@@ -392,28 +391,45 @@ export class RestScreen extends Screen {
 
   drawStatus(ctx) {
     // Food and party state, then whatever the last action reported.
+    // The party's state is a sheet of vellum pinned to the rock, written in
+    // ink - not a black readout panel with capsule bars.
     const x = PANEL.x + 262, y = PANEL.y + 18, w = PANEL.w - 262 - 14;
-    plate(ctx, x, y, w, 128, 0.66);
-    F.drawText(ctx, 'Camp', x + 8, y + 5, { color: C_CANARY });
-    A.rule(ctx, x + 6, y + 20, w - 12, '#7a6a4a');
+    MM6.paper(ctx, x, y, w, 128, 'book', 61);
+    MM6.rct(ctx, x, y, w, 1, [96, 76, 44]);
+    MM6.rct(ctx, x, y + 127, w, 1, [96, 76, 44]);
+    for (const nx of [x + 8, x + w - 10]) MM6.disc(ctx, nx, y + 6, 2, '#5a4a2a');
+    const INK = '#2c1e0c', EMB = '#ece0c2';
+    F.drawText(ctx, 'Camp', x + 8, y + 8, { color: INK, shadow: EMB });
+    A.rule(ctx, x + 6, y + 22, w - 12, '#7a6038', 0.6);
     const p = this.party;
-    F.drawText(ctx, `Food: ${p.food | 0}`, x + 8, y + 26,
-      { face: 'small', color: (p.food | 0) > 0 ? C_WHITE : C_RED });
+    F.drawText(ctx, `Food: ${p.food | 0}`, x + 8, y + 28,
+      { face: 'small', color: (p.food | 0) > 0 ? INK : '#a02008', shadow: EMB });
     const list = members(this.session);
     list.forEach((ch, i) => {
-      const ry = y + 40 + i * 20;
+      const ry = y + 44 + i * 19;
       const mh = this.safe(() => maxHP(ch), ch.maxHP || 1);
       const ms = this.safe(() => maxSP(ch), ch.maxSP || 0);
-      F.drawText(ctx, charName(ch), x + 8, ry, { face: 'small', color: C_WHITE });
-      A.statBar(ctx, x + 70, ry, 50, 5, (ch.hp | 0) / Math.max(1, mh), 'hp');
-      A.statBar(ctx, x + 124, ry, 50, 5, ms ? (ch.sp | 0) / ms : 0, 'sp');
-      F.drawText(ctx, `${ch.hp | 0}`, x + w - 8, ry - 1,
-        { face: 'small', align: 'right', color: (ch.hp | 0) < mh ? C_RED : C_GREEN });
+      F.drawText(ctx, charName(ch), x + 8, ry, { face: 'small', color: INK, shadow: EMB });
+      // Painted gauges: a cut groove with a hard bar in it, square ended.
+      const bar = (bx, frac, col) => {
+        MM6.rct(ctx, bx, ry + 1, 52, 6, [58, 44, 26]);
+        MM6.rct(ctx, bx, ry + 1, 52, 1, [34, 24, 12]);
+        const fw = Math.max(0, Math.round(50 * Math.max(0, Math.min(1, frac))));
+        if (fw) {
+          MM6.rct(ctx, bx + 1, ry + 2, fw, 4, col);
+          MM6.rct(ctx, bx + 1, ry + 2, fw, 1, MM6.mix(col, [255, 255, 255], 0.35));
+        }
+      };
+      const f = (ch.hp | 0) / Math.max(1, mh);
+      bar(x + 66, f, f > 0.5 ? [40, 200, 40] : f > 0.25 ? [224, 208, 32] : [208, 32, 16]);
+      bar(x + 124, ms ? (ch.sp | 0) / ms : 0, [40, 72, 216]);
+      F.drawText(ctx, `${ch.hp | 0}`, x + w - 8, ry,
+        { face: 'small', align: 'right', color: (ch.hp | 0) < mh ? '#a02008' : '#166b16', shadow: EMB });
     });
 
     if (this.messageT < 8 && this.message) {
       const my = PANEL.y + PANEL.h - 34;
-      plate(ctx, PANEL.x + 12, my, PANEL.w - 24, 22, 0.7);
+      MM6.stipple(ctx, PANEL.x + 12, my, PANEL.w - 24, 22, [0, 0, 0], 0.66);
       F.drawText(ctx, this.message, PANEL.x + PANEL.w / 2, my + 6,
         { align: 'center', color: this.messageColor || C_WHITE, maxWidth: PANEL.w - 40 });
     }

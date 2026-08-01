@@ -20,7 +20,7 @@ import { itemName, itemValue, itemDescription, itemDef, shopStock } from '../../
 import {
   HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, rngFor, paintWall,
   paintFloor, paintShelf, paintCounter, paintClutter, vignette, activeMember, charName,
-  partyGold, spend, earn, say, C_WHITE, C_GOLD, C_CANARY, C_DIM, C_RED,
+  partyGold, spend, earn, say, MM6, C_WHITE, C_GOLD, C_CANARY, C_DIM, C_RED,
 } from './dialogue.js';
 
 // ---------------------------------------------------------------------------
@@ -37,221 +37,71 @@ const POTION_CSS = {
 };
 
 /**
- * Paint an item as a small painted object. MM6 ships a hand-drawn bitmap per
- * item; the shape families below are the same silhouettes at 8-bit scale.
+ * Map a shop item onto one of the painted bitmaps in mm6art. MM6's item art is
+ * a modelled object - metal with a lit edge and a shadowed flat, wood with
+ * grain, a wrapped grip - so the whole set is painted there and only chosen
+ * here.
  */
-export function drawItemIcon(ctx, item, cx, cy, s = 28) {
+function artKindOf(item) {
   const def = itemDef(item.def) || {};
   const type = item.type || def.type || 'misc';
-  const skill = def.skill || '';
-  // Steel comes off the stone ramp, not grey: MM6's metal is cool and slightly
-  // blue-green, and pure grey reads as plastic against the painted interiors.
-  const steel = (t) => rampCss('stone', Math.max(1, t - 1));
-  const wood = (t) => rampCss('wood', t);
-  const brass = (t) => rampCss('gold', t);
-  const half = s / 2;
-  ctx.save();
-  ctx.translate(cx | 0, cy | 0);
-
-  // A blade points up: tapered point, flat edges, a lit left facet and a
-  // shadowed right one so it does not read as a candle.
-  const blade = (len, wdt) => {
-    const top = -half + (s - len) * 0.4;
-    const bot = top + len;
-    poly(ctx, [0, top, wdt, top + wdt * 2, wdt, bot, -wdt, bot, -wdt, top + wdt * 2], steel(9));
-    poly(ctx, [0, top, 0, bot, -wdt, bot, -wdt, top + wdt * 2], steel(13));
-    ctx.fillStyle = steel(4);
-    ctx.fillRect(wdt - 1, top + wdt * 2, 1, bot - top - wdt * 2);
-    return { top, bot };
-  };
-
-  switch (type) {
-    case 'weapon':
-      if (skill === 'bow') {
-        ctx.strokeStyle = wood(7); ctx.lineWidth = 3;
-        ctx.beginPath(); ctx.arc(4, 0, half - 3, Math.PI * 0.62, Math.PI * 1.38); ctx.stroke();
-        ctx.strokeStyle = '#e8dcb0'; ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(-2, -half + 3); ctx.lineTo(-2, half - 3); ctx.stroke();
-      } else if (skill === 'staff') {
-        ctx.fillStyle = wood(6); ctx.fillRect(-2, -half + 2, 4, s - 4);
-        ctx.fillStyle = wood(9); ctx.fillRect(-2, -half + 2, 1, s - 4);
-        A.gem(ctx, -3, -half + 1, 6, 'arcane');
-      } else if (skill === 'axe') {
-        ctx.fillStyle = wood(6); ctx.fillRect(-2, -half + 4, 4, s - 6);
-        ctx.fillStyle = wood(9); ctx.fillRect(-2, -half + 4, 1, s - 6);
-        // Crescent head: a bitten arc rather than a slab.
-        ctx.fillStyle = steel(10);
-        ctx.beginPath();
-        ctx.moveTo(2, -half + 3);
-        ctx.quadraticCurveTo(half + 2, -half + 6, half - 1, 3);
-        ctx.quadraticCurveTo(half - 6, -half + 10, 2, -half + 9);
-        ctx.closePath(); ctx.fill();
-        ctx.fillStyle = steel(13);
-        ctx.beginPath();
-        ctx.moveTo(2, -half + 4);
-        ctx.quadraticCurveTo(half - 1, -half + 7, half - 3, 0);
-        ctx.quadraticCurveTo(half - 7, -half + 9, 2, -half + 8);
-        ctx.closePath(); ctx.fill();
-      } else if (skill === 'spear') {
-        ctx.fillStyle = wood(6); ctx.fillRect(-1, -half + 8, 3, s - 8);
-        poly(ctx, [-3, -half + 9, 0, -half, 3, -half + 9], steel(12));
-      } else if (skill === 'mace') {
-        ctx.fillStyle = wood(6); ctx.fillRect(-2, -2, 4, half + 1);
-        ctx.fillStyle = steel(9);
-        ctx.beginPath(); ctx.arc(0, -half + 7, 6, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = steel(13);
-        ctx.beginPath(); ctx.arc(-2, -half + 5, 2, 0, Math.PI * 2); ctx.fill();
-      } else if (skill === 'dagger') {
-        const b = blade(s * 0.46, 2);
-        ctx.fillStyle = brass(8); ctx.fillRect(-5, b.bot, 10, 2);
-        ctx.fillStyle = wood(5); ctx.fillRect(-2, b.bot + 2, 4, 6);
-        ctx.fillStyle = brass(11); ctx.fillRect(-3, b.bot + 8, 6, 2);
-      } else {
-        const b = blade(s * 0.62, 3);
-        ctx.fillStyle = brass(9); ctx.fillRect(-8, b.bot, 16, 3);
-        ctx.fillStyle = brass(12); ctx.fillRect(-8, b.bot, 16, 1);
-        ctx.fillStyle = wood(5); ctx.fillRect(-2, b.bot + 3, 4, 7);
-        ctx.fillStyle = brass(11); ctx.fillRect(-4, b.bot + 10, 8, 3);
-      }
-      break;
-    case 'bow':
-      ctx.strokeStyle = wood(7); ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.arc(4, 0, half - 3, Math.PI * 0.62, Math.PI * 1.38); ctx.stroke();
-      ctx.strokeStyle = '#e8dcb0'; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(-2, -half + 3); ctx.lineTo(-2, half - 3); ctx.stroke();
-      break;
-    case 'shield':
-      poly(ctx, [-half + 3, -half + 3, half - 3, -half + 3, half - 4, 2, 0, half - 2, -half + 4, 2], steel(8));
-      poly(ctx, [-half + 5, -half + 5, 0, -half + 5, 0, half - 6, -half + 6, 0], steel(11));
-      A.gem(ctx, -3, -3, 6, 'blood');
-      break;
-    case 'armor': {
-      // Leather is hide-brown, mail and plate are steel; the mail gets a ring
-      // stipple so the two read differently at icon size.
-      const leather = skill === 'leather';
-      const body = leather ? wood(6) : steel(8);
-      const lit = leather ? wood(9) : steel(12);
-      const dk = leather ? wood(3) : steel(4);
-      poly(ctx, [-half + 5, -half + 7, -4, -half + 3, 4, -half + 3, half - 5, -half + 7,
-        half - 7, half - 4, -half + 7, half - 4], body);
-      ctx.fillStyle = lit;
-      poly(ctx, [-half + 5, -half + 7, -4, -half + 3, -1, -half + 3, -1, half - 4,
-        -half + 7, half - 4], lit);
-      ctx.fillStyle = dk;
-      ctx.fillRect(-1, -half + 5, 2, s - 10);
-      if (skill === 'chain') {
-        ctx.fillStyle = dk;
-        for (let yy = -half + 9; yy < half - 6; yy += 3) {
-          for (let xx = -half + 8; xx < half - 8; xx += 3) {
-            ctx.fillRect(xx + ((yy / 3) & 1), yy, 1, 1);
-          }
-        }
-      }
-      ctx.fillStyle = brass(9);
-      ctx.fillRect(-half + 6, -half + 6, s - 12, 2);
-      break;
-    }
-    case 'helm':
-      ctx.fillStyle = steel(9);
-      ctx.beginPath(); ctx.arc(0, 1, half - 4, Math.PI, Math.PI * 2); ctx.fill();
-      ctx.fillRect(-half + 4, 1, s - 8, 5);
-      ctx.fillStyle = steel(13);
-      ctx.beginPath(); ctx.arc(-2, 0, half - 7, Math.PI * 1.1, Math.PI * 1.6); ctx.fill();
-      ctx.fillStyle = steel(4); ctx.fillRect(-1, -2, 2, 8);
-      break;
-    case 'boots':
-      poly(ctx, [-5, -half + 4, 2, -half + 4, 3, 4, half - 3, 6, half - 3, half - 4, -5, half - 4], wood(6));
-      ctx.fillStyle = wood(9); ctx.fillRect(-5, -half + 4, 2, s - 8);
-      break;
-    case 'gauntlets':
-      ctx.fillStyle = steel(8); ctx.fillRect(-6, -4, 12, 12);
-      for (let i = 0; i < 4; i++) { ctx.fillStyle = steel(10); ctx.fillRect(-6 + i * 3, -10, 2, 7); }
-      ctx.fillStyle = steel(5); ctx.fillRect(-6, 6, 12, 3);
-      break;
-    case 'belt':
-      ctx.fillStyle = wood(5); ctx.fillRect(-half + 3, -3, s - 6, 6);
-      ctx.fillStyle = brass(10); ctx.fillRect(-3, -5, 7, 10);
-      ctx.fillStyle = '#000000'; ctx.fillRect(-1, -3, 3, 6);
-      break;
-    case 'cloak':
-      poly(ctx, [-6, -half + 4, 6, -half + 4, half - 3, half - 3, -half + 3, half - 3], rampCss('blood', 5));
-      poly(ctx, [-6, -half + 4, 0, -half + 4, 0, half - 3, -half + 3, half - 3], rampCss('blood', 7));
-      ctx.fillStyle = brass(10); ctx.fillRect(-7, -half + 3, 14, 2);
-      break;
-    case 'amulet':
-      ctx.strokeStyle = brass(9); ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.arc(0, -2, half - 6, Math.PI * 0.15, Math.PI * 0.85); ctx.stroke();
-      A.gem(ctx, -4, half - 12, 8, 'arcane');
-      break;
-    case 'ring':
-      ctx.strokeStyle = brass(10); ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(0, 2, half - 8, 0, Math.PI * 2); ctx.stroke();
-      A.gem(ctx, -3, -half + 5, 6, 'water');
-      break;
-    case 'potion': {
-      const col = POTION_CSS[def.color] || '#c02818';
-      ctx.fillStyle = 'rgba(200,220,230,0.55)';
-      ctx.beginPath(); ctx.arc(0, 3, half - 6, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = col;
-      ctx.beginPath(); ctx.arc(0, 4, half - 8, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = 'rgba(240,250,255,0.7)';
-      ctx.fillRect(-3, -half + 4, 6, 6);
-      ctx.fillStyle = wood(5); ctx.fillRect(-3, -half + 1, 6, 4);
-      ctx.fillStyle = '#ffffff';
-      ctx.globalAlpha = 0.5; ctx.fillRect(-4, 0, 2, 5); ctx.globalAlpha = 1;
-      break;
-    }
-    case 'scroll':
-      ctx.fillStyle = rampCss('sand', 12);
-      ctx.fillRect(-half + 5, -half + 6, s - 10, s - 12);
-      ctx.fillStyle = rampCss('sand', 8);
-      ctx.fillRect(-half + 5, -half + 6, s - 10, 3);
-      ctx.fillRect(-half + 5, half - 9, s - 10, 3);
-      ctx.fillStyle = '#6b5636';
-      for (let i = 0; i < 4; i++) ctx.fillRect(-half + 8, -half + 12 + i * 3, s - 18, 1);
-      break;
-    case 'wand':
-      ctx.fillStyle = wood(7); ctx.fillRect(-1, -2, 3, half + 2);
-      A.gem(ctx, -4, -half + 3, 8, 'arcane');
-      break;
-    case 'spellbook':
-      ctx.fillStyle = rampCss('blood', 4);
-      ctx.fillRect(-half + 4, -half + 5, s - 8, s - 10);
-      ctx.fillStyle = rampCss('sand', 12);
-      ctx.fillRect(-half + 6, -half + 7, s - 12, s - 14);
-      ctx.fillStyle = brass(10);
-      ctx.fillRect(-half + 4, -half + 5, 3, s - 10);
-      A.gem(ctx, -2, -2, 5, 'arcane');
-      break;
-    case 'reagent':
-      ctx.fillStyle = rampCss('foliage', 8);
-      ctx.beginPath(); ctx.ellipse(0, 2, half - 8, half - 5, 0.5, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = rampCss('foliage', 12);
-      ctx.fillRect(-1, -half + 4, 2, s - 10);
-      break;
-    case 'gem':
-      A.gem(ctx, -half + 6, -half + 6, s - 12, 'ice');
-      break;
-    case 'gold':
-      for (let i = 0; i < 3; i++) {
-        ctx.fillStyle = brass(9 - i);
-        ctx.beginPath(); ctx.ellipse(0, 4 - i * 4, half - 6, 4, 0, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = brass(13);
-        ctx.beginPath(); ctx.ellipse(-2, 2 - i * 4, half - 10, 2, 0, 0, Math.PI * 2); ctx.fill();
-      }
-      break;
-    default:
-      ctx.fillStyle = wood(6);
-      ctx.beginPath(); ctx.ellipse(0, 2, half - 6, half - 4, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = wood(9); ctx.fillRect(-3, -half + 4, 6, 3);
+  const skill = def.skill || item.skill || '';
+  if (type === 'weapon') {
+    if (skill === 'bow') return 'bow';
+    if (skill === 'staff') return 'staff';
+    if (skill === 'axe') return 'axe';
+    if (skill === 'spear') return 'spear';
+    if (skill === 'mace') return 'mace';
+    if (skill === 'dagger') return 'dagger';
+    return 'sword';
   }
+  if (type === 'armor') return skill === 'chain' ? 'chain' : 'armor';
+  return type;
+}
 
-  ctx.restore();
+/** Metal, wood or hide, picked from what the item actually is. */
+function artMatOf(item) {
+  const def = itemDef(item.def) || {};
+  const type = item.type || def.type || 'misc';
+  const skill = def.skill || item.skill || '';
+  if (item.material) return item.material;
+  if (type === 'armor') return skill === 'leather' ? 'leather' : skill === 'chain' ? 'iron' : 'steel';
+  if (type === 'boots' || type === 'belt') return 'leather';
+  if (type === 'cloak') return 'cloth';
+  if (type === 'amulet' || type === 'ring') return 'gold';
+  if (type === 'scroll') return 'bone';
+  if ((def.tier || 1) >= 4) return 'silver';
+  return 'steel';
+}
+
+const POTION_ACCENT = POTION_CSS;
+
+/** How tall an item is painted on the shop's shelf. */
+export function itemArtSize(item) {
+  const k = artKindOf(item);
+  switch (k) {
+    case 'sword': case 'spear': case 'staff': return 58;
+    case 'bow': case 'axe': case 'armor': case 'chain': return 52;
+    case 'dagger': case 'wand': case 'mace': return 44;
+    case 'ring': case 'amulet': case 'gem': return 28;
+    case 'potion': return 38;
+    default: return 42;
+  }
+}
+
+/** Paint an item as a small painted object at (cx, cy), `s` pixels tall. */
+export function drawItemIcon(ctx, item, cx, cy, s = 28) {
+  const def = itemDef(item.def) || {};
+  const kind = artKindOf(item);
+  const accent = kind === 'potion' ? (POTION_ACCENT[def.color] || '#c02818')
+    : item.tint || (def.tier >= 3 ? '#4090f0' : '#c02818');
+  MM6.drawItemArt(ctx, kind, cx, cy, s, { mat: artMatOf(item), accent });
 
   // Broken items are marked red and unidentified ones green. The inventory
   // tints the bitmap itself; here the icons sit on a painted interior, so the
   // state goes on a corner flash that cannot be lost in the backdrop.
   if (item.broken || item.identified === false) {
+    const half = s / 2;
     ctx.fillStyle = item.broken ? '#ff0000' : '#00e100';
     ctx.fillRect((cx - half) | 0, (cy - half) | 0, 4, 4);
     ctx.fillRect((cx + half - 4) | 0, (cy + half - 4) | 0, 4, 4);
@@ -428,8 +278,13 @@ export function paintShopInterior(g, w, h, kind) {
 
   // The shopkeeper, large enough to read, behind a heavy counter.
   const cy = h - 64;
-  figure(g, w * 0.70, cy + 8, 128, 'rgba(20,17,20,0.94)', 'rgba(255,214,140,0.55)', {
-    hat: kind === 'magic' || kind === 'alchemy', w: 54,
+  // The proprietor stands behind the counter, below the stock shelves, lit by
+  // the lantern: a painted person, not a silhouette.
+  figure(g, w * 0.72, cy + 10, 118, null, null, {
+    hat: kind === 'magic' || kind === 'alchemy',
+    cloth: kind === 'magic' ? [64, 54, 96] : kind === 'alchemy' ? [72, 88, 68] : [104, 74, 44],
+    skin: [206, 162, 124], hair: [72, 48, 26], robe: kind === 'magic' || kind === 'alchemy',
+    hood: false,
   });
   // Shadow the counter throws forward.
   g.save();
@@ -528,7 +383,7 @@ export function paintShopInterior(g, w, h, kind) {
 // Screen
 // ---------------------------------------------------------------------------
 
-const GRID = { x: PANEL.x + 14, y: PANEL.y + 22, cols: 6, rows: 3, cw: 72, ch: 84 };
+const GRID = { x: PANEL.x + 14, y: PANEL.y + 20, cols: 6, rows: 2, cw: 74, ch: 76 };
 const RESTOCK_DAYS = 7;
 
 export class ShopScreen extends HouseScreen {
@@ -677,65 +532,72 @@ export class ShopScreen extends HouseScreen {
     return baked(`shop:${this.kind}`, PANEL.w, PANEL.h, (g, w, h) => paintShopInterior(g, w, h, this.kind));
   }
 
+  /**
+   * MM6 lays the stock straight onto the painted room: item bitmaps on shelves,
+   * with no bordered cells, no captions and no prices under them. The name and
+   * the price appear only for the item under the pointer, on the status line.
+   */
   drawContent(ctx) {
     const list = this.currentList();
     const heading = {
       buy: this.special ? 'Special Stock' : 'For Sale',
       sell: `Sell from ${charName(this.character || activeMember(this.session))}`,
-      identify: 'Identify - the appraiser charges by value',
-      repair: 'Repair - broken items only',
+      identify: 'Identify',
+      repair: 'Repair',
     }[this.mode] || '';
 
     const gx = GRID.x, gy = GRID.y;
-    const gw = GRID.cols * GRID.cw + 8;
-    // Only plate the rows in use, so a shop with three items does not black out
-    // the whole painting behind it.
     const rows = Math.max(1, Math.min(GRID.rows, Math.ceil(list.length / GRID.cols)));
-    const gh = rows * GRID.ch + 22;
-    plate(ctx, gx - 8, gy - 20, gw, gh, 0.58);
-    F.drawText(ctx, heading, gx - 2, gy - 16, { color: C_CANARY });
+
+    // Painted shelves for the stock to stand on - an object in the room, not a
+    // widget. The heading is engraved into the shelf's front edge.
+    for (let r = 0; r < rows; r++) {
+      const sy = gy + r * GRID.ch + GRID.ch - 22;
+      const sw = GRID.cols * GRID.cw;
+      MM6.rct(ctx, gx - 8, sy, sw + 12, 5, [96, 68, 38]);
+      MM6.rct(ctx, gx - 8, sy, sw + 12, 1, [156, 120, 74]);
+      MM6.rct(ctx, gx - 8, sy + 5, sw + 12, 2, [44, 30, 16]);
+      MM6.stipple(ctx, gx - 8, sy + 7, sw + 12, 5, [0, 0, 0], 0.26);
+    }
+    F.drawText(ctx, heading, gx - 4, gy - 18, { color: C_CANARY });
 
     if (!list.length) {
-      F.drawText(ctx, this.emptyText(), gx + gw / 2 - 8, gy + 50, { align: 'center', color: C_DIM });
+      F.drawText(ctx, this.emptyText(), gx + (GRID.cols * GRID.cw) / 2, gy + 40,
+        { align: 'center', color: C_CANARY });
       return;
     }
 
+    let hover = null;
     for (let i = 0; i < Math.min(list.length, GRID.cols * GRID.rows); i++) {
       const item = list[i];
-      const cx = gx + (i % GRID.cols) * GRID.cw;
-      const cy = gy + Math.floor(i / GRID.cols) * GRID.ch;
-      const price = this.priceFor(item);
-      const affordable = price <= partyGold(this.session) || this.mode === 'sell';
+      const cx = gx + (i % GRID.cols) * GRID.cw + (GRID.cw - 4) / 2;
+      const shelfY = gy + Math.floor(i / GRID.cols) * GRID.ch + GRID.ch - 22;
+      const size = itemArtSize(item);
+      const cy = shelfY - size / 2 - 2;
 
-      const hit = this.ui.region(`${this.id}:it${i}`, cx, cy, GRID.cw - 4, GRID.ch - 8);
+      const hit = this.ui.region(`${this.id}:it${i}`, cx - 26, cy - size / 2 - 2, 52, size + 6);
+      // Hovering lights the object, the way a painted highlight would - there
+      // is no cell to draw a border around.
       if (hit.hover) {
-        ctx.save();
-        ctx.globalAlpha = 0.30;
-        ctx.fillStyle = '#e1cd23';
-        ctx.fillRect(cx, cy, GRID.cw - 4, GRID.ch - 8);
-        ctx.restore();
-        this.status = itemDescription ? shortDesc(item) : itemName(item);
+        MM6.stipple(ctx, cx - 26, cy - size / 2 - 2, 52, size + 6, [255, 232, 150], 0.30);
+        hover = item;
       }
-      A.bevel(ctx, cx, cy, GRID.cw - 4, GRID.ch - 8, { depth: 1, raised: !!hit.hover });
-
-      drawItemIcon(ctx, item, cx + (GRID.cw - 4) / 2, cy + 30, 40);
-
-      const nm = itemName(item);
-      F.drawText(ctx, nm, cx + (GRID.cw - 4) / 2, cy + 52,
-        { face: 'small', align: 'center', color: hit.hover ? C_GOLD : C_WHITE, maxWidth: GRID.cw - 10 });
-      F.drawText(ctx, `${gold(price)}g`, cx + (GRID.cw - 4) / 2, cy + 62,
-        { face: 'small', align: 'center', color: affordable ? C_CANARY : C_RED });
-
+      drawItemIcon(ctx, item, cx, cy, size);
       if (hit.click) this.act(item);
     }
 
-    // The hovered item's full name and price, along the bottom of the panel.
-    if (this.status) {
-      const y = PANEL.y + PANEL.h - 26;
-      plate(ctx, PANEL.x + 10, y, PANEL.w - 20, 18, 0.7);
-      F.drawText(ctx, this.status, PANEL.x + 16, y + 4, { color: C_WHITE, maxWidth: PANEL.w - 32 });
-      this.status = '';
+    // The hovered item's name and price, engraved along the bottom of the room.
+    if (hover) {
+      const price = this.priceFor(hover);
+      const affordable = price <= partyGold(this.session) || this.mode === 'sell';
+      const y = PANEL.y + PANEL.h - 24;
+      MM6.stipple(ctx, PANEL.x + 8, y - 2, PANEL.w - 16, 18, [0, 0, 0], 0.62);
+      F.drawText(ctx, itemName(hover), PANEL.x + 16, y + 2,
+        { color: C_WHITE, maxWidth: PANEL.w - 130 });
+      F.drawText(ctx, `${gold(price)} gold`, PANEL.x + PANEL.w - 16, y + 2,
+        { align: 'right', color: affordable ? C_CANARY : C_RED });
     }
+    this.status = '';
   }
 
   emptyText() {

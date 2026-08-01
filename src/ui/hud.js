@@ -39,6 +39,9 @@ const BUFF_ROW_X = [
 ];
 const FOODGOLD_Y = 322;
 const TAB_POS = [[491, 353], [527, 353], [546, 353], [570, 353], [600, 361]];
+const TAB_W = [34, 17, 22, 28, 30];
+const TAB_H = [26, 26, 26, 26, 22];
+const TAB_LABELS = ['Current Quests', 'Auto Notes', 'Maps', 'Calendar', 'History'];
 
 const PARTY_BUFFS = [
   'Feather Fall', 'Resist Fire', 'Resist Air', 'Resist Water', 'Resist Mind',
@@ -208,45 +211,22 @@ export class HUD {
   }
 
   /**
-   * MM6's compass is not a needle - it is a ~240px panoramic strip sliding
-   * behind a 26px aperture, so the cardinal letters scroll past as you turn.
+   * Not a needle: a painted panoramic strip sliding behind a narrow aperture,
+   * so the cardinal letters scroll past as you turn.
    */
   drawCompass(ctx) {
-    const x = COMPASS_X + this.dx;
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(x, COMPASS_Y, COMPASS_W, 20);
-    ctx.clip();
-    ctx.fillStyle = '#14100a';
-    ctx.fillRect(x, COMPASS_Y, COMPASS_W, 20);
-
-    const yaw = this.session.player.yaw;
-    const STRIP = 240;
-    // One full turn scrolls the strip exactly once.
-    let off = ((yaw / (Math.PI * 2)) * STRIP) % STRIP;
-    const marks = [['N', 0], ['E', 60], ['S', 120], ['W', 180]];
-    for (let rep = -1; rep <= 1; rep++) {
-      for (const [label, pos] of marks) {
-        const sx = Math.round(x + COMPASS_W / 2 + (pos - off) + rep * STRIP);
-        if (sx < x - 8 || sx > x + COMPASS_W + 8) continue;
-        F.drawText(ctx, label, sx, COMPASS_Y + 5, { face: 'small', align: 'center', color: F.TEXT_HILITE || '#E1CD23' });
-      }
-      for (let i = 0; i < 24; i++) {
-        const sx = Math.round(x + COMPASS_W / 2 + (i * 10 - off) + rep * STRIP);
-        if (sx < x || sx >= x + COMPASS_W) continue;
-        ctx.fillStyle = i % 6 === 0 ? '#E1CD23' : '#7a6a44';
-        ctx.fillRect(sx, COMPASS_Y + 15, 1, i % 6 === 0 ? 4 : 2);
-      }
+    if (UI.drawCompassRibbon) {
+      UI.drawCompassRibbon(ctx, COMPASS_X + this.dx, COMPASS_Y, COMPASS_W, this.session.player.yaw);
     }
-    ctx.restore();
   }
 
   drawHirelings(ctx) {
     const hire = (this.session.party && this.session.party.hirelings) || [];
     for (let i = 0; i < 2; i++) {
       const x = HIRE_X[i] + this.dx;
-      UI.drawInset(ctx, x - 3, HIRE_Y - 3, PORTRAIT_W + 6, PORTRAIT_H + 6);
       const npc = hire[i];
+      if (UI.drawHirelingSlot) UI.drawHirelingSlot(ctx, x, HIRE_Y, PORTRAIT_W, PORTRAIT_H, !npc);
+      else UI.drawInset(ctx, x - 3, HIRE_Y - 3, PORTRAIT_W + 6, PORTRAIT_H + 6);
       if (!npc) continue;
       const p = getPortrait(npc.portraitSeed || i * 977, { sex: npc.sex || 'm', klass: npc.klass }, 'normal');
       ctx.drawImage(p, x, HIRE_Y);
@@ -297,13 +277,17 @@ export class HUD {
     ids.forEach((id, i) => {
       const [bx, by] = TAB_POS[i];
       const x = bx + this.dx;
-      const hit = this.ui.region(`tab:${id}`, x, by, 30, 26, id);
+      const w = TAB_W[i], h = TAB_H[i];
+      const hit = this.ui.region(`tab:${id}`, x, by, w, h, TAB_LABELS[i]);
       const alert = this.session.newEntries && this.session.newEntries[id];
-      ctx.save();
-      if (alert && flash) ctx.globalAlpha = 0.55;
-      UI.drawButton(ctx, x, by, 30, 26, null, hit.down ? 'down' : 'up');
-      UI.drawIcon(ctx, icons[i], x + 6, by + 5, 16);
-      ctx.restore();
+      if (UI.drawBookSpine) {
+        UI.drawBookSpine(ctx, x, by, w, h, {
+          tone: i, state: hit.down ? 'down' : 'up', flash: alert && flash,
+        });
+      } else {
+        UI.drawButton(ctx, x, by, w, h, null, hit.down ? 'down' : 'up');
+        UI.drawIcon(ctx, icons[i], x + 6, by + 5, 16);
+      }
       this.buttons.push({ id: `tab:${id}`, hit });
     });
   }
@@ -367,9 +351,13 @@ export class HUD {
     defs.forEach(([id, icon, tip], i) => {
       const x = BUTTON_X[i] + this.dx;
       const hit = this.ui.region(`hud:${id}`, x, BUTTON_Y, BUTTON_W, BUTTON_H, tip);
-      UI.drawButton(ctx, x, BUTTON_Y, BUTTON_W, BUTTON_H, null, hit.down ? 'down' : 'up');
-      const o = hit.down ? 1 : 0;
-      UI.drawIcon(ctx, icon, x + 10 + o, BUTTON_Y + 8 + o, 20);
+      if (UI.drawActionPlate) {
+        UI.drawActionPlate(ctx, x, BUTTON_Y, BUTTON_W, BUTTON_H, icon, hit.down ? 'down' : 'up');
+      } else {
+        UI.drawButton(ctx, x, BUTTON_Y, BUTTON_W, BUTTON_H, null, hit.down ? 'down' : 'up');
+        const o = hit.down ? 1 : 0;
+        UI.drawIcon(ctx, icon, x + 10 + o, BUTTON_Y + 8 + o, 20);
+      }
       this.buttons.push({ id, hit });
     });
   }

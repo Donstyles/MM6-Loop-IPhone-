@@ -115,20 +115,15 @@ export async function startGame(shell) {
     if (vfxMod && vfxMod.VFXSystem) session.vfx = new vfxMod.VFXSystem(session.sprites);
   } catch (e) { console.warn('vfx unavailable', e); }
 
-  // --- world ---------------------------------------------------------------
-  session.setMap(emptyMap(), 'void');
-  await loadRegion(session, 'new_sorpigal', seed);
-
-  // Combat glue.
+  // Combat glue first: it builds the spawner, and loading a region immediately
+  // asks the spawner to populate it. With this the other way round the world
+  // came up with no trees, monsters, townsfolk or loot in it at all.
   const { installCombat } = await import('./game/combatglue.js');
   installCombat(session);
 
-  if (screens && shell.openScreen) {
-    // Straight into play; the title screen is reachable from Options.
-    if (SCREEN_MODULES.some(([id]) => id === 'title')) {
-      // openScreen('title');
-    }
-  }
+  // --- world ---------------------------------------------------------------
+  session.setMap(emptyMap(), 'void');
+  await loadRegion(session, 'new_sorpigal', seed);
 
   // Generate a first batch of quests so the log is not empty on arrival.
   if (questMod && questMod.generateQuestsForRegion) {

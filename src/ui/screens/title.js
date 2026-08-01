@@ -14,7 +14,7 @@ import { layout } from '../../core/layout.js';
 import { rampCss, ramp } from '../../core/palette.js';
 import { clamp, Rand, fbm2, valueNoise2 } from '../../core/rng.js';
 import * as F from '../../art/font.js';
-import { Screen, A, baked, glow, poly, washPixels, vignette, C_WHITE, C_GOLD, C_DIM } from './dialogue.js';
+import { Screen, A, baked, glow, poly, washPixels, vignette, MM6, C_WHITE, C_GOLD, C_DIM } from './dialogue.js';
 
 const MENU = [
   { id: 'new', label: 'New Game' },
@@ -51,10 +51,8 @@ export function paintTitleArt(g, w, h) {
 
   // The sun's disc sits low behind the towers - small and hot, not a dome.
   glow(g, sunX, sunY, 96, '#ff8018', 0.5);
-  g.fillStyle = rampCss('fire', 13);
-  g.beginPath(); g.arc(sunX | 0, sunY | 0, 19, 0, Math.PI * 2); g.fill();
-  g.fillStyle = rampCss('fire', 15);
-  g.beginPath(); g.arc(sunX | 0, sunY | 0, 13, 0, Math.PI * 2); g.fill();
+  MM6.disc(g, sunX, sunY, 19, rampCss('fire', 13));
+  MM6.disc(g, sunX, sunY, 13, rampCss('fire', 15));
 
   // Far hills, each nearer layer darker: aerial perspective in reverse, the
   // way a backlit dusk landscape actually reads.
@@ -231,7 +229,6 @@ export class TitleScreen extends Screen {
     this.t = 0;
     this.selected = 0;
     this.onPick = opts.onPick || null;
-    this.version = opts.version || 'v1.0';
   }
 
   update(dt) { this.t += dt || 0; }
@@ -254,11 +251,9 @@ export class TitleScreen extends Screen {
     const banner = titleBanner();
     ctx.drawImage(banner, Math.round((W - banner.width) / 2), 22);
 
+    // Nothing else is printed on the frame: no strapline, no build stamp. A
+    // 1998 title screen announces the game and nothing about itself.
     this.drawMenu(ctx, W, H);
-
-    F.drawText(ctx, 'A procedurally generated homage', W / 2, H - 26,
-      { face: 'small', align: 'center', color: C_DIM });
-    F.drawText(ctx, this.version, W - 10, H - 14, { face: 'small', align: 'right', color: C_DIM });
   }
 
   /** Two layers of cloud drifting at different speeds across the sky. */
@@ -326,11 +321,9 @@ export class TitleScreen extends Screen {
       const hit = hits[i];
       const on = i === this.selected;
       if (on) {
-        ctx.save();
-        ctx.globalAlpha = 0.35;
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(x + 10, my, w - 20, 26);
-        ctx.restore();
+        // The chosen line is pressed into the plate, with a brass stud either
+        // side - not lit with a translucent bar.
+        MM6.carvedPlate(ctx, x + 10, my, w - 20, 26, { state: 'down', material: 'stone', seed: 17 });
         A.gem(ctx, x + 16, my + 9, 7, 'gold');
         A.gem(ctx, x + w - 23, my + 9, 7, 'gold');
       }

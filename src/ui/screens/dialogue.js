@@ -22,8 +22,10 @@ import { rampCss, ramp, snap } from '../../core/palette.js';
 import * as F from '../../art/font.js';
 import { PORTRAIT_W, PORTRAIT_H } from '../../art/portraits.js';
 import { Screen, A, PANEL, portraitOf, wrapLines, drawWrapped } from './screenbase.js';
+import * as MM6 from './mm6art.js';
 
 export { Screen, A, PANEL, portraitOf, wrapLines, drawWrapped };
+export { MM6 };
 
 // --- the engine colour table (exact) ---------------------------------------
 
@@ -321,25 +323,14 @@ export function baked(key, w, h, painter) {
 }
 
 /**
- * Banded additive pool of light: lamps, fires, stained glass, magic.
+ * A pool of light: lamps, fires, stained glass, magic.
  *
- * Ten thin rings whose alpha falls off quadratically. Fewer, fatter rings read
- * as concentric discs; this reads as light, and the banding it does leave is
- * the ordered-dither look the rest of the frame has.
+ * Three hard rings and a Bayer-stippled skirt. A smooth radial alpha falloff
+ * cannot exist in a 256-colour indexed frame - an 8-bit painter fakes light
+ * with a few banded steps and a dither at the edge, so that is what this is.
  */
 export function glow(ctx, cx, cy, r, css, alpha = 0.5) {
-  const N = 10;
-  ctx.save();
-  ctx.globalCompositeOperation = 'lighter';
-  ctx.fillStyle = css;
-  for (let i = N; i >= 1; i--) {
-    const t = i / N;
-    ctx.globalAlpha = alpha * (1 - t) * (1 - t) * 0.34;
-    ctx.beginPath();
-    ctx.arc(cx | 0, cy | 0, Math.max(1, r * t) | 0, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.restore();
+  MM6.lightPool(ctx, cx, cy, r, css, alpha);
 }
 
 export function poly(ctx, pts, css) {
@@ -351,28 +342,30 @@ export function poly(ctx, pts, css) {
   ctx.fill();
 }
 
-/** A standing figure in silhouette with a rim light from the left. */
+/**
+ * A person standing in the room: shaded form, a face, clothing with folds.
+ *
+ * The old signature took a body colour and a rim colour because everyone in
+ * town was a flat black cloak-and-circle silhouette. Both are still accepted -
+ * the body colour seeds the cloth and the rim seeds the key light - but what
+ * comes out is a painted figure, not a blob.
+ */
 export function figure(ctx, x, y, h, bodyCss, rimCss, o = {}) {
-  const w = o.w || h * 0.44;
-  const hr = Math.max(2, h * 0.10);
-  poly(ctx, [
-    x - w / 2, y,
-    x - w * 0.40, y - h * 0.60,
-    x - hr * 1.4, y - h * 0.72,
-    x + hr * 1.4, y - h * 0.72,
-    x + w * 0.40, y - h * 0.60,
-    x + w / 2, y,
-  ], bodyCss);
-  ctx.fillStyle = bodyCss;
-  ctx.beginPath();
-  ctx.arc(x | 0, (y - h * 0.82) | 0, hr, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = rimCss;
-  ctx.fillRect((x - w / 2) | 0, (y - h * 0.60) | 0, 2, (h * 0.60) | 0);
-  ctx.beginPath();
-  ctx.arc((x - hr * 0.35) | 0, (y - h * 0.82) | 0, hr, Math.PI * 0.55, Math.PI * 1.45);
-  ctx.fill();
-  if (o.hat) poly(ctx, [x - hr * 2, y - h * 0.90, x + hr * 2, y - h * 0.90, x, y - h * 1.14], bodyCss);
+  const seed = Math.abs(Math.round(x * 7 + y * 13 + h));
+  const CLOTHS = [
+    [96, 62, 40], [72, 66, 92], [104, 88, 52], [66, 84, 66],
+    [110, 70, 66], [58, 62, 74], [92, 78, 96], [84, 96, 78],
+  ];
+  const SKINS = [[214, 172, 136], [192, 146, 106], [162, 116, 80], [126, 88, 60]];
+  const HAIRS = [[58, 36, 20], [110, 76, 36], [32, 26, 24], [152, 132, 96]];
+  MM6.paintedFigure(ctx, x, y, h, {
+    cloth: o.cloth || CLOTHS[seed % CLOTHS.length],
+    skin: o.skin || SKINS[(seed >> 2) % SKINS.length],
+    hair: o.hair || HAIRS[(seed >> 3) % HAIRS.length],
+    hood: o.hood !== undefined ? o.hood : (seed % 5 === 0),
+    robe: o.robe !== undefined ? o.robe : (seed % 3 === 0),
+    hat: o.hat,
+  });
 }
 
 /** Back wall: coursed stone or plaster, darkening into the corners. */
