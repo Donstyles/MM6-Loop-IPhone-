@@ -66,7 +66,7 @@ const LIGHT_D = {
   ambient: 0.32,
   key: 0.74,
   fill: 0.17,
-  wrap: 0.38,   // how much of the key wraps past the terminator
+  wrap: 0.30,   // how much of the key wraps past the terminator
   bands: 0,
 };
 
@@ -86,10 +86,14 @@ attribute float aEmissive;
 varying vec3 vN;
 varying vec3 vC;
 varying float vE;
+varying vec3 vP;
 void main() {
   vN = normalize(normalMatrix * normal);
   vC = aColor;
   vE = aEmissive;
+  // Object space, so the surface texture rides with the model through all
+  // eight octants instead of crawling across it as the turntable turns.
+  vP = position;
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }`;
 
@@ -102,9 +106,29 @@ uniform float uKey;
 uniform float uFill;
 uniform float uWrap;
 uniform float uBands;
+uniform float uHeight;
 varying vec3 vN;
 varying vec3 vC;
 varying float vE;
+varying vec3 vP;
+
+// Surface grain. A pre-rendered MM6 monster was a *textured* model, so no
+// large flat plane on it ever came out as one flat colour - the hide, the
+// mail, the cloth all carried value break-up that the palettiser then banded.
+// Two octaves of object-space value noise put that back without needing UVs.
+float sHash(vec3 p) {
+  return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+}
+float sNoise(vec3 p) {
+  vec3 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(
+    mix(mix(sHash(i), sHash(i + vec3(1, 0, 0)), f.x),
+        mix(sHash(i + vec3(0, 1, 0)), sHash(i + vec3(1, 1, 0)), f.x), f.y),
+    mix(mix(sHash(i + vec3(0, 0, 1)), sHash(i + vec3(1, 0, 1)), f.x),
+        mix(sHash(i + vec3(0, 1, 1)), sHash(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+}
+
 void main() {
   vec3 N = normalize(vN);
   float nd = dot(N, uKeyDir);
@@ -115,6 +139,14 @@ void main() {
   float k = max(nd, 0.0) * (1.0 - uWrap) + (nd * 0.5 + 0.5) * uWrap;
   float f = max(dot(N, uFillDir), 0.0);
   float s = uAmbient + uKey * k;
+  float grain = sNoise(vP * 0.075) * 0.62 + sNoise(vP * 0.26) * 0.38;
+  s *= 0.86 + grain * 0.28;
+  // Height ramp. A turntable render keyed from above puts a bright shoulder and
+  // crown on a figure and drops its belly, thighs and the undersides of its
+  // limbs into shade. Without it a front-facing torso is one flat plane of one
+  // colour, and a green monster on green grass has no silhouette at all.
+  float up = clamp(vP.y / max(1.0, uHeight), 0.0, 1.0);
+  s *= 0.68 + 0.40 * up * up * (3.0 - 2.0 * up);
   // uBands > 0 forces discrete shading; MM6 did not do this, the palette did,
   // so the default is 0 and the gradient stays smooth until it is palettised.
   if (uBands > 0.5) s = floor(s * uBands + 0.5) / uBands;
@@ -145,6 +177,7 @@ function celMaterial(L) {
       uFill: { value: L.fill },
       uWrap: { value: L.wrap === undefined ? 0.15 : L.wrap },
       uBands: { value: L.bands },
+      uHeight: { value: 200 },
     },
     side: THREE.DoubleSide,   // wings, leaves and banners are single quads
     toneMapped: false,
@@ -418,6 +451,8 @@ export function bakeSheet(renderer, builderFn, opts = {}) {
 
   // --- render -------------------------------------------------------------
   const flat = flattenModel(model.root, L);
+  // Tell the height ramp how tall this model actually is, in its own units.
+  if (_celMat) _celMat.uniforms.uHeight.value = Math.max(1, m.maxY - Math.min(0, m.minY));
   _pivot.clear();
   _pivot.add(model.root);
   _pivot.rotation.set(0, 0, 0);
@@ -677,7 +712,7 @@ export function bakeCreatureSheet(renderer, kind, seed = 1, opts = {}) {
   const def = CREATURE_DEFS[kind] || CREATURE_FAMILIES[kind];
   const h = def ? def.height : 192;
   return bakeSheet(renderer, (s) => buildCreature(kind, s), {
-    kind, seed, actions: ACTIONS, maxCellH: cellBudget(h, 56, 128, CREATURE_CELL_K), maxAtlas: 1024,
+    kind, seed, actions: ACTIONS, maxCellH: cellBudget(h, 56, 128, CREATURE_CELL_K), maxAtlas: 1280,
     // Creatures are palettised without dither. A monster is a small, saturated,
     // curved mass: a Bayer pattern strong enough to smooth a sky gradient turns
     // a demon's chest into a visible red checkerboard, and MM6's own sprites

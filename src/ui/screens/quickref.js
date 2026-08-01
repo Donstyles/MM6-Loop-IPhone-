@@ -8,7 +8,6 @@
 // ---------------------------------------------------------------------------
 
 import * as F from '../../art/font.js';
-import * as M from './mm6art.js';
 import {
   Screen, A, PANEL, px, py, TAB_Y, TAB_H, EXIT_X, EXIT_W,
   WHITE, CANARY, HILITE, DIM, GREEN, SCARLET, RED,
@@ -101,9 +100,11 @@ export class QuickRefScreen extends Screen {
       const hit = this.ui.region(`${this.id}:col${i}`, x, py(36), COL_W, PANEL.h - 60,
         ch ? `${ch.name}` : 'Empty slot');
       if (hit.click && ch) { this.session.activeChar = i; this.sound('click'); }
+      // The active column is marked with a ruled underline beneath its name,
+      // not with a wash over the figures: a stipple laid across a column of
+      // numbers is a screen door over the one thing the page exists to show.
       if (i === this.charIndex) {
-        M.stipple(ctx, x, py(36), COL_W,
-          TOP - 36 + this.rows(ch).length * ROW_H + 4, [255, 232, 160], 0.14);
+        A.rule(ctx, x + 6, py(50 - 5), COL_W - 12, HEAD, 0.9);
       }
       T(ctx, ch ? ch.name : '-', x + COL_W / 2, py(38), {
         align: 'center', color: !ch ? INK_DIM : i === this.charIndex ? HEAD : hit.hover ? LABEL : INK,
@@ -116,10 +117,6 @@ export class QuickRefScreen extends Screen {
     const rowCount = template.length;
     for (let r = 0; r < rowCount; r++) {
       const y = TOP + r * ROW_H;
-      if (r % 2 === 1) {
-        M.stipple(ctx, px(LABEL_X), py(y - 2), PANEL.w - LABEL_X * 2 - 8, ROW_H,
-          [0, 0, 0], 0.10);
-      }
       T(ctx, template[r][0], px(LABEL_X), py(y), { face: 'small', color: HEAD });
     }
     for (let i = 0; i < 4; i++) {
@@ -150,7 +147,7 @@ export class QuickRefScreen extends Screen {
       x += 108;
     }
 
-    this.drawHelpLine(ctx, 306, LABEL);
+    this.drawHelpLine(ctx, 296, LABEL);
 
     const r = { x: px(EXIT_X), y: py(TAB_Y), w: EXIT_W, h: TAB_H };
     const hit = this.ui.region(`${this.id}:exit`, r.x, r.y, r.w, r.h, 'Close');

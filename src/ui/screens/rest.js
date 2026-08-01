@@ -17,7 +17,7 @@ import * as F from '../../art/font.js';
 import { maxHP, maxSP } from '../../game/stats.js';
 import {
   Screen, PANEL, A, plate, baked, glow, poly, rngFor, paintFloor, paintClutter, vignette,
-  members, charName, hasCondition, clearCondition, say, MM6, C_WHITE, C_GOLD, C_CANARY, C_DIM,
+  members, hasCondition, clearCondition, say, MM6, C_WHITE, C_GOLD, C_CANARY, C_DIM,
   C_RED, C_GREEN,
 } from './dialogue.js';
 
@@ -384,55 +384,17 @@ export class RestScreen extends Screen {
     if (ex.click) { this.sound('click'); this.close(); }
   }
 
-  dawnLabel() {
-    const h = this.clock ? this.clock.hour : 9;
-    return (h >= 5 && h < 17) ? 'Wait until Dusk' : 'Wait until Dawn';
-  }
+  /**
+   * MM6's button reads "Wait until Dawn" at every hour of the day - there is no
+   * dusk variant, and the rest screen never relabels itself.
+   */
+  dawnLabel() { return 'Wait until Dawn'; }
 
   drawStatus(ctx) {
-    // Food and party state, then whatever the last action reported.
-    // The party's state is a sheet of vellum pinned to the rock, written in
-    // ink - not a black readout panel with capsule bars.
-    const x = PANEL.x + 262, y = PANEL.y + 18, w = PANEL.w - 262 - 14;
-    MM6.paper(ctx, x, y, w, 128, 'book', 61);
-    MM6.rct(ctx, x, y, w, 1, [96, 76, 44]);
-    MM6.rct(ctx, x, y + 127, w, 1, [96, 76, 44]);
-    for (const nx of [x + 8, x + w - 10]) MM6.disc(ctx, nx, y + 6, 2, '#5a4a2a');
-    const INK = '#2c1e0c', EMB = '#ece0c2';
-    F.drawText(ctx, 'Camp', x + 8, y + 8, { color: INK, shadow: EMB });
-    A.rule(ctx, x + 6, y + 22, w - 12, '#7a6038', 0.6);
-    const p = this.party;
-    F.drawText(ctx, `Food: ${p.food | 0}`, x + 8, y + 28,
-      { face: 'small', color: (p.food | 0) > 0 ? INK : '#a02008', shadow: EMB });
-    const list = members(this.session);
-    // Measure the widest name first: the serif face is proportional, so the
-    // column has to be sized from the real strings.
-    let nameW = 0;
-    for (const ch of list) nameW = Math.max(nameW, F.measure(charName(ch), 'small').w);
-    nameW = Math.min(nameW, w - 70);
-    list.forEach((ch, i) => {
-      const ry = y + 44 + i * 19;
-      const mh = this.safe(() => maxHP(ch), ch.maxHP || 1);
-      const ms = this.safe(() => maxSP(ch), ch.maxSP || 0);
-      F.drawText(ctx, charName(ch), x + 8, ry, { face: 'small', color: INK, shadow: EMB });
-      // Painted gauges: a cut groove with a hard bar in it, square ended.
-      const bw = Math.max(24, Math.round((w - nameW - 26) / 2));
-      const bar = (bx, frac, col) => {
-        MM6.rct(ctx, bx, ry + 1, bw, 6, [58, 44, 26]);
-        MM6.rct(ctx, bx, ry + 1, bw, 1, [34, 24, 12]);
-        const fw = Math.max(0, Math.round((bw - 2) * Math.max(0, Math.min(1, frac))));
-        if (fw) {
-          MM6.rct(ctx, bx + 1, ry + 2, fw, 4, col);
-          MM6.rct(ctx, bx + 1, ry + 2, fw, 1, MM6.mix(col, [255, 255, 255], 0.35));
-        }
-      };
-      const f = (ch.hp | 0) / Math.max(1, mh);
-      // The two gauges fill whatever the longest name leaves - MM6 never lets
-      // a readout run off its own sheet.
-      bar(x + 10 + nameW, f, f > 0.5 ? [40, 200, 40] : f > 0.25 ? [224, 208, 32] : [208, 32, 16]);
-      bar(x + 14 + nameW + bw, ms ? (ch.sp | 0) / ms : 0, [40, 72, 216]);
-    });
-
+    // MM6's rest screen carries no readout: no camp sheet, no food line and no
+    // per-character gauges. Hit points and spell points are on the party bar
+    // twelve pixels below, and food is on the right panel. All that belongs
+    // here is whatever the last action reported.
     if (this.messageT < 8 && this.message) {
       const my = PANEL.y + PANEL.h - 34;
       MM6.stipple(ctx, PANEL.x + 12, my, PANEL.w - 24, 22, [0, 0, 0], 0.66);

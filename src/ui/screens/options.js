@@ -33,6 +33,8 @@ const DEFAULTS = {
   alwaysRun: true,
   turnBasedDefault: false,
   touchControls: false,
+  /** MM6's `show_damage`: off in a stock install. */
+  showDamage: false,
 };
 
 const SLIDERS = [
@@ -102,17 +104,9 @@ export class OptionsScreen extends Screen {
     F.drawText(ctx, 'Game Options', px(PANEL.w / 2), py(38),
       { face: 'title', align: 'center', color: CANARY });
 
-    // A brass chain of lozenges either side of the cartouche - a painted
-    // ornament, not a dashed rule.
-    for (const s of [-1, 1]) {
-      for (let i = 0; i < 4; i++) {
-        const x = px(PANEL.w / 2) + s * (cw / 2 + 12 + i * 12);
-        for (let k = 0; k < 5; k++) {
-          const kw = 5 - Math.abs(k - 2) * 2;
-          M.rct(ctx, x - kw, py(43) + k, kw * 2, 1, k < 2 ? [206, 174, 96] : [116, 90, 40]);
-        }
-      }
-    }
+    // Nothing flanks the title. MM6's `options` panel is the painted plate and
+    // its six buttons; the lozenge chain that used to sit either side of the
+    // cartouche read as a row of literal "- - - -" dashes and is gone.
 
     F.drawText(ctx, this.session.saveName || '', px(PANEL.w / 2), py(110),
       { face: 'small', align: 'center', color: DIM });

@@ -351,8 +351,11 @@ function buildHead(headG, H, P, C) {
       headG.add(sph(r * 0.24, eyeCol, { y: r * 1.10, z: r * 0.92, emissive: Math.max(eyeGlow, 0.35) }));
     } else {
       for (const s of [-1, 1]) {
-        headG.add(box(r * 0.36, r * 0.26, r * 0.16, mulHex(eyeCol, 0.35), { x: s * r * 0.40, y: r * 1.10, z: r * 0.84 }));
-        headG.add(box(r * 0.20, r * 0.14, r * 0.14, eyeCol, { x: s * r * 0.40, y: r * 1.10, z: r * 0.90, emissive: eyeGlow }));
+        // The socket is shadowed *skin*, not a black hole: a near-black slab
+        // this size reads as sunglasses at sprite scale. Sclera then pupil.
+        headG.add(box(r * 0.36, r * 0.26, r * 0.16, mulHex(skin, 0.50), { x: s * r * 0.40, y: r * 1.10, z: r * 0.84 }));
+        headG.add(box(r * 0.26, r * 0.17, r * 0.15, mulHex(P.sclera === undefined ? 0xd8d4c4 : P.sclera, 1), { x: s * r * 0.40, y: r * 1.10, z: r * 0.88 }));
+        headG.add(box(r * 0.13, r * 0.13, r * 0.14, eyeCol, { x: s * r * 0.42, y: r * 1.10, z: r * 0.92, emissive: eyeGlow }));
       }
       headG.add(box(r * 0.20, r * 0.34, r * 0.26, mulHex(skin, 1.08), { y: r * 0.90, z: r * 0.92 }));
     }
@@ -2271,7 +2274,11 @@ F('Ghost', 'biped', 200,
 // on), the rags are a warm tan that cannot be mistaken for the skin, and the
 // hunch is strong enough to change the silhouette rather than just the pose.
 F('Goblin', 'biped', 172,
-  { skin: ['grass', 10], skin2: ['grass', 7], cloth: ['dirt', 9], cloth2: ['sand', 8], metal: ['stone', 9], horn: ['plaster', 10] },
+  // A goblin is seen against lit grass at #4C6A2C-#7A9048, so a mid grass-green
+  // skin makes it vanish into the ground cover. MM6's goblin is a *darker*,
+  // yellower green than the turf with light tan rags, which is what gives it a
+  // readable silhouette and a light accent at the waist.
+  { skin: ['foliage', 9], skin2: ['foliage', 6], cloth: ['sand', 10], cloth2: ['dirt', 7], metal: ['stone', 9], horn: ['plaster', 10] },
   {
     headR: 0.105, legLen: 0.40, torsoH: 0.30, hunch: 0.30, ears: 'long', weapon: 'club',
     shoulderW: 0.26, hipW: 0.20, armLen: 0.46, stride: 1.1, tatter: 1, boots: 0,

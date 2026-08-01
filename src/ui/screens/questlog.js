@@ -9,7 +9,7 @@
 import * as F from '../../art/font.js';
 import {
   Screen, A, px, py, TAB_Y, TAB_H, EXIT_X, EXIT_W,
-  CANARY, HILITE, WHITE, DIM, BOOK_INK, PASTELS, wrapLines,
+  CANARY, HILITE, BOOK_INK, PASTELS, wrapLines,
 } from './screenbase.js';
 import * as M from './mm6art.js';
 import { regionName } from '../../game/quests.js';
@@ -23,13 +23,13 @@ const SUB_Y = [1, 38, 75, 112];
 const SUB_W = 50;
 const SUB_H = 34;
 
-const LEFT = { x: 14, y: 12, w: 178, h: 288 };
-const RIGHT = { x: 200, y: 12, w: 178, h: 288 };
+const LEFT = { x: 14, y: 12, w: 178, h: 278 };
+const RIGHT = { x: 200, y: 12, w: 178, h: 278 };
 const LINE_H = 11;
 
-const INK_TITLE = '#2a1a06';
+const INK_TITLE = '#2e2e2e';
 const INK_BODY = BOOK_INK;
-const INK_NOTE = '#5a4a2a';
+const INK_NOTE = '#4b4b4b';
 
 export class QuestLogScreen extends Screen {
   constructor(session, ui, hud, opts) {
@@ -141,10 +141,10 @@ export class QuestLogScreen extends Screen {
     A.book(ctx, px(LEFT.x), py(LEFT.y), LEFT.w, LEFT.h, 'left');
     A.book(ctx, px(RIGHT.x), py(RIGHT.y), RIGHT.w, RIGHT.h, 'right');
     ctx.fillStyle = '#3a2a14';
-    ctx.fillRect(px(194), py(10), 6, 292);
+    ctx.fillRect(px(194), py(10), 6, 282);
     ctx.fillStyle = '#181008';
-    ctx.fillRect(px(196), py(10), 2, 292);
-    for (let y = 20; y < 296; y += 14) {
+    ctx.fillRect(px(196), py(10), 2, 282);
+    for (let y = 20; y < 286; y += 14) {
       ctx.fillStyle = '#c8b070';
       ctx.fillRect(px(196), py(y), 2, 4);
     }
@@ -181,34 +181,33 @@ export class QuestLogScreen extends Screen {
     }
 
     this.drawSubTabs(ctx);
-    this.drawHelpLine(ctx, 306, '#3a2a10');
+    this.drawHelpLine(ctx, 296, '#3a2a10');
 
     const r = { x: px(EXIT_X), y: py(TAB_Y), w: EXIT_W, h: TAB_H };
     const hit = this.ui.region(`${this.id}:exit`, r.x, r.y, r.w, r.h, 'Close the book');
-    A.button(ctx, r.x, r.y, r.w, r.h, null, hit.down ? 'down' : 'up');
-    F.drawText(ctx, 'Exit', (r.x + r.w / 2) | 0, (r.y + 7) | 0,
+    const d = M.sheetTab(ctx, r.x, r.y, r.w, r.h,
+      { open: false, down: hit.down, hot: hit.hover, seed: 17 });
+    F.drawText(ctx, 'Exit', (r.x + r.w / 2 + d) | 0, (r.y + 9 + d) | 0,
       { align: 'center', color: hit.hover ? HILITE : CANARY });
     if (hit.click) { this.sound('click'); this.close(); }
     this.pollPartyBar();
   }
 
   /**
-   * MM6's five overlapping book-spine tabs down the inner margin: painted
-   * leather tongues, no numeric badges, the open one pushed proud.
+   * MM6's sub-page buttons: four 50 x 34 *picture* buttons down the inner
+   * margin, each a bound volume seen spine-on. They carry no lettering at all -
+   * the open book is the one pulled proud of the shelf, and the page's own
+   * title at the head of the leaf says which chapter you are reading.
    */
   drawSubTabs(ctx) {
-    const counts = [this.quests().length, this.notes().length, this.awards().length, this.history().length];
-    const tint = ['#8c5a24', '#6a6a34', '#7a4a6a', '#4a5a7a'];
+    const tint = ['#8c3a20', '#4a6030', '#5a3a6a', '#2e4668'];
     for (let i = 0; i < PAGES.length; i++) {
       const on = i === this.page;
-      const x = px(SUB_X - (on ? 6 : 0)), y = py(SUB_Y[i]);
-      const w = SUB_W + (on ? 6 : 0);
-      const hit = this.ui.region(`${this.id}:sub${i}`, px(SUB_X - 6), y, SUB_W + 6, SUB_H, PAGE_TITLES[i]);
+      const x = px(SUB_X), y = py(SUB_Y[i]);
+      const hit = this.ui.region(`${this.id}:sub${i}`, x, y, SUB_W, SUB_H, PAGE_TITLES[i]);
       if (hit.click && !on) { this.page = i; this.sound('page_turn'); }
-      M.bookmarkTab(ctx, x, y, w, SUB_H, tint[i], { open: on || hit.hover });
-      F.drawText(ctx, PAGES[i], (x + w / 2) | 0, (y + (SUB_H - 10) / 2) | 0, {
-        face: 'small', align: 'center',
-        color: on ? CANARY : hit.hover ? HILITE : counts[i] ? WHITE : DIM,
+      M.bookSpine(ctx, x, y, SUB_W, SUB_H, {
+        tint: tint[i], open: on, hot: hit.hover, seed: 5 + i * 7,
       });
     }
   }

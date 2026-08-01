@@ -116,7 +116,7 @@ export class CharSheetScreen extends Screen {
         { align: 'center', color: INK });
     }
 
-    this.drawHelpLine(ctx, 302, '#4a3418');
+    this.drawHelpLine(ctx, 294, '#4a3418');
     const clicked = drawTabs(ctx, this.ui, this.id, TAB_X, TAB_Y, TAB_W, TAB_H, TABS,
       this.tab === 3 ? 3 : this.tab);
     if (clicked >= 0) {

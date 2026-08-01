@@ -211,8 +211,19 @@ function parseColor(css) {
   return [255, 255, 255];
 }
 
+// The engine's text colours are reserved palette entries, not colours the world
+// table has to approximate: MM6 loads them into fixed indices so the interface
+// hue is identical on every machine. Snapping them through the terrain ramps
+// drags StarkWhite to #DED2BE and EasternBlue to a washed #4FA8D8, so the
+// entries below are passed through verbatim and everything else is snapped.
+const EXACT_INK = new Set([
+  TEXT_NORMAL, TEXT_HILITE, TEXT_HEADER, TEXT_GOOD, TEXT_BAD, TEXT_RED,
+  TEXT_LEARN, TEXT_NPC, TEXT_DARK, TEXT_HUD, TEXT_HUD_SHADOW, TEXT_SHADOW,
+].map((c) => c.toUpperCase()));
+
 /** Palette-snap a colour so the font never emits an off-palette pixel. */
 function snapColor(css) {
+  if (typeof css === 'string' && EXACT_INK.has(css.toUpperCase())) return parseColor(css);
   const [r, g, b] = parseColor(css);
   return snap(r, g, b);
 }

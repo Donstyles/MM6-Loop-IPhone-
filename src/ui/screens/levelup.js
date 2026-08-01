@@ -104,11 +104,8 @@ export class LevelUpScreen extends Screen {
     rows.forEach(([label, value, col], i) => {
       const ry = y + 84 + i * 15;
       F.drawText(ctx, label, tx, ry, { face: 'small', color: C_WHITE });
+      // Two plain columns, no dotted leader - MM6 never rules one.
       F.drawText(ctx, value, tx + tw, ry, { face: 'small', align: 'right', color: col });
-      ctx.fillStyle = '#6a5c42';
-      for (let dx = tx + F.measure(label, 'small').w + 4; dx < tx + tw - F.measure(value, 'small').w - 4; dx += 3) {
-        ctx.fillRect(dx | 0, ry + 6, 1, 1);
-      }
     });
 
     // Totals along the bottom of the box.

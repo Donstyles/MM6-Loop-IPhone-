@@ -438,7 +438,7 @@ const BARK_LIT = [62, 49, 27];
 const LEAF = [12, 16, 11];
 const LEAF_LIT = [104, 82, 42];
 
-/** A foliage mass: a lumpy scanline blob, hard-keyed, lit on the sun's side. */
+/** A foliage mass: a lumpy scanline blob, hard-keyed. The rim is added later. */
 function clump(g, cx, cy, r, seed) {
   cx = Math.round(cx); cy = Math.round(cy);
   for (let dy = -r; dy <= r; dy++) {

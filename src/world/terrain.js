@@ -975,6 +975,16 @@ export function makeBillboardField(tex, instances, opts = {}) {
       varying vec2 vUv;
       varying vec3 vTint;
       varying float vFog;
+      // The atlas is sRGB-tagged, so the sample above is decoded to linear on
+      // fetch - but a custom shader gets no matching encode on the way out, and
+      // the render target is sRGB. Without this, every flora billboard renders
+      // through the sRGB->linear curve while the buildings beside them (which
+      // use a built-in material, and so do get the encode) do not, and the
+      // trees come out visibly darker than the walls they stand against.
+      vec3 toSRGB(vec3 v) {
+        return mix(pow(max(v, vec3(0.0)), vec3(0.41666)) * 1.055 - 0.055, v * 12.92,
+                   vec3(lessThanEqual(v, vec3(0.0031308))));
+      }
       void main() {
         vec4 c = texture2D(map, vUv);
         // 1-bit alpha: MM6 sprites never blend edges.
@@ -982,7 +992,7 @@ export function makeBillboardField(tex, instances, opts = {}) {
         // Same greyscale multiply the world uses, so flora sits in the scene.
         c.rgb *= vTint * uLight;
         float f = clamp((vFog - fogNear) / (fogFar - fogNear), 0.0, 1.0);
-        gl_FragColor = vec4(mix(c.rgb, fogColor, f), 1.0);
+        gl_FragColor = vec4(toSRGB(mix(c.rgb, fogColor, f)), 1.0);
       }`,
     transparent: false,
     depthWrite: true,
@@ -1102,10 +1112,18 @@ function paintTrunk(p, mask, o) {
   }
 }
 
-/** A tapered limb from (ax,ay) to (bx,by). Same bark rig as the trunk. */
+/**
+ * A tapered limb from (ax,ay) to (bx,by). Same bark rig as the trunk, but the
+ * shading axis is the limb's own perpendicular, signed so the face turned
+ * toward the upper-left key light is the lit one. Shade a horizontal branch
+ * along its length instead and it comes out as a dark plank.
+ */
 function paintLimb(p, mask, ax, ay, bx, by, w0, w1, o = {}) {
   const { ramp: rampName = 'wood', base = 0.24, seed = 1, steps = 6 } = o;
-  const len = Math.hypot(bx - ax, by - ay);
+  const len = Math.max(1e-3, Math.hypot(bx - ax, by - ay));
+  const ux = (bx - ax) / len, uy = (by - ay) / len;
+  const px0 = -uy, py0 = ux;                       // perpendicular
+  const sgn = (px0 * -0.6 + py0 * -0.8) >= 0 ? -1 : 1;
   const n = Math.max(2, Math.round(len * 1.6));
   for (let i = 0; i <= n; i++) {
     const t = i / n;
@@ -1114,7 +1132,7 @@ function paintLimb(p, mask, ax, ay, bx, by, w0, w1, o = {}) {
     for (let dy = -k; dy <= k; dy++) {
       for (let dx = -k; dx <= k; dx++) {
         if (dx * dx + dy * dy > (k + 0.35) * (k + 0.35)) continue;
-        const side = k > 0 ? dx / k : 0;
+        const side = k > 0 ? clamp((dx * px0 + dy * py0) / k, -1, 1) * sgn : 0;
         const px = Math.round(x + dx), py = Math.round(y + dy);
         fput(p, px, py, rampSample(rampName, qb(barkTone(px, py, side, base, seed), steps)));
         if (px >= 0 && py >= 0 && px < p.w && py < p.h) mask[py * p.w + px] = 2;
@@ -1233,9 +1251,9 @@ function paintBroadleaf(p, mask, rnd, o) {
   // Trunk.
   paintTrunk(p, mask, {
     y0: Math.round(trunkTop), y1: S - 1, cx0: cx, cx1: cx + (o.lean || 0) * S,
-    w0: S * (o.wTop || 0.026), w1: S * (o.wBot || 0.048),
+    w0: S * (o.wTop || 0.024), w1: S * (o.wBot || 0.042),
     base: o.barkBase === undefined ? 0.30 : o.barkBase,
-    flare: 0.62, sway: S * 0.012, seed: o.seed, steps: 6,
+    flare: 0.44, sway: S * 0.012, seed: o.seed, steps: 6,
     ramp: o.pale ? 'plaster' : 'wood',
   });
   if (o.pale) {
@@ -1258,7 +1276,7 @@ function paintBroadleaf(p, mask, rnd, o) {
   const nb = o.branches || 5;
   const tips = [];
   for (let i = 0; i < nb; i++) {
-    const a = -Math.PI * 0.5 + (i - (nb - 1) / 2) * (Math.PI / (nb + 1.4)) + rnd.float(-0.16, 0.16);
+    const a = -Math.PI * 0.5 + (i - (nb - 1) / 2) * (1.55 / Math.max(1, nb - 1)) + rnd.float(-0.14, 0.14);
     const len = S * rnd.float(0.20, 0.30);
     const bx = cx + Math.cos(a) * len * (o.spread || 1.25);
     const by = trunkTop + Math.sin(a) * len - S * 0.02;
@@ -1340,7 +1358,7 @@ function paintBroadleaf(p, mask, rnd, o) {
       ragged: 0.50, bias, tilt: 0.06,
     });
   }
-  punchCanopy(p, mask, o.seed + 3, o.holes === undefined ? 0.24 : o.holes, 0.30);
+  punchCanopy(p, mask, o.seed + 3, o.holes === undefined ? 0.24 : o.holes, 0.19);
 }
 
 /** Conifer: a spiky stack of drooping boughs with the trunk showing between. */
@@ -1368,7 +1386,7 @@ function paintConifer(p, mask, rnd, o) {
         const n = valueNoise2(x * 1.15, y * 1.15, o.seed + i * 9);
         // Spiky, per-column needle edge: the silhouette is a saw, never a
         // clean triangle, and it is 1-bit - a texel is needles or it is sky.
-        const spike = valueNoise2(x * 0.55, i * 3.7, o.seed + 5);
+        const spike = valueNoise2(x * 0.60, y * 0.34, o.seed + 5);
         if (Math.abs(side) > 0.80 + spike * 0.30) continue;
         if (Math.abs(side) > 0.62 && n < 0.30) continue;
         let l = 0.52 - side * 0.34 - u * 0.44 + (n - 0.5) * 0.70;
@@ -1398,7 +1416,7 @@ function paintConifer(p, mask, rnd, o) {
       if (x >= 0 && y >= 0 && x < p.w && y < p.h) mask[y * p.w + x] = 1;
     }
   }
-  punchCanopy(p, mask, o.seed + 9, 0.14, 0.38);
+  punchCanopy(p, mask, o.seed + 9, 0.14, 0.24);
 }
 
 /** Palm: a curved ringed bole with a fan of fronds and a few coconuts. */
@@ -1627,7 +1645,7 @@ export function floraTexture(kind, seed = 1) {
     case 'oak_autumn':
       paintBroadleaf(p, mask, rnd, {
         ...o, leaf: 'fire', crownY: 0.52, crownR: 0.40, branches: 5,
-        lo: 0.12, hi: 0.56, barkBase: 0.24, holes: 0.26,
+        lo: 0.05, hi: 0.44, barkBase: 0.24, holes: 0.26,
       });
       break;
     case 'oak_winter':

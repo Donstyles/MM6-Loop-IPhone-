@@ -240,7 +240,8 @@ function clothOf(ch) {
 
 // --- the screen -------------------------------------------------------------
 
-const GRID_X = 13, GRID_Y = 16, COLS = 14, ROWS = 9;
+/** Engine geometry: 14 x 9 cells of 32 px with the top-left at (14, 17). */
+const GRID_X = 14, GRID_Y = 17, COLS = 14, ROWS = 9;
 
 export class InventoryScreen extends Screen {
   constructor(session, ui, hud, opts) {
@@ -343,9 +344,9 @@ export class InventoryScreen extends Screen {
       drawPaperdoll(ctx, this, ch);
     }
 
-    // MM6 never explains its controls on the page: the help line only ever
-    // carries what the pointer is actually over.
-    this.drawHelpLine(ctx, 306);
+    // No help line here: the 14 x 9 grid runs from y=17 to y=305 and the tab
+    // row starts at 308, so there is no strip of page left to print one on.
+    // MM6 puts the hovered item's name on the status bar at (0, 352) instead.
 
     const clicked = drawTabs(ctx, this.ui, this.id, TAB_X, TAB_Y, TAB_W, TAB_H,
       ['Stats', 'Skills', 'Inventory', 'Awards'], 2);
@@ -366,19 +367,10 @@ export class InventoryScreen extends Screen {
     const bag = this.bagOf(ch);
     const gx = px(GRID_X), gy = py(GRID_Y);
     const w = COLS * CELL, h = ROWS * CELL;
-    // `fr_inven` is a painted hide panel with the cells embossed into it - the
-    // cell edges are a hair lighter and darker than the field, never a drawn
-    // wireframe.
-    M.paper(ctx, gx - 2, gy - 2, w + 4, h + 4, 'hide', 71);
-    A.bevel(ctx, gx - 2, gy - 2, w + 4, h + 4, { sunken: true, size: 1 });
-    for (let c = 0; c <= COLS; c++) {
-      M.rct(ctx, gx + c * CELL, gy, 1, h, [30, 22, 13]);
-      if (c < COLS) M.rct(ctx, gx + c * CELL + 1, gy, 1, h, [104, 86, 60]);
-    }
-    for (let r = 0; r <= ROWS; r++) {
-      M.rct(ctx, gx, gy + r * CELL, w, 1, [30, 22, 13]);
-      if (r < ROWS) M.rct(ctx, gx, gy + r * CELL + 1, w, 1, [104, 86, 60]);
-    }
+    // `fr_inven` is a painted hide panel with the cells pressed into it: grain,
+    // mottling and a worn rim, and every cell rule a dark crease with a
+    // burnished lip below it - never a black wireframe on a flat field.
+    M.hideGrid(ctx, gx, gy, COLS, ROWS, CELL, 71);
 
     const carried = this.ui.cursorItem;
     let hoverCell = null;
@@ -463,7 +455,7 @@ export class InventoryScreen extends Screen {
     A.frame(ctx, x, y, w, h, {});
     let ty = y + 6;
     for (const [k, s] of lines) {
-      if (k === 'title') { F.drawText(ctx, s, x + 8, ty, { face: 'title', color: '#2a1a06' }); ty += 18; }
+      if (k === 'title') { F.drawText(ctx, s, x + 8, ty, { face: 'title', color: '#2e2e2e' }); ty += 18; }
       else if (k === 'wrap') { ty = drawWrapped(ctx, s, x + 8, ty, w - 16, { face: 'small', color: '#4b4b4b' }); }
       else {
         F.drawText(ctx, s, x + 8, ty, {

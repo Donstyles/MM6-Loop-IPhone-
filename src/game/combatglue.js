@@ -14,6 +14,20 @@ import { Spawner } from './spawner.js';
 const MELEE_REACH = 900;
 const _v = new THREE.Vector3();
 
+/**
+ * Floating combat numbers.
+ *
+ * MM6's `show_damage` is off in a stock install: a blow is reported on the
+ * status line and shown by the victim's portrait swapping to a wince frame,
+ * and nothing is ever drawn over the world. The code path stays here behind
+ * the setting so it can be switched on, but the default is off.
+ */
+function floatText(session, x, y, z, text, kind) {
+  const s = session && session.settings;
+  if (!s || !s.showDamage) return;
+  if (session.vfx) session.vfx.damageNumber(x, y, z, text, kind);
+}
+
 export function installCombat(session) {
   const mods = session.modules || {};
   const combat = mods.combatMod;
@@ -163,9 +177,7 @@ export function installCombat(session) {
     e.hp = e.mon ? e.mon.hp : e.hp - amount;
     e.hitFlash = 1;
     if (e.state === 'idle' || e.state === 'wander') { e.state = 'chase'; session.inCombat = true; }
-    if (session.vfx) {
-      session.vfx.damageNumber(e.pos.x, e.pos.y + (e.sizeH || 200) * 0.75, e.pos.z, String(amount), 'damage');
-    }
+    floatText(session, e.pos.x, e.pos.y + (e.sizeH || 200) * 0.75, e.pos.z, String(amount), 'damage');
     if (e.hp <= 0) killMonster(session, e, source);
     else if (e.action !== 'hit' && Math.random() < 0.4) e.setAction('hit');
   };
@@ -293,7 +305,7 @@ function resolveHit(session, ch, target, combat, rnd, ranged) {
 
   if (!hit) {
     session.message(`${ch.name} misses.`);
-    if (session.vfx) session.vfx.damageNumber(target.pos.x, target.pos.y + target.sizeH * 0.7, target.pos.z, 'Miss', 'miss');
+    floatText(session, target.pos.x, target.pos.y + target.sizeH * 0.7, target.pos.z, 'Miss', 'miss');
     if (session.audio) session.audio.play('miss', { volume: 0.35 });
     return;
   }
@@ -301,7 +313,7 @@ function resolveHit(session, ch, target, combat, rnd, ranged) {
   if (session.audio) session.audio.play(crit ? 'crit' : 'hit_flesh');
   if (session.vfx) {
     session.vfx.burst('blood_hit', target.pos.x, target.pos.y + target.sizeH * 0.55, target.pos.z, { scale: 0.7 });
-    if (crit) session.vfx.damageNumber(target.pos.x, target.pos.y + target.sizeH * 0.8, target.pos.z, String(dmg), 'crit');
+    if (crit) floatText(session, target.pos.x, target.pos.y + target.sizeH * 0.8, target.pos.z, String(dmg), 'crit');
   }
   session.damageMonster(target, dmg, 'physical', ch);
 }

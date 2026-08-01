@@ -82,14 +82,11 @@ export function paintTempleInterior(g, w, h, tint = '#e1cd23') {
   MM6.disc(g, rx, ry, 8, tint);
   MM6.lightPool(g, rx, ry, 96, tint, 0.5);
 
-  // Coloured light thrown down the nave - a stippled shaft, hard-edged.
-  const shaftTop = ry + rr;
-  for (let y = shaftTop; y < h; y++) {
-    const t = (y - shaftTop) / (h - shaftTop);
-    const halfW = rr * (1 + t * 1.1);
-    MM6.stipple(g, Math.round(rx - halfW), y, Math.round(halfW * 2), 1,
-      MM6.hexRGB(tint), 0.20 * (1 - t * 0.5));
-  }
+  // The window falls on the floor, not through the air. MM6 has no volumetric
+  // light and no god rays: a painter of the period drew the *patch* the window
+  // throws on the flagstones, keystoned by the viewing angle and stepped in a
+  // few flat value bands, and left the nave itself unpainted.
+  MM6.litPatch(g, rx, horizon + 4, rr * 0.70, h - 2, rr * 1.30, tint, 5);
 
   // Altar: marble, #D0CCC0 to #F0EEE6 with #A8A498 veining.
   const ax = rx - 62, ay = horizon + 18;
@@ -291,7 +288,10 @@ export class TempleScreen extends HouseScreen {
     const x = PANEL.x + 16, y = PANEL.y + 18, w = PANEL.w - 32;
     const rows = members(this.session);
     const h = 34 + rows.length * 20;
-    plate(ctx, x, y, w, h, 0.62);
+    // The rose window sits directly behind this table, so the plate is taken
+    // down further than a shop's - at 0.62 the jewel glass reads through the
+    // dither as coloured speckle across the figures.
+    plate(ctx, x, y, w, h, 0.80);
     F.drawText(ctx, `The Temple of ${this.god}`, x + 10, y + 6, { color: C_CANARY });
     A.rule(ctx, x + 8, y + 20, w - 16, '#7a6a4a');
     F.drawText(ctx, 'Condition', x + 150, y + 22, { face: 'small', color: C_DIM });

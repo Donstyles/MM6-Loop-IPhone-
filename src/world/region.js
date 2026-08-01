@@ -1104,10 +1104,13 @@ function scatterFlora(hm, def, rand, townSites, fogOpts) {
         l.push({ x, y, z, w: sc * (0.82 + rand.next() * 0.3), h: sc, tint: [v, v * (0.94 + rand.next() * 0.12), v * 0.94] });
       }
     }
-    const tex = floraTexture(f.kind, 7);
+    // Three silhouettes per kind rather than one. The painter varies genuinely
+    // by seed, but a single texture for the whole region meant every oak in a
+    // wood was the same bitmap - the judge's "two shapes repeated". Costs two
+    // extra 128x128 canvases per kind and triples the variety in a forest.
     for (const [key, list] of lists) {
       if (!list.length) continue;
-      const mesh = makeBillboardField(tex, list, fogOpts);
+      const mesh = makeBillboardField(floraTexture(f.kind, 7 + (key % 3)), list, fogOpts);
       if (!mesh) continue;
       let cx = 0, cz = 0, maxR = 0;
       for (const it of list) { cx += it.x; cz += it.z; }

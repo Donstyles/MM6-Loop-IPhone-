@@ -41,6 +41,10 @@ const BAR_EMPTY = hexC(0x2a2620);
 
 function stoneTone(t) { return STONE(t); }
 function css(c) { return `rgb(${c[0] | 0},${c[1] | 0},${c[2] | 0})`; }
+
+// The HUD chrome module paints with the same material ramps and the same fixed
+// HUD colour table, so the bar, the column and the panels stay one material.
+export { STONE, BRASS, WOOD, BAR_EMPTY, hexC };
 /** Brass shade on the old 0..15 scale, so call sites read like a ramp. */
 function goldC(sh) { return BRASS(clamp(sh / 15, 0, 1)); }
 
@@ -108,6 +112,13 @@ function quantise(canvas) {
   g.putImageData(img, 0, 0);
   return canvas;
 }
+
+/** Snap one colour through the HUD table, for callers painting with fillRect. */
+export function uiSnap(c) {
+  const p = uiNearest(c[0] | 0, c[1] | 0, c[2] | 0);
+  return `rgb(${p[0]},${p[1]},${p[2]})`;
+}
+export { quantise as uiQuantise };
 
 /** Palettise through the world table instead - for art that sits in the 3D view. */
 export function worldQuantise(canvas) {

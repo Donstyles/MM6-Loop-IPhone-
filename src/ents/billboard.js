@@ -40,7 +40,12 @@ void main() {
 
   vec4 mv = viewMatrix * vec4(world, 1.0);
   vFogDepth = -mv.z;
-  vUv = mix(iUV.xy, iUV.zw, vec2(position.x + 0.5, 1.0 - position.y));
+  // iUV is (u0, v0, u1, v1) with v0 at the *bottom* edge of the atlas cell, and
+  // the atlas texture is uploaded flipY (three.js default for a canvas), so
+  // v=1 is the canvas's top row. The quad's own position.y is 0 at the foot and
+  // 1 at the head, which means it interpolates straight: foot -> v0, head -> v1.
+  // Inverting it here drew every monster, NPC and spell sprite upside down.
+  vUv = mix(iUV.xy, iUV.zw, vec2(position.x + 0.5, position.y));
   vTint = iTint;
   gl_Position = projectionMatrix * mv;
 }
@@ -60,6 +65,16 @@ in vec2 vUv;
 in vec4 vTint;
 in float vFogDepth;
 
+// The atlas is sRGB-tagged, so the sample below is decoded to linear on fetch,
+// but a raw shader gets no matching encode on the way out and the render target
+// is sRGB. Without this every monster, tree and prop leaves through the
+// sRGB->linear curve while the geometry around them does not, so the sprites
+// sit visibly darker than the world they stand in.
+vec3 toSRGB(vec3 v) {
+  return mix(pow(max(v, vec3(0.0)), vec3(0.41666)) * 1.055 - 0.055, v * 12.92,
+             vec3(lessThanEqual(v, vec3(0.0031308))));
+}
+
 void main() {
   vec4 c = texture(map, vUv);
   if (c.a < alphaTest) discard;
@@ -69,7 +84,7 @@ void main() {
   c.rgb *= t;
   float f = smoothstep(fogNear, fogFar, vFogDepth);
   c.rgb = mix(c.rgb, fogColor, f);
-  pc_fragColor = vec4(c.rgb, vTint.a);
+  pc_fragColor = vec4(toSRGB(c.rgb), vTint.a);
 }
 `;
 

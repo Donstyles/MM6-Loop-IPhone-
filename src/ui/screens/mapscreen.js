@@ -313,7 +313,7 @@ export class MapScreen extends Screen {
 
   /** Zoom keys live below the chart, clear of the drawing. */
   drawZoomButtons(ctx, rect) {
-    const by = py(VIEW.y + VIEW.h + 34);
+    const by = py(VIEW.y + VIEW.h + 22);
     const bx = px(VIEW.x);
     const mk = (id, label, x, tip, off) => {
       const hit = this.ui.region(`${this.id}:${id}`, x, by, 24, 18, tip);
@@ -328,37 +328,20 @@ export class MapScreen extends Screen {
     const maxZ = this.session.map && this.session.map.indoor ? 3 : 2;
     if (mk('zin', '+', bx, 'Zoom in', this.zoom === 0)) this.setZoom(this.zoom - 1);
     if (mk('zout', '-', bx + 28, 'Zoom out', this.zoom === maxZ)) this.setZoom(this.zoom + 1);
-    F.drawText(ctx, `x${(3072 / ZOOMS[this.zoom]).toFixed(1)}`, bx + 60, by + 5,
-      { face: 'small', color: '#3a2a10', shadow: '#ece0c2' });
+    // No numeric zoom readout: MM6 changes the scale and shows you the result.
   }
 
   /**
-   * Region name and key, ruled onto the page. The row is measured before it is
-   * drawn and folds onto a second line rather than running off the edge.
+   * The region's name, ruled onto the page under the chart. MM6 prints the
+   * place and nothing else - there is no coloured-square key anywhere in the
+   * map book, so there is none here.
    */
   drawLegend(ctx, map) {
     const y = VIEW.y + VIEW.h + 8;
     const name = (map && (map.name || map.id)) || 'Unknown Region';
     A.rule(ctx, px(VIEW.x), py(y - 2), VIEW.w, '#6b5636', 0.5);
     F.drawText(ctx, String(name).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
-      px(VIEW.x), py(y + 4), { color: '#2a1a06', shadow: '#ece0c2', maxWidth: 150 });
-
-    const items = [
-      ['Party', CANARY], ['Town', '#f0e8d0'], ['Dungeon', MAP_HOSTILE],
-      ['Friend', MAP_FRIEND], ['Treasure', MAP_TREASURE], ['Wall', MAP_WALL],
-    ];
-    const rowW = VIEW.w - 160;
-    let x = VIEW.x + 158, row = 0;
-    for (const [label, color] of items) {
-      const need = 8 + F.measure(label, 'small').w + 10;
-      if (x - (VIEW.x + 158) + need > rowW) { row++; x = VIEW.x + 158; }
-      const ly = y + 4 + row * 11;
-      M.rct(ctx, px(x), py(ly + 1), 5, 5, '#241a08');
-      M.rct(ctx, px(x), py(ly), 5, 5, color);
-      F.drawText(ctx, label, px(x + 8), py(ly),
-        { face: 'small', color: '#2a1a06', shadow: '#ece0c2' });
-      x += need;
-    }
+      px(VIEW.x), py(y + 4), { color: '#2a1a06', shadow: '#ece0c2', maxWidth: 220 });
   }
 }
 

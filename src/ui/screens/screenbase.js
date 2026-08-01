@@ -28,12 +28,17 @@ export const PANEL = { x: 8, y: 8, w: 461, h: 345 };
 /** The right-hand column. The sheet and the inventory paint a paperdoll here. */
 export const SIDE = { x: 468, y: 0, w: 172, h: 352 };
 
-/** MM6 puts the tab row and Exit on the same baseline, panel-relative y = 316. */
-export const TAB_Y = 316;
+/**
+ * The chapter tab row and Exit share one baseline. The engine's own figures
+ * are absolute: y = 316, x = 20 / 110 / 200 / 290 with Exit at (379, 316).
+ * Everything on a panel is laid out through `px`/`py`, so they are stored
+ * panel-relative - subtract the (8, 8) panel origin.
+ */
+export const TAB_Y = 308;          // -> absolute 316
 export const TAB_H = 24;
 export const TAB_W = 86;
-export const TAB_X = [20, 110, 200, 290];
-export const EXIT_X = 379;
+export const TAB_X = [12, 102, 192, 282];   // -> absolute 20 / 110 / 200 / 290
+export const EXIT_X = 371;         // -> absolute 379
 export const EXIT_W = 70;
 
 /** Panel-relative -> absolute. */
@@ -365,7 +370,14 @@ export function drawWrapped(ctx, text, x, y, maxW, opts = {}) {
   return y + Math.min(lines.length, limit) * lh;
 }
 
-/** `Label ........ value`, the MM6 dotted-leader row. */
+/**
+ * `Label                          value`: label at the left, value hard against
+ * the right edge of the column.
+ *
+ * MM6 does **not** run a dotted leader between the two - the sheet is set as
+ * two plain columns and the eye does the joining - so the leader only appears
+ * when a caller explicitly asks for `dots: true`, and nothing in the game does.
+ */
 export function leaderRow(ctx, label, value, x, y, w, opts = {}) {
   const face = opts.face || 'small';
   const color = opts.color || WHITE;
@@ -375,7 +387,7 @@ export function leaderRow(ctx, label, value, x, y, w, opts = {}) {
   const vw = F.measure(value, face).w;
   const dotStart = x + lw + 3;
   const dotEnd = x + w - vw - 3;
-  if (opts.dots !== false && dotEnd > dotStart) {
+  if (opts.dots === true && dotEnd > dotStart) {
     // The leader is already a dotted line; drawing those dots at 40% opacity
     // on top of that just puts an off-palette colour on screen. Solid ink,
     // dimmed by mixing toward the page, gives the same weight on-palette.
@@ -388,8 +400,12 @@ export function leaderRow(ctx, label, value, x, y, w, opts = {}) {
 // --- tabs -------------------------------------------------------------------
 
 /**
- * The panel's chapter tabs. `xs` are panel-relative x positions; MM6 keeps them
- * on one baseline at the bottom of the page. Returns the index clicked, or -1.
+ * The panel's chapter tabs - MM6's `ib-cd1-d`..`ib-cd4-d`.
+ *
+ * These are painted bitmaps in the original, not bevelled boxes: leather
+ * tongues laid on the sheet with their upper corners chamfered off, the open
+ * chapter's tab pulled proud and lit, the closed ones pushed down into the page
+ * and knocked back. `xs` are panel-relative; returns the index clicked, or -1.
  */
 export function drawTabs(ctx, ui, idPrefix, xs, yRel, w, h, labels, selected) {
   let clicked = -1;
@@ -398,12 +414,12 @@ export function drawTabs(ctx, ui, idPrefix, xs, yRel, w, h, labels, selected) {
     const on = i === selected;
     const hit = ui.region(`${idPrefix}:tab${i}`, x, y, w, h);
     if (hit.click) clicked = i;
-    const down = on || hit.down;
-    // Painted wooden tab; the open one is pressed into the sheet.
-    const d = M.carvedPlate(ctx, x, y, w, h, {
-      state: down ? 'down' : hit.hover ? 'hot' : 'up', material: 'wood', seed: 13 + i,
+    const d = M.sheetTab(ctx, x, y, w, h, {
+      open: on, down: hit.down && !on, hot: hit.hover && !on, seed: 13 + i,
     });
-    F.drawText(ctx, labels[i], (x + w / 2 + d) | 0, (y + (h - 10) / 2 + d) | 0, {
+    // The label sits on the tab face, which drops two rows when the tab is shut.
+    const ty = y + (on ? 0 : 2) + ((h - (on ? 0 : 2) - 10) >> 1);
+    F.drawText(ctx, labels[i], (x + w / 2 + d) | 0, (ty + d) | 0, {
       align: 'center', color: on ? CANARY : (hit.hover ? HILITE : WHITE),
     });
   }
@@ -483,8 +499,11 @@ export class Screen {
   drawExit(ctx, label = 'Exit') {
     const r = exitRect();
     const hit = this.ui.region(`${this.id}:exit`, r.x, r.y, r.w, r.h, 'Close');
-    A.button(ctx, r.x, r.y, r.w, r.h, null, hit.down ? 'down' : 'up');
-    F.drawText(ctx, label, (r.x + r.w / 2) | 0, (r.y + (r.h - 10) / 2) | 0, {
+    // Exit is the fifth tab in the same painted set, so it is painted the same.
+    const d = M.sheetTab(ctx, r.x, r.y, r.w, r.h, {
+      open: false, down: hit.down, hot: hit.hover, seed: 21,
+    });
+    F.drawText(ctx, label, (r.x + r.w / 2 + d) | 0, (r.y + 2 + ((r.h - 12) >> 1) + d) | 0, {
       align: 'center', color: hit.hover ? HILITE : CANARY,
     });
     if (hit.click) { this.sound('click'); this.close(); return true; }

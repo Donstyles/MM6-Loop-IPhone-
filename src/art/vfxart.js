@@ -1205,13 +1205,16 @@ function buildSheet(def) {
     def.draw(frame, f, def.frames, a, def.angles);
     const cx = (i % cols) * def.w, cy = Math.floor(i / cols) * def.h;
     blit(atlas, frame, cx, cy);
-    // The sprite shader takes v0 as the top edge, and CanvasTexture flips Y,
-    // so v is measured up from the bottom of the atlas.
+    // (u0, v0, u1, v1) with v0 on the *bottom* edge of the cell, matching the
+    // sprite batch and `SpriteSheet.uv()` in spritebake. CanvasTexture flips Y,
+    // so v = 1 is the atlas canvas's top row and the cell's bottom row is the
+    // larger cy. This used to be written inverted to cancel a matching
+    // inversion in the sprite shader; both are now the right way up.
     const uv = new Float32Array(4);
     uv[0] = cx / atlas.w;
-    uv[1] = 1 - cy / atlas.h;
+    uv[1] = 1 - (cy + def.h) / atlas.h;
     uv[2] = (cx + def.w) / atlas.w;
-    uv[3] = 1 - (cy + def.h) / atlas.h;
+    uv[3] = 1 - cy / atlas.h;
     uvs.push(uv);
   }
 

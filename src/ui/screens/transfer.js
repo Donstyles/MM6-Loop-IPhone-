@@ -308,7 +308,7 @@ export class TransferScreen extends HouseScreen {
     const d = dlgRect();
     A.stone(ctx, d.x, d.y, d.w, d.h, { rivets: true, gold: true });
     A.inset(ctx, d.x + 6, 4, d.w - 12, d.h - 8);
-    F.drawText(ctx, this.title, d.x + d.w / 2, 10, { align: 'center', color: C_CANARY, maxWidth: d.w - 20 });
+    // No gold house-name header - MM6's dialogue panel opens on the portrait.
     this.drawKeeper(ctx);
     this.drawPanelInfo(ctx);
 

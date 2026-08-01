@@ -96,14 +96,14 @@ export class SpellbookScreen extends Screen {
     M.paper(ctx, px(RIGHT.x), py(RIGHT.y), RIGHT.w, RIGHT.h, 'spell', 29);
     M.gutter(ctx, px(LEFT.x + LEFT.w - 1), py(LEFT.y), LEFT.h, 'left');
     M.gutter(ctx, px(RIGHT.x), py(RIGHT.y), RIGHT.h, 'right');
-    // A school-tinted rule ruled inside each leaf, the way MM6 tints a chapter.
-    const rule = M.shade(M.hexRGB(tint), 0.42);
-    for (const pg of [LEFT, RIGHT]) {
-      M.rct(ctx, px(pg.x + 8), py(pg.y + 6), pg.w - 16, 1, rule);
-      M.rct(ctx, px(pg.x + 8), py(pg.y + pg.h - 8), pg.w - 16, 1, rule);
-      M.rct(ctx, px(pg.x + 8), py(pg.y + 6), 1, pg.h - 14, rule);
-      M.rct(ctx, px(pg.x + pg.w - 9), py(pg.y + 6), 1, pg.h - 14, rule);
-    }
+    // The illustrated page art - `SBFB00` and its eight siblings. MM6's leaves
+    // are painted before a single spell is learned: a double ruled border in
+    // the school's ink, a fleuron in every corner, a chain of margin devices
+    // down the outer edge and the school's own emblem washed into the middle.
+    M.pageOrnament(ctx, px(LEFT.x), py(LEFT.y), LEFT.w, LEFT.h, tint,
+      { side: 'left', school: this.school });
+    M.pageOrnament(ctx, px(RIGHT.x), py(RIGHT.y), RIGHT.w, RIGHT.h, tint,
+      { side: 'right', school: this.school });
 
     M.rct(ctx, px(194), py(10), 8, 294, [58, 42, 20]);
     M.rct(ctx, px(197), py(10), 3, 294, [24, 16, 8]);
@@ -118,12 +118,13 @@ export class SpellbookScreen extends Screen {
       this.drawFooter(ctx, ch);
     }
 
-    // Exit sits clear of the bookmark column, which owns the right edge here.
-    const r = { x: px(316), y: py(316), w: 70, h: 24 };
+    // Exit sits clear of the bookmark column, which owns the right edge here,
+    // and is the same painted tab the character sheet's row uses.
+    const r = { x: px(316), y: py(308), w: 70, h: 24 };
     const hit = this.ui.region(`${this.id}:exit`, r.x, r.y, r.w, r.h, 'Close the book');
-    const d = A.button(ctx, r.x, r.y, r.w, r.h, null, hit.down ? 'down' : hit.hover ? 'hot' : 'up',
-      { material: 'wood', seed: 9 });
-    F.drawText(ctx, 'Exit', (r.x + r.w / 2 + d) | 0, (r.y + 7 + d) | 0, {
+    const d = M.sheetTab(ctx, r.x, r.y, r.w, r.h,
+      { open: false, down: hit.down, hot: hit.hover, seed: 9 });
+    F.drawText(ctx, 'Exit', (r.x + r.w / 2 + d) | 0, (r.y + 9 + d) | 0, {
       align: 'center', color: hit.hover ? HILITE : CANARY,
     });
     if (hit.click) { this.sound('click'); this.close(); }
@@ -144,10 +145,12 @@ export class SpellbookScreen extends Screen {
         known ? `${s.name} magic` : `${s.name} magic - not learned`);
       if (hit.click) this.turnTo(s.id);
       M.bookmarkTab(ctx, x, y, w, TAB_H, SCHOOL_COLORS[s.id], { open: on || hit.hover });
-      // The tab's own sigil is the only marking - MM6 prints no school names.
-      const gs = 20;
-      if (known) M.spellSigil(ctx, s.id, 0, x + 8, y + ((TAB_H - gs) >> 1), gs);
-      else M.spellSigilGhost(ctx, s.id, 0, x + 8, y + ((TAB_H - gs) >> 1), gs);
+      // A hand-drawn school device branded straight into the leather - no
+      // plaque behind it, and never a word. A school the character has not
+      // learned gets the same mark in blind tooling rather than in colour.
+      const gs = 22;
+      M.schoolMark(ctx, s.id, x + 7, y + ((TAB_H - gs) >> 1), gs,
+        known ? '#f4e6c0' : M.shade(M.hexRGB(SCHOOL_COLORS[s.id]), 0.5));
     }
   }
 
@@ -160,7 +163,7 @@ export class SpellbookScreen extends Screen {
     const known = ch.spells || [];
 
     F.drawText(ctx, `${school ? school.name : ''} Magic`, px(LEFT.x + LEFT.w / 2), py(LEFT.y + 6),
-      { face: 'title', align: 'center', color: '#2a1a06' });
+      { face: 'title', align: 'center', color: '#2e2e2e' });
     F.drawText(ctx, k.level > 0 ? `${MASTERY_NAMES[k.mastery]} ${k.level}` : 'Not learned',
       px(RIGHT.x + RIGHT.w / 2), py(RIGHT.y + 8), { face: 'small', align: 'center', color: BOOK_INK });
 
@@ -203,7 +206,7 @@ export class SpellbookScreen extends Screen {
     if (!h) return;
     const x = RIGHT.x + 12, w = RIGHT.w - 24;
     A.rule(ctx, px(x), py(y - 6), w, '#6b5636', 0.55);
-    F.drawText(ctx, h.sp.name, px(x), py(y), { color: '#2a1a06', maxWidth: w });
+    F.drawText(ctx, h.sp.name, px(x), py(y), { color: '#2e2e2e', maxWidth: w });
     F.drawText(ctx, `${h.cost} sp`, px(x + w), py(y), { face: 'small', align: 'right', color: BOOK_INK });
     const k = schoolSkill(ch, this.school);
     const bits = [];

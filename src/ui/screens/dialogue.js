@@ -23,6 +23,7 @@ import * as F from '../../art/font.js';
 import { PORTRAIT_W, PORTRAIT_H } from '../../art/portraits.js';
 import { Screen, A, PANEL, portraitOf, wrapLines, drawWrapped } from './screenbase.js';
 import * as MM6 from './mm6art.js';
+import * as Figures from '../../art/figures.js';
 
 export { Screen, A, PANEL, portraitOf, wrapLines, drawWrapped };
 export { MM6 };
@@ -44,10 +45,17 @@ export const C_DIM = '#9a8f78';
 // PANEL (8,8,461,345) comes from screenbase and is re-exported above: panel art
 // replaces the 3D viewport exactly, leaving the carved surround visible.
 
-/** The dialogue panel that replaces the right column while a house is open. */
+/**
+ * The dialogue panel that replaces the right column while a house is open.
+ *
+ * Its height is the *side panel's*, not the frame's: the party bar is painted
+ * over everything below y=352, so anything the panel puts past that is cut in
+ * half by the bar rather than drawn.
+ */
 export function dlgRect() {
   const x = layout.side ? layout.side.x : 468;
-  return { x, y: 0, w: layout.w - x, h: layout.h };
+  const h = (layout.side && layout.side.h) || 352;
+  return { x, y: 0, w: layout.w - x, h };
 }
 
 /** Proprietor portrait, and its 4px border frame. */
@@ -382,7 +390,11 @@ export function figure(ctx, x, y, h, bodyCss, rimCss, o = {}) {
   ];
   const SKINS = [[214, 172, 136], [192, 146, 106], [162, 116, 80], [126, 88, 60]];
   const HAIRS = [[58, 36, 20], [110, 76, 36], [32, 26, 24], [152, 132, 96]];
-  MM6.paintedFigure(ctx, x, y, h, {
+  // figures.js, not the paintbox's own: it models cloth as a turning tube with
+  // creases, gives the face a brow and nose that cast, and picks one of eleven
+  // seeded poses, so a tavern is a room of people rather than a row of the same
+  // mannequin. Same options object either way.
+  Figures.paintedFigure(ctx, x, y, h, {
     cloth: o.cloth || CLOTHS[seed % CLOTHS.length],
     skin: o.skin || SKINS[(seed >> 2) % SKINS.length],
     hair: o.hair || HAIRS[(seed >> 3) % HAIRS.length],
@@ -492,7 +504,18 @@ export function plate(ctx, x, y, w, h, alpha = 0.62) {
   // A 256-colour frame cannot hold a translucent slab, so the art is knocked
   // back with a Bayer stipple instead - the same trick the originals use to
   // darken a painting under a block of text - and the edge is a carved lip.
-  MM6.stipple(ctx, x | 0, y | 0, w | 0, h | 0, [10, 9, 8], Math.min(0.92, alpha + 0.22));
+  const d = alpha + 0.22;
+  if (d >= 0.9) {
+    // Past this weight the dither stops reading as shading and starts reading
+    // as speckle in the text, so the core goes solid and only a six-pixel
+    // skirt stays stippled, which is what keeps the plate sitting *on* the
+    // painting rather than floating over it.
+    const X = x | 0, Y = y | 0, W = w | 0, H = h | 0;
+    MM6.stipple(ctx, X, Y, W, H, [10, 9, 8], 0.94);
+    MM6.rct(ctx, X + 6, Y + 6, W - 12, H - 12, [10, 9, 8]);
+  } else {
+    MM6.stipple(ctx, x | 0, y | 0, w | 0, h | 0, [10, 9, 8], Math.min(0.92, d));
+  }
   MM6.rct(ctx, x | 0, y | 0, w | 0, 1, [26, 22, 18]);
   MM6.rct(ctx, x | 0, y | 0, 1, h | 0, [26, 22, 18]);
   MM6.rct(ctx, x | 0, (y + h - 1) | 0, w | 0, 1, [104, 92, 74]);
@@ -552,9 +575,9 @@ export class HouseScreen extends Screen {
     A.stone(ctx, d.x, d.y, d.w, d.h, { rivets: true, gold: true });
     A.inset(ctx, d.x + 6, 4, d.w - 12, d.h - 8);
 
-    // House name across the top of the panel.
-    F.drawText(ctx, this.title, d.x + d.w / 2, 10,
-      { align: 'center', color: C_CANARY, maxWidth: d.w - 20 });
+    // No house name here. MM6's dialogue panel opens on the proprietor's
+    // portrait; the establishment's name is announced on the status line when
+    // you walk in, never printed as a gold header over the panel.
 
     this.drawKeeper(ctx);
     this.drawPanelInfo(ctx);
@@ -606,12 +629,18 @@ export class HouseScreen extends Screen {
       const color = (l && l.color) || C_WHITE;
       for (const line of wrapLines(s, colW, 'small')) rows.push({ line, color });
     }
+    // The block is bounded by the party bar, not by the exit button: the bar is
+    // painted over the panel from y=352 down, so a line that starts at 351 is
+    // sliced through the middle of its glyphs. Anything that will not fit
+    // between the last option and that edge is dropped, never clipped.
     const optCount = this.options ? this.options().length : 0;
-    const top = this.optionY + optCount * OPTION.step + 14;
-    const room = Math.max(0, Math.floor((EXIT_BTN.y - 10 - top) / 11));
+    const lastOpt = this.optionY + optCount * OPTION.step;
+    const top = lastOpt + 10;
+    const bottom = Math.min(EXIT_BTN.y - 10, d.y + d.h - 2);
+    const room = Math.max(0, Math.floor((bottom - top) / 11));
     const shown = rows.slice(0, Math.min(rows.length, room));
     if (!shown.length) return;
-    let y = Math.min(EXIT_BTN.y - 10 - shown.length * 11, top);
+    let y = Math.min(bottom - shown.length * 11, top);
     A.divider(ctx, d.x + 14, y - 8, d.w - 28);
     for (const r of shown) {
       F.drawText(ctx, r.line, d.x + d.w / 2, y, {

@@ -230,13 +230,9 @@ export class BankScreen extends HouseScreen {
     rows.forEach(([l, v, c], i) => {
       const ry = y + 30 + i * 15;
       F.drawText(ctx, l, x + 12, ry, { face: 'small', color: C_WHITE });
+      // No dotted leader. MM6 sets a label/value row as two columns and lets
+      // the eye join them; a leader is a spreadsheet idiom, not a 1998 one.
       F.drawText(ctx, v, x + w - 12, ry, { face: 'small', align: 'right', color: c });
-      // Solid ink for the leader dots: a 35% wash would land between palette
-      // entries, and the dots are already their own dither.
-      ctx.fillStyle = '#6a5c42';
-      for (let dx = x + 14 + F.measure(l, 'small').w; dx < x + w - 16 - F.measure(v, 'small').w; dx += 3) {
-        ctx.fillRect(dx | 0, ry + 6, 1, 1);
-      }
     });
 
     // Amount selector, so the two option buttons can move any sum.

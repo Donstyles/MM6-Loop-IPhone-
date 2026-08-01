@@ -216,6 +216,16 @@ const SKY_FRAG = /* glsl */`
   varying vec3 vRay;
   varying vec2 vScreen;
 
+  // The cloud plate is sRGB-tagged, so the sample below is decoded to linear on
+  // fetch, and uHaze is authored in sRGB and stored linear - but a custom shader
+  // gets no matching encode on the way out, and the render target is sRGB. Left
+  // alone the whole sky leaves through the sRGB->linear curve, which is why a
+  // dusk sky measured 39/255 where the ground beside it measured 79.
+  vec3 toSRGB(vec3 v) {
+    return mix(pow(max(v, vec3(0.0)), vec3(0.41666)) * 1.055 - 0.055, v * 12.92,
+               vec3(lessThanEqual(v, vec3(0.0031308))));
+  }
+
   void main() {
     vec3 d = normalize(vRay);
     // Screen-space distance to the horizon, in pixels, for the fade band.
@@ -235,11 +245,11 @@ const SKY_FRAG = /* glsl */`
       float band = 1.0 - smoothstep(0.0, uBandPx, horizonPx);
       float broad = 1.0 - smoothstep(0.0, uBandPx * 4.5, horizonPx);
       float f = clamp(band * 0.97 + broad * 0.45, 0.0, 1.0);
-      gl_FragColor = vec4(mix(c, uHaze, f), 1.0);
+      gl_FragColor = vec4(toSRGB(mix(c, uHaze, f)), 1.0);
     } else {
       // Below the horizon: solid haze fill. Terrain covers most of it; what is
       // left is the colour the world dissolves into.
-      gl_FragColor = vec4(uHaze, 1.0);
+      gl_FragColor = vec4(toSRGB(uHaze), 1.0);
     }
   }`;
 

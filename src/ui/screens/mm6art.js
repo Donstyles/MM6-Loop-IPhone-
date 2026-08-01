@@ -354,6 +354,370 @@ export function bookmarkTab(ctx, x, y, w, h, colorHex, opts = {}) {
   blit(ctx, c, x, y);
 }
 
+/**
+ * A character-sheet chapter tab (`ib-cd1-d`..`ib-cd4-d`).
+ *
+ * MM6's are painted bitmaps, not bevelled rectangles: a leather tongue laid on
+ * the sheet with its upper corners chamfered off, a hard keyline all round, a
+ * lit top arris and a tooled inner line. The open chapter's tab is lifted and
+ * lighter; the closed ones are pushed down into the page and knocked back.
+ * Returns the +1 content offset a pressed tab needs.
+ */
+export function sheetTab(ctx, x, y, w, h, opts = {}) {
+  const open = !!opts.open;
+  const down = !!opts.down;
+  const hot = !!opts.hot;
+  const seed = opts.seed === undefined ? 3 : opts.seed;
+  const base = hexRGB(opts.color || '#7a5c30');
+  const key = `sht:${w}:${h}:${open ? 1 : 0}:${down ? 1 : 0}:${opts.color || ''}:${seed}`;
+  const c = cached(key, () => paintCanvas(w, h, (ax, ay) => {
+    // Chamfer: two steps off each upper corner, cut square - no curve.
+    const inset = ay < 2 ? (ay === 0 ? 4 : 2) : 0;
+    if (ax < inset || ax >= w - inset) return null;
+    // A closed tab sits two rows lower, so the open one reads as pulled out.
+    if (!open && ay < 2) return null;
+    const top = open ? 0 : 2;
+    const edge = ax === inset || ax === w - 1 - inset || ay === top || ay === h - 1;
+    if (edge) return shade(base, 0.22);
+    const grain = fbm2(ax * 0.13, ay * 0.42, 2, 3, 0.5, seed) * 0.5 + 0.5;
+    const fleck = (hash2(ax, ay, seed + 11) - 0.5) * 0.08;
+    // Value falls from the top arris to the foot, in five steps.
+    let t = band(clamp(0.74 - (ay - top) / (h - top) * 0.5 + (grain - 0.5) * 0.34 + fleck, 0, 1), 5);
+    let col = mix(shade(base, 0.36), mix(base, [255, 240, 210], 0.22), t);
+    if (ay === top + 1) col = mix(col, [255, 244, 214], 0.34);              // lit arris
+    if (ax === inset + 1) col = mix(col, [255, 244, 214], 0.18);
+    if (ay === h - 2 || ax === w - 2 - inset) col = shade(col, 0.66);       // shadowed arris
+    // Tooled line following the tab's own outline, two pixels in.
+    if ((ay === top + 3 || ay === h - 4) && ax > inset + 3 && ax < w - 4 - inset) col = shade(col, 0.74);
+    if ((ax === inset + 3 || ax === w - 4 - inset) && ay > top + 3 && ay < h - 3) col = shade(col, 0.74);
+    if (!open) col = shade(col, 0.72);
+    return col;
+  }, 5));
+  blit(ctx, c, x, y);
+  if (hot && !down) stipple(ctx, x + 3, y + 3, w - 6, h - 6, [255, 232, 158], 0.16);
+  return down ? 1 : 0;
+}
+
+/**
+ * A wordless book picture button - MM6's 50 x 34 sub-page buttons in the quest
+ * log's inner margin.
+ *
+ * A closed volume seen three-quarters from the front: the spine down the left
+ * with its raised cords, the tooled front board, the cream fore-edge of the
+ * page block showing along the right and the foot, and a blind-stamped device
+ * in the centre of the board. There is no lettering on it - the leaf's own
+ * heading says which chapter is open. The open book is pulled off the shelf
+ * and lit; the rest are pushed back into shadow.
+ */
+export function bookSpine(ctx, x, y, w, h, opts = {}) {
+  const open = !!opts.open;
+  const hot = !!opts.hot;
+  const seed = opts.seed === undefined ? 5 : opts.seed;
+  const cover = hexRGB(opts.tint || '#7a3a20');
+  const gilt = hexRGB(opts.gilt || '#c8a23c');
+  const leaf = [222, 210, 178];
+  const key = `bs:${w}:${h}:${opts.tint || ''}:${open ? 1 : 0}:${seed}`;
+  const c = cached(key, () => paintCanvas(w, h, (ax, ay) => {
+    const SP = 8;                       // spine width
+    const FE = 4;                       // fore-edge of the page block
+    // Cast shadow along the bottom and right, so the book sits on the page.
+    if (ay >= h - 2 || ax >= w - 2) {
+      if (ay < 2 || ax < 2) return null;
+      return [26, 20, 12];
+    }
+    // The page block: cut leaves, stacked, each a hair different in value.
+    if (ax >= w - 2 - FE || ay >= h - 2 - 3) {
+      const streak = (hash2(ax * 3, ay * 5, seed) - 0.5) * 0.18;
+      const t = band(clamp(0.62 + streak, 0, 1), 4);
+      let col = mix(shade(leaf, 0.56), leaf, t);
+      // Every third leaf reads as a groove in the edge.
+      if ((ax + ay) % 3 === 0) col = shade(col, 0.86);
+      if (ax === w - 2 - FE) col = shade(col, 0.6);
+      if (ay === h - 5) col = shade(col, 0.6);
+      return open ? col : shade(col, 0.74);
+    }
+    const grain = fbm2(ax * 0.24, ay * 0.34, 2, 3, 0.5, seed) * 0.5 + 0.5;
+    let col;
+    if (ax < SP) {
+      // Spine: the round of the back, light rolling off toward the joint.
+      const roll = 1 - Math.abs(ax / (SP - 1) - 0.34) * 1.6;
+      const t = band(clamp(0.26 + roll * 0.52 + (grain - 0.5) * 0.2, 0, 1), 5);
+      col = mix(shade(cover, 0.28), mix(cover, [255, 236, 208], 0.2), t);
+      // Two raised cords across the back, gilt-ruled either side.
+      for (const by of [Math.round(h * 0.30), Math.round(h * 0.68)]) {
+        if (ay === by - 2 || ay === by + 2) col = mix(gilt, [40, 30, 12], 0.4);
+        else if (ay >= by - 1 && ay <= by + 1) col = shade(col, ay === by - 1 ? 1.3 : 0.68);
+      }
+      if (ax === SP - 1) col = shade(col, 0.5);                  // the joint
+    } else {
+      // Front board: tooled leather, lit from the upper left.
+      const t = band(clamp(0.52 - ay / h * 0.26 + (grain - 0.5) * 0.3, 0, 1), 5);
+      col = mix(shade(cover, 0.34), mix(cover, [255, 236, 208], 0.12), t);
+      const inx = ax - SP, inw = (w - 2 - FE) - SP;
+      // A double gilt rule tooled round the board.
+      const onRule = (r) => (inx === r || inx === inw - 1 - r || ay === r + 2 || ay === h - 6 - r)
+        && inx >= r && inx <= inw - 1 - r && ay >= r + 2 && ay <= h - 6 - r;
+      if (onRule(2)) col = mix(gilt, [50, 36, 14], 0.3);
+      if (onRule(4)) col = shade(col, 0.72);
+      // The centre device: a stepped lozenge stamped blind into the leather.
+      const mx = SP + inw / 2, my = h / 2 - 1;
+      const d = Math.abs(ax - mx) + Math.abs(ay - my) * 1.35;
+      if (d < 6.5) col = d < 4 ? mix(gilt, [60, 44, 18], 0.22) : shade(col, 0.6);
+    }
+    if (ay === 2) col = mix(col, [255, 244, 214], 0.26);
+    if (ax === 2 && ay > 2) col = mix(col, [255, 244, 214], 0.16);
+    if (ay < 2 || ax < 2) return null;
+    return open ? col : shade(col, 0.66);
+  }, 4));
+  blit(ctx, c, x + (open ? 0 : 4), y);
+  if (hot && !open) stipple(ctx, x + 6, y + 4, w - 12, h - 8, [255, 232, 158], 0.16);
+}
+
+/**
+ * A wordless hand-drawn school device, painted straight onto whatever it is
+ * marking. Unlike `spellSigil` this carries no plaque - it is the emblem alone,
+ * which is what MM6 brands into its spellbook bookmarks.
+ */
+export function schoolMark(ctx, school, x, y, s, colorHex) {
+  const key = `mk:${school}:${s}:${colorHex || ''}`;
+  const c = cached(key, () => {
+    const P = SIGIL_INK[school] || SIGIL_INK.spirit;
+    const ink = colorHex ? shade(hexRGB(colorHex), 0.34) : hexRGB(P[0]);
+    const lit = colorHex ? mix(hexRGB(colorHex), [255, 255, 255], 0.55) : hexRGB(P[2]);
+    const cv = mkCanvas(s, s);
+    const g = cv.getContext('2d');
+    const cx = s / 2, cy = s / 2, R = s / 2 - 1;
+    // Every mark is painted twice: a shadow one pixel down-right, then the
+    // stroke over it. That is the whole of MM6's "hand-drawn" look.
+    const mark = (x0, y0, x1, y1, t) => {
+      lineH(g, x0 + 1, y0 + 1, x1 + 1, y1 + 1, pc(ink), t);
+      lineH(g, x0, y0, x1, y1, pc(lit), t);
+    };
+    const dot = (px0, py0, r) => { disc(g, px0 + 1, py0 + 1, r, pc(ink)); disc(g, px0, py0, r, pc(lit)); };
+    switch (school) {
+      case 'fire':
+        // A tongue of flame: three tapering strokes leaning off a common root.
+        for (const [dx, sc] of [[-0.42, 0.62], [0, 1], [0.42, 0.62]]) {
+          mark(cx + dx * R, cy + R * 0.82, cx + dx * R * 0.4, cy - R * sc, 2);
+        }
+        mark(cx - R * 0.5, cy + R * 0.84, cx + R * 0.5, cy + R * 0.84, 2);
+        break;
+      case 'air':
+        for (let i = 0; i < 3; i++) {
+          const yy = cy - R * 0.55 + i * R * 0.55;
+          mark(cx - R * 0.85, yy, cx + R * 0.35, yy, 2);
+          mark(cx + R * 0.35, yy, cx + R * 0.7, yy - R * 0.32, 2);
+        }
+        break;
+      case 'water':
+        for (let i = 0; i < 3; i++) {
+          const yy = cy - R * 0.5 + i * R * 0.5;
+          for (let k = 0; k < 4; k++) {
+            const x0 = cx - R * 0.85 + (k * R * 1.7) / 4;
+            mark(x0, yy + (k % 2 ? -2 : 2), x0 + (R * 1.7) / 4, yy + (k % 2 ? 2 : -2), 2);
+          }
+        }
+        break;
+      case 'earth':
+        // A cairn: three courses, narrowing upward.
+        for (let i = 0; i < 3; i++) {
+          const wdt = R * (0.9 - i * 0.24), yy = cy + R * 0.66 - i * R * 0.5;
+          rct(g, Math.round(cx - wdt) + 1, Math.round(yy) + 1, Math.round(wdt * 2), 5, pc(ink));
+          rct(g, Math.round(cx - wdt), Math.round(yy), Math.round(wdt * 2), 4, pc(lit));
+        }
+        break;
+      case 'spirit':
+        mark(cx, cy - R * 0.9, cx, cy + R * 0.9, 3);
+        mark(cx - R * 0.66, cy - R * 0.28, cx + R * 0.66, cy - R * 0.28, 3);
+        break;
+      case 'mind': {
+        let ax0 = cx, ay0 = cy;
+        for (let i = 1; i <= 26; i++) {
+          const t = i / 26, a = t * Math.PI * 2 * 1.9, rr = R * 0.92 * t;
+          const nx = cx + Math.cos(a) * rr, ny = cy + Math.sin(a) * rr;
+          mark(ax0, ay0, nx, ny, 2);
+          ax0 = nx; ay0 = ny;
+        }
+        break;
+      }
+      case 'body':
+        dot(cx, cy - R * 0.52, R * 0.24);
+        mark(cx, cy - R * 0.2, cx, cy + R * 0.72, 3);
+        mark(cx - R * 0.72, cy + R * 0.06, cx + R * 0.72, cy + R * 0.06, 3);
+        break;
+      case 'light':
+        for (let i = 0; i < 8; i++) {
+          const a = (i / 8) * Math.PI * 2;
+          mark(cx + Math.cos(a) * R * 0.42, cy + Math.sin(a) * R * 0.42,
+            cx + Math.cos(a) * R * 0.95, cy + Math.sin(a) * R * 0.95, 2);
+        }
+        dot(cx, cy, R * 0.28);
+        break;
+      default:                                              // dark: a crescent
+        disc(g, cx + 1, cy + 1, R * 0.85, pc(ink));
+        disc(g, cx, cy, R * 0.85, pc(lit));
+        disc(g, cx + R * 0.44, cy - R * 0.16, R * 0.78, pc(ink));
+        break;
+    }
+    return cv;
+  });
+  blit(ctx, c, x, y);
+}
+
+/**
+ * The painted furniture on a book leaf - `SBFB00` and its nine siblings.
+ *
+ * MM6's spellbook pages are never bare stock: each leaf carries a double ruled
+ * border in the school's ink, a stepped fleuron in every corner, a chain of
+ * small margin devices down the outer edge, and a large ghosted school emblem
+ * washed into the middle of the leaf. All of it is there before a single spell
+ * is learned, which is why an empty page still reads as a painted page.
+ */
+export function pageOrnament(ctx, x, y, w, h, tintHex, opts = {}) {
+  const side = opts.side === 'right' ? 'right' : 'left';
+  const school = opts.school || null;
+  const key = `po:${w}:${h}:${tintHex}:${side}:${school || ''}`;
+  const c = cached(key, () => {
+    const cv = mkCanvas(w, h);
+    const g = cv.getContext('2d');
+    // The ruling is a sepia ink *tinged* with the school's colour, not the
+    // colour itself - a page painter had one bottle of ink and a wash.
+    const t = mix(hexRGB(tintHex), [92, 66, 34], 0.62);
+    const ink = shade(t, 0.5);
+    const mid = mix(t, [128, 104, 66], 0.5);
+    const pale = mix(t, [232, 220, 190], 0.62);
+
+    // A ghosted device washed into the middle of the leaf: the school's own
+    // emblem, laid in at a whisper so the page has a centre.
+    if (school) {
+      const s = Math.round(Math.min(w, h) * 0.42);
+      if (s > 24) {
+        const tmp = mkCanvas(s, s);
+        schoolMark(tmp.getContext('2d'), school, 0, 0, s, tintHex);
+        const img = tmp.getContext('2d').getImageData(0, 0, s, s);
+        const d = img.data;
+        // Knock it back to a stain rather than an image: three value steps only.
+        for (let i = 0; i < d.length; i += 4) {
+          const idx = i >> 2, ix = idx % s, iy = (idx / s) | 0;
+          if (!d[i + 3]) continue;
+          const l = (d[i] * 0.35 + d[i + 1] * 0.5 + d[i + 2] * 0.15) / 255;
+          const p = mix(mix(t, [186, 170, 138], 0.72), [166, 148, 116], band(1 - l, 3));
+          const q = snapC(p[0], p[1], p[2]);
+          d[i] = q[0]; d[i + 1] = q[1]; d[i + 2] = q[2];
+          // Half-toned to a stain: the emblem is a watermark, not a picture.
+          d[i + 3] = ((ix + iy) & 1) ? 255 : 0;
+        }
+        tmp.getContext('2d').putImageData(img, 0, 0);
+        blit(g, tmp, (w - s) >> 1, (h - s) >> 1);
+      }
+    }
+
+    // Double ruled border, the outer rule heavier than the inner.
+    const m = 7, n = 12;
+    rct(g, m, m, w - m * 2, 1, ink); rct(g, m, h - m - 1, w - m * 2, 1, ink);
+    rct(g, m, m, 1, h - m * 2, ink); rct(g, w - m - 1, m, 1, h - m * 2, ink);
+    rct(g, n, n, w - n * 2, 1, mid); rct(g, n, h - n - 1, w - n * 2, 1, mid);
+    rct(g, n, n, 1, h - n * 2, mid); rct(g, w - n - 1, n, 1, h - n * 2, mid);
+
+    // Stepped fleurons in the corners: a hand-cut lozenge with two feet.
+    const fleuron = (fx, fy, sx, sy) => {
+      for (let i = 0; i < 5; i++) {
+        const k = 5 - i;
+        rct(g, fx + sx * i, fy + sy * i, sx > 0 ? k : -k * sx, 1, i < 2 ? mid : ink);
+        rct(g, fx + sx * i, fy + sy * i, 1, sy > 0 ? k : -k * sy, i < 2 ? mid : ink);
+      }
+      rct(g, fx + sx * 6, fy + sy * 6, 2, 2, ink);
+      rct(g, fx + sx * 9, fy + sy * 9, 2, 2, mid);
+    };
+    fleuron(m + 3, m + 3, 1, 1);
+    fleuron(w - m - 4, m + 3, -1, 1);
+    fleuron(m + 3, h - m - 4, 1, -1);
+    fleuron(w - m - 4, h - m - 4, -1, -1);
+
+    // A chain of margin devices down the outer edge - alternating pip and bar,
+    // exactly the kind of filler a page painter runs to fill a margin.
+    const mx = side === 'right' ? w - 10 : 9;
+    for (let yy = n + 16; yy < h - n - 16; yy += 14) {
+      rct(g, mx - 1, yy, 3, 3, ink);
+      rct(g, mx - 1, yy, 2, 2, pale);
+      rct(g, mx, yy + 6, 1, 5, mid);
+    }
+    return cv;
+  });
+  blit(ctx, c, x, y);
+}
+
+/**
+ * `fr_inven`: the tooled hide the inventory grid is embossed into.
+ *
+ * Not a flat field with a wireframe over it - the cells are pressed into the
+ * leather, so every rule is a dark crease with a burnished lip below it, and
+ * the whole panel carries grain, a tooled border and a worn edge.
+ */
+export function hideGrid(ctx, x, y, cols, rows, cell, seed = 71) {
+  const w = cols * cell + 6, h = rows * cell + 6;
+  const c = cached(`hg:${cols}:${rows}:${cell}:${seed}`, () => {
+    const lo = [64, 52, 34], hi = [118, 98, 66];
+    const cv = paintCanvas(w, h, (ax, ay) => {
+      // Grain: fine pores and a long fibre pulled across the hide. The
+      // mottling is deliberately shallow - a tanned panel is close to one
+      // value, and a wide swing reads as camouflage rather than leather.
+      const coarse = fbm2(ax * 0.055, ay * 0.065, 3, 4, 0.5, seed) * 0.5 + 0.5;
+      const fibre = valueNoise2(ax * 1.1, ay * 7.5, seed + 17) - 0.5;
+      const pore = (hash2(ax, ay, seed + 3) - 0.5) * 0.10;
+      let t = 0.56 + (coarse - 0.5) * 0.26 + fibre * 0.09 + pore;
+      // Worn edge: the rim darkens along a noisy boundary.
+      const wob = valueNoise2(ax * 0.08, ay * 0.08, seed + 9) * 4;
+      const e = Math.min(Math.min(ax, w - 1 - ax) + wob, Math.min(ay, h - 1 - ay) + wob);
+      if (e < 9) t -= (1 - clamp(e / 9, 0, 1)) * 0.30;
+      return mix(lo, hi, band(clamp(t, 0, 1), 8));
+    }, 3);
+    const g = cv.getContext('2d');
+    // Cells pressed into the hide: a dark crease, then a burnished lip.
+    for (let cx = 0; cx <= cols; cx++) {
+      const gx = 3 + cx * cell;
+      rct(g, gx - 1, 3, 1, rows * cell, [40, 31, 19]);
+      rct(g, gx, 3, 1, rows * cell, [112, 92, 62]);
+    }
+    for (let cy = 0; cy <= rows; cy++) {
+      const gy = 3 + cy * cell;
+      rct(g, 3, gy - 1, cols * cell, 1, [40, 31, 19]);
+      rct(g, 3, gy, cols * cell, 1, [112, 92, 62]);
+    }
+    // A tooled rule just inside the border, the way a bound panel is finished.
+    rct(g, 1, 1, w - 2, 1, [30, 23, 14]); rct(g, 1, h - 2, w - 2, 1, [136, 112, 76]);
+    rct(g, 1, 1, 1, h - 2, [30, 23, 14]); rct(g, w - 2, 1, 1, h - 2, [136, 112, 76]);
+    return cv;
+  });
+  blit(ctx, c, x - 3, y - 3);
+}
+
+/**
+ * A patch of daylight lying on a floor - what a 1998 painter drew instead of a
+ * volumetric shaft. It is a flat quadrilateral of the floor repainted a few
+ * value steps brighter, hard-edged, with the brightest band nearest the window
+ * and one faint band beyond it. No dither, no falloff, no rays.
+ */
+export function litPatch(ctx, cx, top, topHalf, bottom, botHalf, colorHex, steps = 4) {
+  const c = hexRGB(colorHex);
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const H = Math.max(1, Math.round(bottom - top));
+  for (let i = 0; i < steps; i++) {
+    const t0 = i / steps, t1 = (i + 1) / steps;
+    const y0 = Math.round(top + H * t0), y1 = Math.round(top + H * t1);
+    // Value steps down the patch, quantised - this is the banding, not a ramp.
+    const k = (1 - band(t0, steps)) * 0.30 + 0.06;
+    const col = pc(shade(c, k));
+    for (let y = y0; y < y1; y++) {
+      const t = (y - top) / H;
+      const half = topHalf + (botHalf - topHalf) * t;
+      rct(ctx, Math.round(cx - half), y, Math.round(half * 2), 1, col);
+    }
+  }
+  ctx.restore();
+}
+
 // --- painted paper ----------------------------------------------------------
 
 export const PAPER = {
