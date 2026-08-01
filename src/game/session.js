@@ -473,9 +473,12 @@ export class Session {
 
   rebuildTurnQueue() {
     const members = (this.party && this.party.members) || [];
+    // Everyone still standing joins the round, fastest first. Recovery governs
+    // whether a character can act yet, not whether they are in the queue -
+    // filtering on it here emptied the queue after any real fight.
     this.turnQueue = members
       .map((ch, i) => ({ i, ch }))
-      .filter(({ ch }) => ch.hp > 0 && ch.recovery <= 0)
+      .filter(({ ch }) => ch.hp > 0)
       .sort((a, b) => (b.ch.stats?.speed || 0) - (a.ch.stats?.speed || 0))
       .map(({ i }) => i);
     if (this.turnQueue.length) this.activeChar = this.turnQueue[0];

@@ -175,13 +175,32 @@ export class ChargenScreen extends Screen {
         g.fillRect(cx, Math.round(h * 0.55) - 22, 5, 24);
         glow(g, cx + 2, Math.round(h * 0.55) - 26, 40, '#ffc060', 0.8);
       }
-      // Banners on the back wall.
-      for (let i = 0; i < 4; i++) {
-        const bx = 60 + i * (w - 120) / 3;
-        g.fillStyle = rampCss(['blood', 'water', 'foliage', 'arcane'][i], 4);
-        poly(g, [bx - 22, 16, bx + 22, 16, bx + 22, 96, bx, 112, bx - 22, 96], rampCss(['blood', 'water', 'foliage', 'arcane'][i], 4));
-        g.fillStyle = rampCss('gold', 8);
-        g.fillRect(bx - 24, 14, 48, 4);
+      // Two hanging banners at the far edges of the hall - painted cloth with
+      // folds, a bordered field and a charge, in muted heraldic colours. Not
+      // colour-coded ribbons behind the columns.
+      for (const [bx, cloth, trim] of [[42, [104, 40, 34], [172, 140, 72]],
+        [w - 42, [46, 56, 92], [172, 140, 72]]]) {
+        for (let y = 16; y < 112; y++) {
+          const t = (y - 16) / 96;
+          // Swallow-tail hem: the cloth cuts away below three-quarters.
+          const cut = t < 0.80 ? 0 : Math.round((t - 0.80) * 5 * 22);
+          for (let x = -22; x <= 22; x++) {
+            if (Math.abs(x) < cut) continue;
+            // Folds: a slow sine across the width, quantised into bands.
+            const fold = Math.sin((x + 22) * 0.42) * 0.5 + 0.5;
+            const k = 0.62 + Math.round(fold * 4) / 4 * 0.5;
+            const border = Math.abs(x) > 18 || y < 22 ? 1.35 : 1;
+            const c = Math.abs(x) > 18 || y < 22 ? trim : cloth;
+            MM6.rct(g, bx + x, y, 1, 1, MM6.shade(c, k * border));
+          }
+        }
+        // Charge: a painted lozenge at the centre of the field.
+        for (let i = 0; i < 9; i++) {
+          const kw = 9 - Math.abs(i - 4) * 2;
+          MM6.rct(g, bx - kw, 52 + i * 2, kw * 2, 2, MM6.shade(trim, i < 4 ? 1.15 : 0.75));
+        }
+        MM6.rct(g, bx - 24, 13, 48, 4, [86, 70, 40]);
+        MM6.rct(g, bx - 24, 13, 48, 1, [148, 124, 70]);
       }
       vignette(g, w, h, 0.7);
     });
@@ -336,16 +355,24 @@ export class ChargenScreen extends Screen {
       ['Spell Points', d.sp ? String(d.sp) : '-', d.sp ? C_CANARY : C_DIM],
       ['Armour Class', String(d.ac), C_CANARY],
     ];
+    // The value column is placed off the widest label, not off a guessed x, so
+    // the wider serif face cannot push the numbers into the notes.
+    let labelW = 0;
+    for (const [l] of rows) labelW = Math.max(labelW, F.measure(l, 'small').w);
     rows.forEach(([l, v, c], i) => {
       const ry = dy + i * 15;
       F.drawText(ctx, l, x + 10, ry, { face: 'small', color: C_WHITE });
-      F.drawText(ctx, v, x + 150, ry, { face: 'small', align: 'right', color: c });
+      F.drawText(ctx, v, x + 22 + labelW, ry, { face: 'small', align: 'right', color: c });
     });
+    // Class notes wrap across the full width under the block: nothing here is
+    // allowed to end in an ellipsis.
     const k = CLASSES[s.class];
-    F.drawText(ctx, k.spStat ? `Spell points from ${k.spStat === 'both' ? 'Intellect & Personality' : k.spStat}`
-      : 'Casts no spells', x + 190, dy, { face: 'small', color: C_DIM, maxWidth: w - 200 });
-    F.drawText(ctx, `Promotes to ${k.promotesTo ? CLASSES[k.promotesTo].name : '-'}`,
-      x + 190, dy + 15, { face: 'small', color: C_DIM, maxWidth: w - 200 });
+    const note = (k.spStat
+      ? `Spell points from ${k.spStat === 'both' ? 'Intellect and Personality' : k.spStat}.`
+      : 'Casts no spells.')
+      + (k.promotesTo ? ` Promotes to ${CLASSES[k.promotesTo].name}.` : '');
+    drawWrapped(ctx, note, x + 10, dy + 48, w - 20,
+      { face: 'small', color: C_DIM, lineHeight: 10, maxLines: 3 });
   }
 
   drawSkills(ctx) {
@@ -392,11 +419,8 @@ export class ChargenScreen extends Screen {
     const left = this.slots.reduce((t, s) => t + this.pointsLeft(s), 0);
     F.drawText(ctx, left ? `${left} points unspent` : 'All points spent',
       sx, y + 24, { face: 'small', color: left ? C_RED : C_GREEN });
-    F.drawText(ctx, 'Click a portrait to edit that character.', sx, y + 36,
-      { face: 'small', color: C_DIM, maxWidth: sw });
-
     const bw = Math.min(120, sw), bh = 26;
-    const bx = sx, by = y + 56;
+    const bx = sx, by = y + 44;
     const dh = this.ui.region('cg:done', bx, by, bw, bh, 'Begin the game');
     A.button(ctx, bx, by, bw, bh, null, dh.down ? 'down' : 'up');
     F.drawText(ctx, 'Done', bx + bw / 2, by + 7, { align: 'center', color: dh.hover ? C_GOLD : C_WHITE });

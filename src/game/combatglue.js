@@ -448,6 +448,7 @@ function pickUp(session, e) {
     if (p && p.giveItem) ok = !!p.giveItem(session.party, item);
     else if (p && p.invAdd && ch) ok = !!p.invAdd(ch.inventory, item);
     else if (ch && Array.isArray(ch.inventory)) { ch.inventory.push(item); ok = true; }
+    else if (ch && ch.inventory && Array.isArray(ch.inventory.items)) { ch.inventory.items.push(item); ok = true; }
     if (!ok) { session.message('There is no room in your packs.'); return; }
     session.message(`You pick up ${item.name || 'an item'}.`);
     if (session.audio) session.audio.play('item_pickup');

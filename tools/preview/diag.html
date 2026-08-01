@@ -117,6 +117,26 @@ P('=== 2. FULL-ATLAS SCAN for stray key colours + edge bleed (Goblin) ===');
 }
 
 P('');
+P('=== 2b. CELL-BORDER CLIPPING ACROSS CATEGORIES ===');
+for (const [cat, kinds] of [['creature', ['Goblin', 'Rat', 'Dragon', 'Ooze']],
+  ['npc', ['peasant_m', 'guard']],
+  ['flora', ['oak', 'pine', 'bush']],
+  ['prop', ['barrel', 'crate', 'chest', 'well', 'signpost']]]) {
+  for (const k of kinds) {
+    let sh; try { sh = getSheet(renderer, cat, k, 1); } catch (e) { P('  ' + cat + '/' + k + ': ' + e.message); continue; }
+    const d = sh.canvas.getContext('2d').getImageData(0, 0, sh.atlasW, sh.atlasH).data;
+    let edge = 0;
+    for (let y = 0; y < sh.atlasH; y++) for (let x = 0; x < sh.atlasW; x++) {
+      if (d[(y * sh.atlasW + x) * 4 + 3] < 128) continue;
+      const cx = x % sh.cellW, cy = y % sh.cellH;
+      if (cx === 0 || cx === sh.cellW - 1 || cy === 0 || cy === sh.cellH - 1) edge++;
+    }
+    P('  ' + (cat + '/' + k).padEnd(20) + ' cell ' + sh.cellW + 'x' + sh.cellH
+      + '  texels on a cell border: ' + edge);
+  }
+}
+
+P('');
 P('=== 3. THROUGH THE REAL BILLBOARD SHADER (src/ents/billboard.js) ===');
 {
   // Reproduce engine.js's render target exactly.
