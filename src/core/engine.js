@@ -45,8 +45,20 @@ const float BAYER[64] = float[64](
   63.0,31.0,55.0,23.0,61.0,29.0,53.0,21.0
 );
 
+// The world pass writes display-ready sRGB into the render target, but three's
+// texture fetch decodes an sRGB-tagged texture back to linear and a
+// RawShaderMaterial gets no matching re-encode on the way out. Left alone, the
+// entire 3D window leaves through the sRGB->linear curve - roughly half of
+// every channel - which is what crushed lit ground to near black. Undo the
+// decode here, so everything below works in the same byte space the 256-entry
+// palette and its lookup cube are built in.
+vec3 toSRGB(vec3 v) {
+  return mix(pow(max(v, vec3(0.0)), vec3(0.41666)) * 1.055 - 0.055, v * 12.92,
+             vec3(lessThanEqual(v, vec3(0.0031308))));
+}
+
 void main() {
-  vec3 c = texture(tDiffuse, vUv).rgb;
+  vec3 c = toSRGB(texture(tDiffuse, vUv).rgb);
 
   // Party-wide tints: time of day, damage flash, spell wash.
   c *= uTint;
@@ -104,6 +116,8 @@ export class Engine {
       type: THREE.UnsignedByteType,
       depthBuffer: true,
       stencilBuffer: false,
+      // sRGB, so the world pass encodes on the way in. The post shader undoes
+      // the fetch's decode itself - see toSRGB there.
       colorSpace: THREE.SRGBColorSpace,
     });
 
