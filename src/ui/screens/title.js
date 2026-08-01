@@ -61,12 +61,13 @@ const SKY_CLOUD = [
 ];
 
 /**
- * The sky. Strata are sampled in a coordinate that blows up toward the horizon
- * (`1 / (1.04 - t)`), which is what compresses the cloud bands into a fine
- * striation along the skyline and stretches them overhead.
+ * The sky. Strata are sampled in a coordinate that runs away toward the horizon,
+ * which is what compresses the cloud bands into a fine striation along the
+ * skyline and stretches them into slabs overhead.
  */
-function skyCanvas(W) {
-  return paintCanvas(W, HORIZON, (x, y) => {
+function skyCanvas(W, dx) {
+  return paintCanvas(W, HORIZON, (px, y) => {
+    const x = px - dx;
     const t = y / HORIZON;                       // 0 zenith .. 1 horizon
     // Warmth is mostly vertical; the horizontal term only leans the glow toward
     // the sun. Quantised to eight steps so the sky can never go smooth.
@@ -86,8 +87,8 @@ function skyCanvas(W) {
     // The sun sits inside the strata: cloud in front of it wins, which is what
     // stops it reading as a disc pasted onto the sky.
     if (cov <= 0.03) {
-      const dx = x - SUN.x, dy = (y - SUN.y) * 1.15;
-      const dd = dx * dx + dy * dy;
+      const ux = x - SUN.x, uy = (y - SUN.y) * 1.15;
+      const dd = ux * ux + uy * uy;
       if (dd <= SUN.r * SUN.r) return [255, 240, 196];
       if (dd <= (SUN.r + 4) * (SUN.r + 4)) return [248, 206, 116];
     }
@@ -140,28 +141,32 @@ const LAYERS = [
 // Cart track from the gate, swinging away to the bottom right corner. Painted
 // as a transition laid over the hillside, which is how MM6 does roads.
 const ROAD = [[36, 29, 19], [56, 45, 29], [78, 63, 41], [104, 85, 57]];
-function roadAt(y) {
+function roadAt(y, dx) {
   const t = clamp((y - 296) / 184, 0, 1);
-  const c = 402 + 214 * t * t + 34 * t + valueNoise2(y * 0.06, 2, 29) * 8 - 4;
+  const c = dx + 402 + 214 * t * t + 34 * t + valueNoise2(y * 0.06, 2, 29) * 8 - 4;
   const hw = 3 + 54 * t * t + 7 * t;
   return [c, hw];
 }
 
 let _cols = null;
-/** Per-column crest and treeline heights for every ridge, computed once. */
-function ridgeCols(W) {
-  if (_cols && _cols.w === W) return _cols;
+/**
+ * Per-column crest and treeline heights for every ridge, computed once. The
+ * scene is authored 640 wide and `dx` slides it to the middle of a wider frame,
+ * so widescreen just shows more sky and hillside either side.
+ */
+function ridgeCols(W, dx) {
+  if (_cols && _cols.w === W && _cols.dx === dx) return _cols;
   const cols = W + 2;
   const L = LAYERS.map((cfg) => {
     const ys = new Float32Array(cols);
     const ts = new Float32Array(cols);
     for (let x = 0; x < cols; x++) {
-      ys[x] = cfg.y(x);
-      ts[x] = cfg.trees ? Math.max(0, cfg.trees(x)) : 0;
+      ys[x] = cfg.y(x - dx);
+      ts[x] = cfg.trees ? Math.max(0, cfg.trees(x - dx)) : 0;
     }
     return { cfg, ys, ts };
   });
-  _cols = { w: W, L };
+  _cols = { w: W, dx, L };
   return _cols;
 }
 
@@ -173,12 +178,12 @@ function knollY(x) { return LAYERS[2].y(x); }
  * the ground band with everything outside that range left transparent. Split in
  * two so the castle can be planted between the knoll and the foreground slope.
  */
-function groundCanvas(W, H, lo, hi) {
+function groundCanvas(W, H, lo, hi, dx) {
   const gh = H - GTOP;
-  const { L } = ridgeCols(W);
+  const { L } = ridgeCols(W, dx);
   const rc = new Float32Array(gh), rw = new Float32Array(gh);
   for (let i = 0; i < gh; i++) {
-    const r = roadAt(i + GTOP);
+    const r = roadAt(i + GTOP, dx);
     rc[i] = r[0]; rw[i] = r[1];
   }
   const knoll = L[2].ys;
@@ -224,7 +229,7 @@ function groundCanvas(W, H, lo, hi) {
     const slope = lay.ys[x + 1] - top;
     // Light from the sun's side of the picture: a slope only lights when it
     // faces the sun, and only the top of the fall keeps any of it.
-    const facing = slope * (SUN.x - x) > 0 ? Math.min(1, Math.abs(slope) * 1.1) : 0;
+    const facing = slope * (SUN.x + dx - x) > 0 ? Math.min(1, Math.abs(slope) * 1.1) : 0;
     let idx = 1 + Math.round(band(clamp(1 - depth / lay.cfg.span, 0, 1), 4) * 1.7)
       + Math.round(facing * 1.6);
     if (hash2(x >> 1, y >> 1, 3 + own) > 0.84) idx += 1;
@@ -470,7 +475,9 @@ function paintCrown(g, clumps) {
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       if (!solid(x, y)) continue;
-      if (solid(x + 1, y) && solid(x, y - 1) && solid(x + 1, y - 1)) continue;
+      // Light comes from up and to the right, so only the boundary facing that
+      // way takes the rim - otherwise the crown gets a cartoon outline.
+      if (solid(x + 1, y - 1)) continue;
       rct(gg, x, y, 1, 1, LEAF_LIT);
     }
   }
@@ -483,10 +490,10 @@ function limb(g, x, y, ang, len, wdt, depth, seed) {
   const n = Math.max(2, Math.round(len));
   for (let i = 0; i <= n; i++) {
     const t = i / n;
-    const w = Math.max(1, Math.round(wdt * (1 - t * 0.42)));
+    const w = Math.max(1, Math.round(wdt * (1 - t * 0.55)));
     const px = Math.round(x + (x2 - x) * t), py = Math.round(y + (y2 - y) * t);
     rct(g, px - (w >> 1), py - (w >> 1), w, w, BARK);
-    if (w > 1) rct(g, px - (w >> 1) + w - 1, py - (w >> 1), 1, w, BARK_LIT);
+    if (w > 2 && (i & 1)) rct(g, px - (w >> 1) + w - 1, py - (w >> 1), 1, w, BARK_LIT);
   }
   if (depth <= 0) return;
   const spread = 0.42 + hash2(seed, depth, 3) * 0.30;
@@ -513,19 +520,20 @@ function paintTree(g) {
     rct(g, x - (w >> 1), y, w, 1, BARK);
     rct(g, x - (w >> 1), y, 1, 1, [12, 10, 7]);
     if ((i % 3) !== 1) rct(g, x + (w >> 1) - 1, y, 1, 1, BARK_LIT);
-    if ((i % 7) === 3) rct(g, x - (w >> 1) + 1, y, Math.max(1, w - 3), 1, [21, 17, 12]);
+    if ((i % 17) === 5) rct(g, x - (w >> 1) + 1, y, Math.max(1, (w >> 1)), 1, [20, 16, 11]);
   }
   const tx = bx + 9, ty = by - hgt;
-  limb(g, tx, ty, -Math.PI / 2 - 0.20, 40, 10, 2, 3);
-  limb(g, tx, ty + 8, -Math.PI / 2 + 0.46, 36, 9, 2, 11);
-  limb(g, tx - 2, ty + 26, -Math.PI / 2 - 0.88, 30, 8, 1, 19);
-  limb(g, tx + 3, ty + 36, -Math.PI / 2 + 1.04, 28, 7, 1, 23);
-  limb(g, tx - 1, ty + 62, -Math.PI / 2 - 1.10, 20, 6, 0, 29);
+  limb(g, tx, ty, -Math.PI / 2 - 0.20, 34, 7, 1, 3);
+  limb(g, tx, ty + 8, -Math.PI / 2 + 0.46, 32, 6, 1, 11);
+  limb(g, tx - 2, ty + 24, -Math.PI / 2 - 0.92, 26, 5, 1, 19);
+  limb(g, tx + 3, ty + 32, -Math.PI / 2 + 1.06, 24, 5, 1, 23);
+  limb(g, tx - 1, ty + 56, -Math.PI / 2 - 1.15, 16, 4, 0, 29);
   // The crown reads as one mass with a lit right shoulder, not as separate
   // blobs, so a few overlapping clumps are stamped over the tips.
   paintCrown(g, [
-    [tx - 6, ty - 34, 24, 41], [tx + 24, ty - 18, 20, 47], [tx - 30, ty - 8, 18, 53],
-    [tx + 8, ty - 52, 16, 59], [tx - 20, ty - 44, 14, 67], [tx + 30, ty - 44, 12, 71],
+    [tx - 6, ty - 32, 27, 41], [tx + 26, ty - 16, 22, 47], [tx - 32, ty - 6, 21, 53],
+    [tx + 10, ty - 50, 18, 59], [tx - 22, ty - 42, 17, 67], [tx + 32, ty - 42, 14, 71],
+    [tx - 26, ty + 12, 13, 79], [tx + 22, ty + 18, 12, 83],
   ]);
 }
 
@@ -569,21 +577,28 @@ function tussock(g, cx, baseY, hgt, seed) {
 
 /** The sky alone; the drifting strata are laid over this, then the land. */
 export function paintTitleSky(g, w, h) {
-  blit(g, cached(`title:sky:${w}`, () => skyCanvas(w)), 0, 0);
+  const dx = Math.round((w - 640) / 2);
+  blit(g, cached(`title:sky:${w}`, () => skyCanvas(w, dx)), 0, 0);
   rct(g, 0, HORIZON, w, h - HORIZON, LAYERS[3].ramp[0]);
   vignette(g, w, h, 0.28);
 }
 
 /** Ridges, castle, tree, track: everything in front of the sky, in one bake. */
 export function paintTitleArt(g, w, h) {
-  blit(g, cached(`title:far:${w}x${h}`, () => groundCanvas(w, h, 0, 2)), 0, GTOP);
+  const dx = Math.round((w - 640) / 2);
+  blit(g, cached(`title:far:${w}x${h}`, () => groundCanvas(w, h, 0, 2, dx)), 0, GTOP);
+  g.save();
+  g.translate(dx, 0);
   paintCastle(g);
-  blit(g, cached(`title:near:${w}x${h}`, () => groundCanvas(w, h, 3, 3)), 0, GTOP);
+  g.restore();
+  blit(g, cached(`title:near:${w}x${h}`, () => groundCanvas(w, h, 3, 3, dx)), 0, GTOP);
+  g.save();
+  g.translate(dx, 0);
 
   // Foreground furniture, kept clear of the column the menu prints in.
   for (const [bx, by, bw, bh, s] of [
     [546, 352, 26, 15, 3], [598, 386, 34, 20, 9], [472, 336, 18, 11, 15],
-    [92, 356, 22, 13, 21], [160, 392, 30, 17, 27], [36, 430, 40, 22, 33],
+    [132, 372, 22, 13, 21], [186, 402, 28, 16, 27], [30, 440, 40, 22, 33],
     [608, 452, 46, 26, 39], [512, 320, 14, 9, 45],
   ]) boulder(g, bx, by, bw, bh, s);
   for (let i = 0; i < 26; i++) {
@@ -594,6 +609,7 @@ export function paintTitleArt(g, w, h) {
   }
 
   paintTree(g);
+  g.restore();
   vignette(g, w, h, 0.28);
 }
 
@@ -665,7 +681,7 @@ function titleBanner() {
 
 // --- the screen -------------------------------------------------------------
 
-const MENU_CX = 320, MENU_Y0 = 342, MENU_STEP = 27, MENU_W = 230;
+const MENU_Y0 = 342, MENU_STEP = 27, MENU_W = 230;
 
 export class TitleScreen extends Screen {
   constructor(session, ui, hud, opts = {}) {
@@ -714,9 +730,10 @@ export class TitleScreen extends Screen {
 
   /** Gate torches gutter on a slow noise and throw light on the gatehouse. */
   drawTorches(ctx) {
+    const dx = Math.round((layout.w - 640) / 2);
     for (const ox of [-17, 17]) {
       const f = 0.62 + 0.38 * valueNoise2(this.t * 6 + ox, 0, 3);
-      const x = 404 + ox, y = 274;
+      const x = 404 + dx + ox, y = 274;
       rct(ctx, x - 1, y, 3, 5, [46, 34, 20]);                  // bracket
       flame(ctx, x, y - 3, 4, Math.round(5 * f) + 3, this.t * 5 + ox);
       lightPool(ctx, x, y - 6, Math.round(13 * f), '#ffa040', 0.7 * f);
@@ -729,6 +746,7 @@ export class TitleScreen extends Screen {
    * mark either side of the live line.
    */
   drawMenu(ctx) {
+    const MENU_CX = Math.round(layout.w / 2);
     const x0 = MENU_CX - MENU_W / 2;
     const hits = MENU.map((m, i) => this.ui.region(`title:${m.id}`,
       x0, MENU_Y0 + i * MENU_STEP - 3, MENU_W, MENU_STEP - 2, null));

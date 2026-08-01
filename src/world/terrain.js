@@ -639,10 +639,10 @@ function faceGrey(nx, ny, nz, sun, ambient, diffuse, upness) {
   // slope shades identically to flat ground and the landform vanishes. A small
   // steepness term stands in for the occlusion the engine baked per-vertex.
   const steep = 1 - 0.10 * (1 - clamp(upness === undefined ? ny : upness, 0, 1));
-  // Only night darkens globally; the shell owns the day/night multiply and
-  // applying our own on top of it would darken everything twice.
-  const night = diffuse > 0 ? 1 : 0.38;
-  return SRGB_TO_LIN(quantiseShade(clamp(lit * steep * night, 0, 1)));
+  // The shell owns the day/night multiply outright. A night factor here as
+  // well multiplied 0.38 by the post pass's 0.153 and put midnight ground at
+  // luminance 4 against MM6's ~12: dark enough to be a black rectangle.
+  return SRGB_TO_LIN(quantiseShade(clamp(lit * steep, 0, 1)));
 }
 
 // --- water animation -------------------------------------------------------

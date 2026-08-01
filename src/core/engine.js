@@ -60,21 +60,30 @@ vec3 toSRGB(vec3 v) {
 void main() {
   vec3 c = toSRGB(texture(tDiffuse, vUv).rgb);
 
-  // Party-wide tints: time of day, damage flash, spell wash.
-  c *= uTint;
-  c = mix(c, uFlashColor, uFlash);
-  c *= uFade;
-
-  // Ordered dither in screen space, then snap to the palette. The dither runs
-  // at roughly one palette step so gradients break into the stipple pattern the
-  // software renderer produced instead of banding.
+  // Snap to the palette at full brightness, and only then dim.
+  //
+  // MM6 never darkened a pixel. It shaded by swapping to one of 32 copies of
+  // the palette, each pre-multiplied by 8*(31-dim)/255 - so a night frame still
+  // held 256 distinct entries, spread across the dark end, and kept all its
+  // tonal structure. Dimming first and snapping afterwards does the opposite:
+  // it folds the whole image into the handful of dark entries the palette
+  // happens to own, and a midnight meadow comes out as six flat colours.
+  // Snapping first and scaling after reproduces exactly those 32 palettes.
   ivec2 p = ivec2(mod(vUv * uResolution, 8.0));
   float d = (BAYER[p.y * 8 + p.x] / 64.0 - 0.4921875) * uDither;
   vec3 dithered = clamp(c + d, 0.0, 1.0);
-
   vec3 quantised = texture(tLUT, dithered * (float(${LUT_SIZE}) - 1.0) / float(${LUT_SIZE}) + 0.5 / float(${LUT_SIZE})).rgb;
 
-  pc_fragColor = vec4(mix(clamp(c, 0.0, 1.0), quantised, uPalette), 1.0);
+  vec3 lit = mix(clamp(c, 0.0, 1.0), quantised, uPalette);
+
+  // Party-wide tints: time of day, damage flash, spell wash. The time-of-day
+  // multiply lands on the same 32-step ladder the engine's dimming levels use.
+  vec3 t = floor(clamp(uTint, 0.0, 1.0) * 31.0 + 0.5) * (8.0 / 248.0);
+  lit *= t;
+  lit = mix(lit, uFlashColor, uFlash);
+  lit *= uFade;
+
+  pc_fragColor = vec4(clamp(lit, 0.0, 1.0), 1.0);
 }
 `;
 
