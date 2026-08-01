@@ -101,6 +101,12 @@ export class Boot {
   async _generatorFor(id) {
     if (id === 'textures') {
       const m = await safeImport('./art/textures.js');
+      // Hand it to terrain.js. It used to reach for the module itself through a
+      // concatenated specifier that no bundler could see, which meant every
+      // production build ran the whole terrain, wall and roof set on fallback
+      // art. Pass it in from here, where the import is literal and bundles.
+      const t = await safeImport('./world/terrain.js');
+      if (t && t.setTextureModule) t.setTextureModule(m);
       if (!m || !m.buildAll) return null;
       this.assets.textures = m;
       return m.buildAll();
@@ -301,6 +307,7 @@ const ART_MODULES = {
   './art/models/flora.js': () => import('./art/models/flora.js'),
   './art/models/props.js': () => import('./art/models/props.js'),
   './art/models/creatures.js': () => import('./art/models/creatures.js'),
+  './world/terrain.js': () => import('./world/terrain.js'),
 };
 
 async function safeImport(path) {

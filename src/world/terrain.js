@@ -37,18 +37,39 @@ export const PLAYABLE_EXTENT = 22528;
 // texture should degrade to "slightly wrong colour", never to a crash.
 
 let TEXMOD = null;
+let _texResolve = null;
 
-export const texturesReady = (async () => {
-  try {
-    // Indirect specifier so a bundler cannot make this a hard dependency.
-    const spec = '../art/' + 'textures.js';
-    const m = await import(/* @vite-ignore */ spec);
-    if (m && typeof m.getTex === 'function') TEXMOD = m;
-  } catch (err) {
-    TEXMOD = null;
-  }
+/**
+ * Hand terrain the real texture module.
+ *
+ * This used to be a dynamic `import()` built from a concatenated specifier so a
+ * bundler could not make it a hard dependency. It worked under the dev server
+ * and failed in every production build: with the whole game inlined into one
+ * file there is no `../art/textures.js` to fetch, the import threw, TEXMOD
+ * stayed null, and the built game quietly ran on the locally painted fallbacks
+ * for its entire terrain, wall and roof set. Nobody sees that in dev, which is
+ * exactly why it survived.
+ *
+ * boot.js already loads the module through a literal import that bundles
+ * correctly, so it pushes it in here instead. terrain.js still runs standalone
+ * with its fallbacks if nothing ever calls this - the property that motivated
+ * the indirect import is kept, without the failure mode.
+ */
+export function setTextureModule(m) {
+  if (m && typeof m.getTex === 'function') TEXMOD = m;
+  // Always open the gate, even when the module is missing or broken. Region
+  // generation awaits `texturesReady`, so a stage that fails must still let the
+  // world build on the fallbacks rather than hang on a promise nobody resolves.
+  if (_texResolve) { _texResolve(TEXMOD); _texResolve = null; }
   return TEXMOD;
-})();
+}
+
+export const texturesReady = new Promise((resolve) => {
+  _texResolve = resolve;
+  // Belt and braces: a host that never loads the art module at all - a test
+  // harness, or `?skip=textures` - must not deadlock world generation.
+  setTimeout(() => { if (_texResolve) { _texResolve(TEXMOD); _texResolve = null; } }, 8000);
+});
 
 /** True once the real texture module has been probed for. */
 export function texturesAvailable() { return TEXMOD !== null; }
