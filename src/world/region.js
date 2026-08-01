@@ -801,8 +801,11 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
     const t = towns[0];
     const e = t.entrances[0] || { x: t.x + t.radius, z: t.z };
     const d = Math.hypot(e.x - t.x, e.z - t.z) || 1;
-    const sx = t.x + (e.x - t.x) / d * (t.radius + 900);
-    const sz = t.z + (e.z - t.z) / d * (t.radius + 900);
+    // Just outside the gate, not out in the trees: 900 units back put the
+    // opening frame in whatever woodland happened to grow along the approach,
+    // where MM6 opens with the town filling the window.
+    const sx = t.x + (e.x - t.x) / d * (t.radius + 520);
+    const sz = t.z + (e.z - t.z) / d * (t.radius + 520);
     spawnPoint = { x: sx, y: heightAt(hm, sx, sz) + 160, z: sz, yaw: Math.atan2(t.x - sx, t.z - sz) + Math.PI };
   } else {
     spawnPoint = { x: 0, y: heightAt(hm, 0, 0) + 160, z: 0, yaw: 0 };

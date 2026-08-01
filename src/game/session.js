@@ -64,6 +64,74 @@ export class GameClock {
   }
 }
 
+/** Shortest signed distance between two angles. */
+function angleDelta(a, b) {
+  let d = (a - b) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
+
+/**
+ * Trees within `r` of a point. Gathered from every source that plants one -
+ * the region's flora plan and each town's own ring of trunks - because none of
+ * them has a collider and so none of them is visible to `map.blocked`.
+ */
+function nearbyTrees(map, p, r) {
+  const region = map.region;
+  if (!region) return [];
+  const out = [];
+  const r2 = r * r;
+  const take = (f, h) => {
+    if (!f || h < 260) return;                       // only things that block a view
+    const dx = f.x - p.x, dz = f.z - p.z;
+    if (dx * dx + dz * dz <= r2) out.push(f);
+  };
+  for (const f of region.floraPlan || region.flora || []) take(f, f.height || 0);
+  for (const t of region.towns || []) {
+    for (const f of t.treeSpots || []) take(f, f.h || 0);
+  }
+  return out;
+}
+
+/**
+ * The meshes worth raycasting against when deciding which way to look: solid
+ * world geometry only. Billboard batches carry a map-sized bounding sphere and
+ * would report a hit from anywhere, and the terrain itself is handled by the
+ * ground-climb term, so both are left out.
+ */
+function viewBlockers(map) {
+  const out = [];
+  if (!map.group) return out;
+  map.group.traverse((o) => {
+    if (!o.isMesh || !o.visible) return;
+    if (o.frustumCulled === false) return;           // self-culling sprite field
+    if (o.isInstancedMesh) return;
+    if (/terrain|water|sky|flora|tree/i.test(o.name || '')) return;
+    out.push(o);
+  });
+  return out;
+}
+
+/**
+ * How much a heading is spoiled by trunks standing in it. A trunk 400 units
+ * ahead and dead centre fills the window; one off to the side or far away
+ * hardly matters, so the penalty falls off with both distance and how far off
+ * the axis it sits.
+ */
+function treePenalty(trees, p, fx, fz) {
+  let worst = 0;
+  for (const t of trees) {
+    const dx = t.x - p.x, dz = t.z - p.z;
+    const along = dx * fx + dz * fz;
+    if (along < 60 || along > 2400) continue;
+    const side = Math.abs(dx * -fz + dz * fx);
+    if (side > 420) continue;
+    worst = Math.max(worst, (2400 - along) * (1 - side / 420));
+  }
+  return worst;
+}
+
 export class Session {
   /**
    * @param {import('../core/engine.js').Engine} engine
@@ -168,18 +236,41 @@ export class Session {
     // each by how far it stays unobstructed, penalised by how steeply the
     // ground climbs along it - otherwise the party opens the game nose-first
     // against a hillside, which is technically "open" but shows nothing.
+    //
+    // Trees are billboards with no collider, so `blocked` walks straight past a
+    // trunk that fills the whole window. Score them separately from the flora
+    // plan, and give the map's own suggested heading a head start: a region
+    // that aimed the party at its town knows better than a ray cast does.
+    const trees = nearbyTrees(map, best, 3000);
+    const eye = new THREE.Vector3(best.x, best.y + PLAYER.eyeHeight, best.z);
+    const ray = new THREE.Raycaster();
+    ray.far = 2400;
+    const solids = viewBlockers(map);
     let yaw = s.yaw || 0, bestScore = -Infinity;
     for (let i = 0; i < 16; i++) {
       const a = (i / 16) * Math.PI * 2;
       const fx = -Math.sin(a), fz = -Math.cos(a);
       let open = 0, climb = 0;
-      for (let d = 200; d <= 2400; d += 200) {
+      for (let d = 120; d <= 2400; d += 120) {
         const px = best.x + fx * d, pz = best.z + fz * d;
         if (map.blocked(px, best.y + 60, pz, R, H)) break;
         open = d;
         climb = Math.max(climb, map.groundAt(px, pz, best.y) - best.y);
       }
-      const score = open - climb * 2.5;
+      // The collider grid is a coarse box list and misses plenty of what the
+      // eye sees - a chimney, a monument, an upper storey. Cast at eye height
+      // against the real geometry as well and take the shorter of the two, so
+      // "open" means open to look at, not merely open to walk into.
+      if (solids.length) {
+        ray.set(eye, new THREE.Vector3(fx, 0, fz));
+        const hit = ray.intersectObjects(solids, false)[0];
+        if (hit) open = Math.min(open, hit.distance);
+      }
+      let score = open - climb * 2.5 - treePenalty(trees, best, fx, fz);
+      // A nudge, not an override: a region that aimed the party at its town
+      // knows more than a ray cast does, but not enough to justify opening the
+      // game nose-first against a wall.
+      if (s.yaw !== undefined && Math.abs(angleDelta(a, s.yaw)) < Math.PI / 8) score += 300;
       if (score > bestScore) { bestScore = score; yaw = a; }
     }
     return { ...best, yaw };

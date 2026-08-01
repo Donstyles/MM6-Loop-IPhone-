@@ -363,6 +363,10 @@ export function generateTown(spec = {}, seed = 1) {
     buildings, props, npcSpawns, shops, roads, colliders, doors,
     entrances, plaza: { x: cx, z: cz, radius: plazaR },
     trees,
+    // The trunks' positions, not just the batch that draws them. A billboard
+    // has no collider, so anything deciding where to stand or which way to look
+    // has no other way to know one is in the way.
+    treeSpots: treeInst,
     bounds: { x: cx, z: cz, radius: R * 1.1, y: baseY },
     update(camera) { if (trees) trees.userData.updateBillboard(camera); },
   };
