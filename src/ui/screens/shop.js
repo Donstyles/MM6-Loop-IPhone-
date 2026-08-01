@@ -222,15 +222,22 @@ export function paintShopInterior(g, w, h, kind) {
         g.fillRect(x + 2, sy + 24 - bh, 4, 3);
       }
     }
-    // Still on the right: a copper belly, a condenser pipe and a green flame.
-    g.fillStyle = rampCss('gold', 3);
-    g.beginPath(); g.ellipse(w - 62, horizon - 6, 30, 24, 0, 0, Math.PI * 2); g.fill();
-    g.fillStyle = rampCss('gold', 6);
-    g.beginPath(); g.ellipse(w - 70, horizon - 12, 12, 8, 0, 0, Math.PI * 2); g.fill();
-    g.fillStyle = rampCss('gold', 7);
-    g.fillRect(w - 64, horizon - 48, 5, 22);
-    g.fillRect(w - 64, horizon - 48, 26, 4);
-    glow(g, w - 62, horizon + 16, 30, '#40f460', 0.45);
+    // Still on the right: a modelled copper belly with a lit shoulder and a
+    // dark underside, a condenser pipe, and a small flame under it.
+    const sx0 = w - 62, sy0 = horizon - 6;
+    for (let dy = -24; dy <= 24; dy++) {
+      const k = Math.round(30 * Math.sqrt(Math.max(0, 1 - (dy * dy) / (24 * 24))));
+      if (k <= 0) continue;
+      const t = MM6.band((dy + 24) / 48, 6);
+      MM6.rct(g, sx0 - k, sy0 + dy, k * 2, 1, MM6.mix([148, 96, 40], [58, 34, 14], t));
+      MM6.rct(g, sx0 - k, sy0 + dy, Math.max(1, Math.round(k * 0.35)), 1,
+        MM6.mix([200, 148, 74], [92, 60, 26], t));
+    }
+    MM6.ellip(g, sx0 - 9, sy0 - 13, 11, 6, [226, 178, 96]);
+    MM6.rct(g, sx0 - 2, horizon - 48, 5, 24, [154, 116, 52]);
+    MM6.rct(g, sx0 - 2, horizon - 48, 1, 24, [212, 168, 88]);
+    MM6.rct(g, sx0 - 2, horizon - 48, 28, 4, [154, 116, 52]);
+    MM6.flame(g, sx0, sy0 + 26, 14, 18, 3);
   } else {
     // General store: sacks, barrels, hanging herbs, a crowded shelf.
     paintShelf(g, 36, 96, w - 160, { th: 5 });

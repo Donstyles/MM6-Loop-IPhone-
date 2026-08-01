@@ -75,7 +75,7 @@ async function stats() {
       },
       tris: window.__session?.map?.dungeon?.triangles || 0,
       dims: window.__session?.map?.dungeon
-        ? [window.__session.map.dungeon.ambientDim, window.__session.map.dungeon.litDim]
+        ? [window.__session.map.dungeon.ambientDim, window.__session.map.dungeon.paletteGain]
         : null,
     };
   });
