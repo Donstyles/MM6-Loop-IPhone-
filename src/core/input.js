@@ -201,9 +201,12 @@ export class Input {
     if (this.down('turnRight')) turn += 1;
     if (this.down('turnLeft')) turn -= 1;
     if (this.stick.active) {
-      const sr = this.stickRect;
-      fwd += -this.stick.dy / sr.r;
-      str += this.stick.dx / sr.r;
+      // `_updateStick` already normalises the deflection to 0..1 against the
+      // ring radius. Dividing by the radius a second time here scaled a full
+      // tilt down to 1/46 of walk speed - about 8 units a second - so the
+      // on-screen stick moved the party at a crawl and read as decorative.
+      fwd += -this.stick.dy;
+      str += this.stick.dx;
     }
     return {
       forward: Math.max(-1, Math.min(1, fwd)),

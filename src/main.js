@@ -30,8 +30,27 @@ let hud = null;
 let state = 'loading';
 let boot = null;
 
+/**
+ * The box the game is drawn into.
+ *
+ * The window is the right answer for a full-page game and the wrong one the
+ * moment the page is embedded: inside an auto-sizing iframe `innerHeight` is
+ * whatever the host has resized the frame to so far, which on first paint is a
+ * couple of hundred pixels. Sizing to that gave a 344x108 sliver on a phone.
+ * Measure the stage element when it has a real size and fall back to the window
+ * when it does not, so the standalone page behaves exactly as before.
+ */
+function viewportSize() {
+  const el = document.getElementById('stage');
+  if (el) {
+    const r = el.getBoundingClientRect();
+    if (r.width >= 64 && r.height >= 64) return { cw: r.width, ch: r.height };
+  }
+  return { cw: window.innerWidth, ch: window.innerHeight };
+}
+
 function resize() {
-  const cw = window.innerWidth, ch = window.innerHeight;
+  const { cw, ch } = viewportSize();
   // Phones get the widened 3D window; a 4:3 display stays authentic.
   computeLayout(cw, ch, true);
   engine.layoutTo(layout.view, layout.screen);
@@ -47,6 +66,13 @@ function resize() {
 }
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', () => setTimeout(resize, 120));
+// An embedded stage can change size without the window doing anything - the
+// host frame growing to fit its content, a phone rotating inside it - and the
+// resize event never fires for that.
+if (typeof ResizeObserver === 'function') {
+  const stage = document.getElementById('stage');
+  if (stage) new ResizeObserver(() => resize()).observe(stage);
+}
 
 // --- frame loop ------------------------------------------------------------
 
@@ -327,6 +353,10 @@ window.__mm6 = {
   region: (id) => import('./bootstrap.js').then((m) => m.loadRegion(session, id, 12345)),
   dungeon: (spec) => import('./bootstrap.js').then((m) => m.loadDungeon(session, spec || { theme: 'cave' }, 999)),
   stats: () => ({ ...perf, screen: screens.top ? screens.top.id : null }),
+  /** The live layout, so a harness can map logical coords to client pixels. */
+  layout: () => JSON.parse(JSON.stringify(layout)),
+  /** Where the on-screen movement stick is, in logical coords. */
+  stick: () => ({ ...input.stickRect, dx: input.stick.dx, dy: input.stick.dy, active: input.stick.active }),
   /** Average brightness of the world window, for checking exposure. */
   probe() {
     const gl = engine.renderer.getContext();
