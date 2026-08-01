@@ -71,6 +71,21 @@ function rect(g, x, y, w, h, color) {
 function hline(g, x, y, w, color) { rect(g, x, y, w, 1, color); }
 function vline(g, x, y, h, color) { rect(g, x, y, 1, h, color); }
 
+// A 4x4 ordered dither. Partial coverage in an indexed frame is a stipple, not
+// an alpha: half a colour is half the pixels, laid on a fixed lattice.
+const BAY4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+function stipRect(g, x, y, w, h, color, density) {
+  if (density <= 0) return;
+  x |= 0; y |= 0; w |= 0; h |= 0;
+  g.fillStyle = typeof color === 'string' ? color : css(color);
+  for (let j = 0; j < h; j++) {
+    for (let i = 0; i < w; i++) {
+      if ((BAY4[(((y + j) & 3) << 2) | ((x + i) & 3)] + 0.5) / 16 >= density) continue;
+      g.fillRect(x + i, y + j, 1, 1);
+    }
+  }
+}
+
 // --- UI palette ------------------------------------------------------------
 // The chrome does NOT go through the world's 256-colour table. MM6's HUD ships
 // as separate PCX images with their own palettes, and ours has no neutral warm
@@ -412,19 +427,12 @@ export function bookPage(w, h, seed = 23, kind = 'spell') {
   w |= 0; h |= 0;
   // Wash the sheet toward the exact page stock.
   const stock = kind === 'book' ? PAGE_BOOK : PAGE_SPELL;
-  g.globalAlpha = 0.45;
-  rect(g, 0, 0, w, h, stock);
-  g.globalAlpha = 1;
+  stipRect(g, 0, 0, w, h, stock, 0.45);
   // Gutter shadow down the left edge, as if bound into the spine.
   const gut = Math.min(10, Math.max(2, w >> 3));
-  for (let x = 0; x < gut; x++) {
-    g.fillStyle = `rgba(58,38,18,${((1 - x / gut) * 0.32).toFixed(3)})`;
-    g.fillRect(x, 0, 1, h);
-  }
+  for (let x = 0; x < gut; x++) stipRect(g, x, 0, 1, h, hexC(0x3a2612), (1 - x / gut) * 0.32);
   // Ruled margin in faded ink.
-  g.globalAlpha = 0.55;
-  vline(g, 13, 4, h - 8, PARCH(0.05));
-  g.globalAlpha = 1;
+  stipRect(g, 13, 4, 1, h - 8, PARCH(0.05), 0.55);
   drawBevel(g, 0, 0, w, h, { depth: 1, raised: false, dark: PARCH(0.10), light: PARCH(1) });
   return quantise(canvas);
 }
@@ -846,11 +854,7 @@ export function drawHirelingSlot(ctx, x, y, w, h, empty = true) {
         // carved lips. The field itself stays panel stone, so an empty slot
         // reads as the column continuing rather than as a hole cut in it.
         const k = clamp(1 - row / (h * 0.42), 0, 1);
-        if (k > 0) {
-          g.globalAlpha = k * 0.40;
-          rect(g, l, row, r - l + 1, 1, STONE(0.06));
-          g.globalAlpha = 1;
-        }
+        if (k > 0) stipRect(g, l, row, r - l + 1, 1, STONE(0.06), k * 0.40);
         rect(g, l, row, 2, 1, STONE(0.06));
         rect(g, l + 2, row, 1, 1, STONE(0.20));
         rect(g, r - 1, row, 2, 1, STONE(0.66));
@@ -968,17 +972,109 @@ export function drawBookSpine(ctx, x, y, w, h, opts = {}) {
 // --- bottom bar: action plates ---------------------------------------------
 
 /**
+ * The emblems on the four bottom-bar keys, as 1-bit masks.
+ *
+ * MM6 does not put pictograms on these buttons - it puts *things*: the object
+ * the button hands you. So they are a hand holding a spell orb, a bedroll, an
+ * open book and a keyring, drawn at native plate resolution (no 16x16 grid
+ * blown up) and returned as a material index per pixel: 1 brass, 2 an incised
+ * line, 3 bone/parchment. The relief shading happens in `drawActionPlate`.
+ */
+const EMBLEM_W = 24;
+const EMBLEM_H = 20;
+
+function emblemMask(id) {
+  const W = EMBLEM_W, H = EMBLEM_H;
+  const m = new Uint8Array(W * H);
+  const put = (px, py, v) => {
+    px = Math.round(px); py = Math.round(py);
+    if (px >= 0 && py >= 0 && px < W && py < H) m[py * W + px] = v;
+  };
+  const box = (bx, by, bw, bh, v) => {
+    for (let j = 0; j < bh; j++) for (let i = 0; i < bw; i++) put(bx + i, by + j, v);
+  };
+  // Scanline disc / annulus: integer rows, hard silhouette, no arc().
+  const dsc = (cx, cy, r, v) => {
+    const R = Math.ceil(r);
+    for (let dy = -R; dy <= R; dy++) {
+      const k = Math.round(Math.sqrt(Math.max(0, r * r - dy * dy)));
+      for (let dx = -k; dx <= k; dx++) put(cx + dx, cy + dy, v);
+    }
+  };
+  const ann = (cx, cy, r, ri, v) => {
+    const R = Math.ceil(r);
+    for (let dy = -R; dy <= R; dy++) {
+      for (let dx = -R; dx <= R; dx++) {
+        const d = Math.sqrt(dx * dx + dy * dy);
+        if (d <= r && d >= ri) put(cx + dx, cy + dy, v);
+      }
+    }
+  };
+
+  switch (id) {
+    case 'castspell': {
+      // A hand cupped round a spell orb - the gesture the button performs.
+      dsc(12, 5, 4, 3);                                   // the orb, in bone
+      put(11, 3, 0); put(12, 3, 0);                        // catch-light bitten out
+      for (let k = 0; k < 4; k++) box(5 + k * 4, 9, 3, 4, 1);   // four fingers
+      box(3, 12, 3, 3, 1);                                 // thumb
+      box(4, 13, 15, 5, 1);                                // palm
+      box(5, 18, 13, 1, 1);                                // heel of the hand
+      box(7, 15, 9, 1, 2);                                 // the crease across it
+      break;
+    }
+    case 'rest': {
+      // A bedroll: a rolled mat, strapped twice, with the spiral end showing.
+      for (let j = 0; j < 11; j++) {
+        const inset = j === 0 || j === 10 ? 2 : (j === 1 || j === 9 ? 1 : 0);
+        box(3 + inset, 5 + j, 17 - inset, 1, 1);
+      }
+      ann(18, 10, 5, 0, 1);                                // the rolled end
+      ann(18, 10, 3, 1.6, 2);                              // its spiral
+      box(6, 5, 2, 11, 2); box(11, 5, 2, 11, 2);           // two straps
+      box(3, 17, 18, 2, 1);                                // the ground mat under it
+      break;
+    }
+    case 'quickref': {
+      // An open book, seen from above: two page blocks rising to the spine.
+      for (let i = 0; i < 9; i++) {
+        const lift = Math.round(i * 0.35);
+        box(2 + i, 5 + (2 - lift), 1, 12 + lift, 3);       // left leaf
+        box(21 - i, 5 + (2 - lift), 1, 12 + lift, 3);      // right leaf
+      }
+      box(11, 3, 2, 16, 2);                                // the spine
+      for (const ry of [8, 11, 14]) {                      // ruled lines
+        box(4, ry, 6, 1, 2); box(14, ry, 6, 1, 2);
+      }
+      box(2, 17, 9, 2, 1); box(13, 17, 9, 2, 1);           // the boards below
+      break;
+    }
+    default: {
+      // A key on its ring - what a steward hands you, not a cogwheel.
+      ann(4, 6, 4, 2, 1);                                  // the ring
+      ann(8, 12, 4, 2, 1);                                 // the bow of the key
+      box(11, 11, 10, 3, 1);                               // the shaft
+      box(16, 14, 2, 3, 1); box(19, 14, 2, 4, 1);          // two wards
+      box(12, 12, 8, 1, 2);                                // the groove down it
+      break;
+    }
+  }
+  return m;
+}
+
+/**
  * ib-m1d..ib-m4d - the four ~40 x 35 keys at (476/518/560/602, 450).
  *
- * These are carved stone plates with a painted icon sunk into them, not flat
- * squares with line art on top: a hard keyline, a 2 px raised arris lit from
- * the upper left, a recessed field with its own reversed bevel, and brass pegs
- * pinning the plate down at the corners.
+ * A carved stone plate with a brass plaque sunk into it and the emblem raised
+ * out of the brass in relief: lit along its top-left arris, shadowed along the
+ * bottom-right, with a hard cast shadow one pixel down and right. Nothing is
+ * pasted on top - the whole key, emblem included, is one painted bitmap baked
+ * once and blitted, because these are drawn every frame.
  */
 export function drawActionPlate(ctx, x, y, w, h, iconId, state = 'up') {
   x |= 0; y |= 0; w = Math.max(12, w | 0); h = Math.max(12, h | 0);
   const down = state === 'down';
-  const plate = cached(`plate:${w}:${h}:${down ? 1 : 0}`, () => {
+  const plate = cached(`plate:${w}:${h}:${iconId || ''}:${down ? 1 : 0}`, () => {
     const pix = new Pix(w, h);
     for (let py = 0; py < h; py++) {
       for (let px = 0; px < w; px++) {
@@ -995,8 +1091,55 @@ export function drawActionPlate(ctx, x, y, w, h, iconId, state = 'up') {
     const g = ctx2d(c);
     drawBevel(g, 0, 0, w, h, { depth: 1, raised: true, light: STONE(0.00), dark: STONE(0.00) });
     drawBevel(g, 1, 1, w - 2, h - 2, { depth: 2, raised: !down, light: STONE(0.94), dark: STONE(0.08) });
-    // Sunken field the icon sits in.
-    drawGroove(g, 4, 4, w - 8, h - 8, 2);
+
+    // The brass plaque, sunk into the stone: cast, hammered, faintly pitted.
+    const fx = 4, fy = 4, fw = w - 8, fh = h - 8;
+    for (let py = 0; py < fh; py++) {
+      for (let px = 0; px < fw; px++) {
+        const n = tileFbm2(px * 0.16, py * 0.19, 64, 2, 0.5, 71);
+        const pit = hash2(px, py, 313);
+        let t = 0.44 + (n - 0.5) * 0.30 + (pit - 0.5) * 0.10;
+        if (pit > 0.985) t -= 0.22;                       // casting pinholes
+        if (down) t -= 0.10;
+        rect(g, fx + px, fy + py, 1, 1, BRASS(clamp(t, 0.04, 1)));
+      }
+    }
+    // The cut the plaque sits in: shadow on the upper lip, light on the lower.
+    hline(g, fx, fy, fw, STONE(0.02)); vline(g, fx, fy, fh, STONE(0.02));
+    hline(g, fx, fy + fh - 1, fw, STONE(0.88)); vline(g, fx + fw - 1, fy, fh, STONE(0.88));
+    hline(g, fx + 1, fy + 1, fw - 2, BRASS(0.08)); vline(g, fx + 1, fy + 1, 1, BRASS(0.08));
+
+    // The emblem, in relief on the brass.
+    if (iconId) {
+      const m = emblemMask(iconId);
+      const ox = fx + ((fw - EMBLEM_W) >> 1);
+      const oy = fy + ((fh - EMBLEM_H) >> 1);
+      const at = (ex, ey) => (ex < 0 || ey < 0 || ex >= EMBLEM_W || ey >= EMBLEM_H
+        ? 0 : m[ey * EMBLEM_W + ex]);
+      // Cast shadow first, so the emblem stands off the plaque.
+      for (let ey = 0; ey < EMBLEM_H; ey++) {
+        for (let ex = 0; ex < EMBLEM_W; ex++) {
+          if (at(ex, ey) || !at(ex - 1, ey - 1)) continue;
+          rect(g, ox + ex, oy + ey, 1, 1, BRASS(0.06));
+        }
+      }
+      for (let ey = 0; ey < EMBLEM_H; ey++) {
+        for (let ex = 0; ex < EMBLEM_W; ex++) {
+          const v = at(ex, ey);
+          if (!v) continue;
+          const lit = !at(ex - 1, ey) || !at(ex, ey - 1);
+          const dark = !at(ex + 1, ey) || !at(ex, ey + 1);
+          const grain = (hash2(ex, ey, 907) - 0.5) * 0.08;
+          let t = v === 2 ? 0.14 : v === 3 ? 0.74 : 0.60;
+          if (lit && !dark) t += 0.30;
+          else if (dark && !lit) t -= 0.34;
+          if (down) t -= 0.08;
+          const base = v === 3 ? PARCH(clamp(t + grain, 0.05, 1)) : BRASS(clamp(t + grain, 0.03, 1));
+          rect(g, ox + ex, oy + ey, 1, 1, base);
+        }
+      }
+    }
+
     for (const [cx, cy] of [[3, 3], [w - 4, 3], [3, h - 4], [w - 4, h - 4]]) drawRivet(g, cx, cy);
     return quantise(c);
   });
@@ -1004,12 +1147,6 @@ export function drawActionPlate(ctx, x, y, w, h, iconId, state = 'up') {
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(plate, x, y);
   ctx.imageSmoothingEnabled = sm;
-
-  if (iconId) {
-    const isz = Math.min(w - 12, h - 12, 24);
-    const o = down ? 1 : 0;
-    drawIcon(ctx, iconId, x + ((w - isz) >> 1) + o, y + ((h - isz) >> 1) + o, isz);
-  }
   return plate;
 }
 

@@ -141,25 +141,65 @@ export function paintShopInterior(g, w, h, kind) {
     for (let i = 0; i < 9; i++) {
       const x = 52 + i * 38;
       const len = 46 + (i % 3) * 12;
-      g.fillStyle = rampCss('grey', 10);
-      g.fillRect(x, 128 - len, 3, len);
-      g.fillStyle = rampCss('grey', 13);
-      g.fillRect(x, 128 - len, 1, len);
-      g.fillStyle = rampCss('gold', 8);
-      g.fillRect(x - 4, 128 - len + 6, 11, 2);
+      const top = 128 - len;
+      // A hung blade: a shadow on the plaster behind it, a fullered steel face
+      // with a lit edge and a dark flat, a wrapped grip and a brass quillon.
+      // No keyline anywhere - MM6 art has no outlines at all.
+      MM6.rct(g, x + 4, top + 3, 3, len - 4, [46, 40, 32]);
+      const bw = 6;
+      for (let y = 0; y < len - 16; y++) {
+        const t = y / (len - 16);
+        const k = Math.max(1, Math.round((bw / 2) * (t < 0.12 ? t / 0.12 : 1 - t * 0.10)));
+        for (let dx = -k; dx <= k; dx++) {
+          const u = (dx + k) / (2 * k || 1);
+          // Fuller down the middle, bright bevel on the left, dark on the right.
+          const v = Math.abs(u - 0.5) < 0.18 ? 0.34 : 1 - Math.abs(u - 0.24) * 1.20;
+          MM6.rct(g, x + dx, top + y, 1, 1, MM6.mix([42, 44, 48], [216, 220, 226], MM6.band(v, 5)));
+        }
+      }
+      // Quillons and grip.
+      MM6.rct(g, x - 5, top + len - 16, 12, 3, [126, 96, 34]);
+      MM6.rct(g, x - 5, top + len - 16, 12, 1, [206, 168, 82]);
+      for (let y = 0; y < 10; y++) {
+        MM6.rct(g, x - 2, top + len - 13 + y, 4, 1, (y & 1) ? [62, 40, 22] : [96, 66, 36]);
+        MM6.rct(g, x - 2, top + len - 13 + y, 1, 1, [128, 94, 54]);
+      }
+      MM6.rct(g, x - 3, top + len - 3, 6, 3, [138, 106, 40]);
+      MM6.rct(g, x - 3, top + len - 3, 6, 1, [214, 176, 88]);
     }
-    // Forge glow on the right.
-    g.fillStyle = rampCss('stone', 4);
-    g.fillRect(w - 96, horizon - 74, 84, 74);
-    g.fillStyle = '#150800';
-    g.fillRect(w - 84, horizon - 54, 60, 40);
-    glow(g, w - 54, horizon - 34, 54, '#ff7010', 0.95);
-    // Anvil.
-    poly(g, [110, h - 30, 168, h - 30, 160, h - 42, 118, h - 42], rampCss('grey', 5));
-    poly(g, [128, h - 42, 150, h - 42, 150, h - 66, 172, h - 66, 172, h - 74, 118, h - 74, 118, h - 66, 128, h - 66],
-      rampCss('grey', 7));
-    g.fillStyle = rampCss('grey', 11);
-    g.fillRect(118, h - 74, 54, 2);
+    // Forge on the right: a stone hood, a black mouth, a coal bed and light on
+    // the masonry immediately around it.
+    for (let y = 0; y < 76; y++) {
+      const row = Math.floor(y / 13);
+      for (let x = 0; x < 90; x++) {
+        const bx = (x + (row & 1) * 15) % 30;
+        const joint = bx < 2 || (y % 13) < 2;
+        const blk = hash2(Math.floor((x + (row & 1) * 15) / 30), row, 39);
+        MM6.rct(g, w - 98 + x, horizon - 76 + y, 1, 1,
+          MM6.mix([28, 26, 22], [156, 150, 138], MM6.band(joint ? 0.16 : 0.40 + blk * 0.28, 6)));
+      }
+    }
+    g.fillStyle = '#100600';
+    g.fillRect(w - 86, horizon - 56, 62, 44);
+    MM6.rct(g, w - 86, horizon - 56, 62, 3, [6, 4, 2]);
+    // Coal bed: banded, hottest at the middle, and a couple of tongues over it.
+    for (let i = 0; i < 5; i++) {
+      const k = Math.max(4, 26 - i * 4);
+      MM6.rct(g, w - 55 - k, horizon - 15 - i, k * 2, 1,
+        [[92, 22, 8], [148, 40, 12], [206, 76, 20], [244, 132, 36], [255, 190, 92]][i]);
+    }
+    for (let i = 0; i < 5; i++) MM6.flame(g, w - 72 + i * 9, horizon - 18, 9, 13 + (i % 3) * 5, i * 2.3);
+    glow(g, w - 55, horizon - 26, 170, '#ff7010', 1.0);
+    // Anvil, on a stump, with the dark it sits in.
+    contactShadow(g, 145, h - 24, 40, 5);
+    poly(g, [116, h - 26, 172, h - 26, 164, h - 44, 122, h - 44], MM6.pc([54, 40, 22]));
+    poly(g, [122, h - 44, 164, h - 44, 158, h - 50, 128, h - 50], MM6.pc([74, 56, 32]));
+    // Horn, waist and face, each a flat with its own value.
+    poly(g, [130, h - 50, 156, h - 50, 152, h - 64, 134, h - 64], MM6.pc([56, 58, 62]));
+    poly(g, [116, h - 64, 172, h - 64, 176, h - 70, 112, h - 70], MM6.pc([88, 90, 96]));
+    poly(g, [112, h - 70, 176, h - 70, 176, h - 74, 112, h - 74], MM6.pc([126, 130, 138]));
+    MM6.rct(g, 112, h - 75, 64, 1, [186, 190, 198]);
+    poly(g, [176, h - 74, 190, h - 71, 190, h - 68, 176, h - 70], MM6.pc([104, 106, 112]));
   } else if (kind === 'armor') {
     // Mail hanging from pegs, a stand with a cuirass, shields on the wall.
     for (let i = 0; i < 5; i++) {
@@ -184,27 +224,61 @@ export function paintShopInterior(g, w, h, kind) {
     g.fillStyle = rampCss('grey', 11); g.fillRect(206, h - 96, 6, 76);
     g.fillStyle = rampCss('grey', 4); g.fillRect(200, h - 22, 60, 4);
   } else if (kind === 'magic') {
-    // Arched niches with orbs and a glowing brazier.
+    // Arched niches with orbs on plinths.
     for (let i = 0; i < 4; i++) {
-      const x = 44 + i * 96;
-      g.fillStyle = rampCss('stone', 2);
-      g.fillRect(x, 44, 58, 84);
-      g.beginPath(); g.arc(x + 29, 44, 29, Math.PI, Math.PI * 2); g.fill();
-      g.fillStyle = rampCss('stone', 6);
-      g.fillRect(x - 2, 126, 62, 4);
+      const x = 44 + i * 96, cxn = x + 29;
+      // The niche is a hole in the wall: a dark recess, a lit soffit where the
+      // arch turns over, and a shadowed jamb on the right.
+      MM6.rct(g, x, 44, 58, 84, MM6.pc([26, 24, 30]));
+      for (let dy = -29; dy <= 0; dy++) {
+        const k = Math.round(29 * Math.sqrt(Math.max(0, 1 - (dy * dy) / (29 * 29))));
+        if (k <= 0) continue;
+        MM6.rct(g, cxn - k, 44 + dy, k * 2, 1, MM6.pc([26, 24, 30]));
+        MM6.rct(g, cxn - k, 44 + dy, 2, 1, MM6.pc([64, 60, 70]));
+      }
+      MM6.rct(g, x, 44, 2, 84, [64, 60, 70]);
+      MM6.rct(g, x + 56, 44, 2, 84, [14, 13, 17]);
+      // Plinth.
+      MM6.rct(g, x - 2, 118, 62, 5, [92, 88, 82]);
+      MM6.rct(g, x - 2, 118, 62, 1, [148, 144, 134]);
+      MM6.rct(g, x - 2, 123, 62, 2, [30, 28, 26]);
+      // Orb: a lit sphere, banded, with a hard specular and a dark underside.
       const col = ['#c078e8', '#40d8d8', '#e1cd23', '#40f460'][i];
-      g.fillStyle = col;
-      g.beginPath(); g.arc(x + 29, 96, 13, 0, Math.PI * 2); g.fill();
-      glow(g, x + 29, 96, 40, col, 0.8);
+      const oc = MM6.hexRGB(col);
+      const orr = 13;
+      for (let dy = -orr; dy <= orr; dy++) {
+        const k = Math.round(orr * Math.sqrt(Math.max(0, 1 - (dy * dy) / (orr * orr))));
+        for (let dx = -k; dx <= k; dx++) {
+          const d = Math.sqrt((dx + 4) * (dx + 4) + (dy + 4) * (dy + 4)) / (orr * 1.6);
+          MM6.rct(g, cxn + dx, 104 + dy, 1, 1,
+            MM6.mix(MM6.mix([255, 255, 240], oc, MM6.band(clamp(d, 0, 1), 4)), [12, 10, 16],
+              MM6.band(clamp(d - 0.55, 0, 1) * 1.6, 4)));
+        }
+      }
+      glow(g, cxn, 104, 60, col, 0.75);
     }
-    // Runic circle on the floor.
-    g.save();
-    g.globalAlpha = 0.55;
-    g.strokeStyle = '#c078e8'; g.lineWidth = 2;
-    g.beginPath(); g.ellipse(w / 2, horizon + 66, 120, 34, 0, 0, Math.PI * 2); g.stroke();
-    g.beginPath(); g.ellipse(w / 2, horizon + 66, 92, 26, 0, 0, Math.PI * 2); g.stroke();
-    g.restore();
-    glow(g, w / 2, horizon + 66, 90, '#8040c0', 0.5);
+    // Runic circle inlaid in the floor: a band of painted stone, not a stroke.
+    const ccx = w / 2, ccy = horizon + 66;
+    for (const [RX, RY, lo, hi] of [[120, 34, [58, 34, 84], [172, 112, 214]],
+      [92, 26, [46, 28, 70], [138, 88, 176]]]) {
+      for (let dy = -RY; dy <= RY; dy++) {
+        const k = RX * Math.sqrt(Math.max(0, 1 - (dy * dy) / (RY * RY)));
+        const k0 = RX * Math.sqrt(Math.max(0, 1 - (dy * dy) / ((RY - 3) * (RY - 3))));
+        const outer = Math.round(k), inner = Math.round(Math.min(k - 2, k0));
+        if (outer <= 0) continue;
+        for (const sgn of [-1, 1]) {
+          const x0 = sgn < 0 ? ccx - outer : ccx + Math.max(0, inner);
+          const wd = Math.max(1, outer - Math.max(0, inner));
+          MM6.rct(g, Math.round(x0), Math.round(ccy + dy), wd, 1, MM6.mix(lo, hi, MM6.band((dy + RY) / (2 * RY), 4)));
+        }
+      }
+    }
+    // Glyphs set around the band.
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2;
+      MM6.rct(g, Math.round(ccx + Math.cos(a) * 106) - 2, Math.round(ccy + Math.sin(a) * 30) - 2, 4, 4,
+        [196, 140, 236]);
+    }
   } else if (kind === 'alchemy') {
     // Shelves crowded with bottles, plus a bubbling still.
     for (let r = 0; r < 3; r++) {
@@ -243,14 +317,38 @@ export function paintShopInterior(g, w, h, kind) {
     paintShelf(g, 36, 96, w - 160, { th: 5 });
     paintShelf(g, 36, 140, w - 160, { th: 5 });
     for (let i = 0; i < 16; i++) {
-      const x = 44 + i * ((w - 180) / 16);
+      const x = Math.round(44 + i * ((w - 180) / 16));
       const kind2 = i % 3;
-      g.fillStyle = rampCss(kind2 === 0 ? 'sand' : kind2 === 1 ? 'wood' : 'dirt', 7 + (i % 3));
-      if (kind2 === 0) g.fillRect(x, 78, 12, 18);
-      else if (kind2 === 1) { g.beginPath(); g.arc(x + 6, 88, 7, 0, Math.PI * 2); g.fill(); }
-      else g.fillRect(x, 82, 10, 14);
-      g.fillStyle = rampCss('sand', 10);
-      g.fillRect(x + 2, 122, 9, 18);
+      if (kind2 === 0) {
+        // A crock: a lit shoulder and a dark flank.
+        for (let dx = 0; dx < 12; dx++) {
+          const v = MM6.band(1 - Math.abs(dx / 11 - 0.28) * 1.35, 5);
+          MM6.rct(g, x + dx, 78, 1, 18, MM6.mix([54, 40, 24], [196, 164, 112], v));
+        }
+        MM6.rct(g, x - 1, 78, 14, 2, [150, 124, 84]);
+        MM6.rct(g, x - 1, 78, 14, 1, [216, 190, 140]);
+      } else if (kind2 === 1) {
+        // A round wheel of cheese, painted as a sphere on a shelf.
+        for (let dy = -7; dy <= 7; dy++) {
+          const k = Math.round(7 * Math.sqrt(Math.max(0, 1 - (dy * dy) / 49)));
+          for (let dx = -k; dx <= k; dx++) {
+            const d = Math.sqrt((dx + 2) * (dx + 2) + (dy + 2) * (dy + 2)) / 11;
+            MM6.rct(g, x + 6 + dx, 88 + dy, 1, 1,
+              MM6.mix([228, 202, 130], [76, 56, 28], MM6.band(clamp(d, 0, 1), 5)));
+          }
+        }
+      } else {
+        for (let dx = 0; dx < 10; dx++) {
+          const v = MM6.band(1 - Math.abs(dx / 9 - 0.30) * 1.30, 5);
+          MM6.rct(g, x + dx, 82, 1, 14, MM6.mix([44, 32, 18], [166, 128, 82], v));
+        }
+      }
+      // Sacks lined up on the lower shelf.
+      for (let dx = 0; dx < 9; dx++) {
+        const v = MM6.band(1 - Math.abs(dx / 8 - 0.30) * 1.28, 5);
+        MM6.rct(g, x + 2 + dx, 122, 1, 18, MM6.mix([62, 50, 30], [206, 182, 132], v));
+      }
+      MM6.rct(g, x + 3, 122, 6, 1, [230, 212, 168]);
     }
     for (let i = 0; i < 6; i++) {
       const x = 60 + i * 62;
@@ -305,12 +403,10 @@ export function paintShopInterior(g, w, h, kind) {
     skin: [206, 162, 124], hair: [72, 48, 26], robe: kind === 'magic' || kind === 'alchemy',
     hood: false,
   });
-  // Shadow the counter throws forward.
-  g.save();
-  g.globalAlpha = 0.35;
-  g.fillStyle = '#000000';
-  g.fillRect(0, cy - 10, w, 12);
-  g.restore();
+  // The dark the counter sits in: one hard line and a short Bayer skirt, which
+  // is the only partial coverage an indexed frame has.
+  MM6.rct(g, 0, cy - 2, w, 2, [16, 11, 6]);
+  for (let i = 0; i < 8; i++) MM6.stipple(g, 0, cy - 10 + i, w, 1, [16, 11, 6], 0.10 + i * 0.07);
   paintCounter(g, 0, cy, w, 32, { cloth: kind === 'magic' ? 'arcane' : null });
 
   // Goods on the counter, different per trade.

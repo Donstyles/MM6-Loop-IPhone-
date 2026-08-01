@@ -21,6 +21,11 @@
 
 import { ramp, rampCss, snap, BAYER8 } from '../../core/palette.js';
 import { hash2, fbm2, valueNoise2, clamp } from '../../core/rng.js';
+// The paperdoll's body is the interior figure painter, called at doll scale.
+// The import is circular - figures.js takes its primitives from this file - but
+// neither module touches the other while it is being evaluated, only inside
+// functions, which is exactly the case ES modules resolve for you.
+import { paintedFigure as paintedPerson } from '../../art/figures.js';
 
 // --- palette plumbing -------------------------------------------------------
 
@@ -998,107 +1003,788 @@ export function paintedFigure(ctx, cx, baseY, hgt, o = {}) {
   }
 }
 
-// --- the paperdoll body -----------------------------------------------------
+// --- the paperdoll ----------------------------------------------------------
+//
+// MM6's paperdoll is a painted body with the equipped items painted straight on
+// to it: a helm sitting on the skull, a cuirass following the chest, a shield
+// carried on the off arm, a blade hanging from the fist. There is no slot
+// chrome anywhere - no cells, no boxes, no borders, no captions - and an empty
+// slot simply shows the body.
+//
+// The body is not painted here. src/art/figures.js already models a person -
+// the five-band cylindrical ramp that makes cloth turn rather than darken, fold
+// creases with a lit lip, sloped shoulders, a pinched waist, tapered legs and a
+// face with a brow ridge and a nose that casts a shadow - so the doll *is* that
+// painter, called at doll scale, and this file only has to know where the
+// anatomy lands so the gear can be painted on to it.
 
 /**
- * The inventory paperdoll: a painted body, front on, arms out from the sides,
- * with anatomical anchors so equipment can be painted straight onto it. MM6
- * draws no slot chrome at all, so neither do we.
+ * Where the anatomy lands.
+ *
+ * These proportions mirror `paintedFigure` in src/art/figures.js exactly, for
+ * the standing pose, because the doll is that painter. If the figure painter's
+ * proportions move, these move with it.
  */
-export function paperdollAnchors(r) {
-  const cx = Math.round(r.x + r.w / 2);
-  const top = Math.round(r.y + 8);
-  const H = r.h - 20;
-  const headH = Math.round(H * 0.13);
-  const headW = Math.round(H * 0.098);
-  const shoulderY = top + headH + 3;
-  const torsoH = Math.round(H * 0.30);
-  const hipY = shoulderY + torsoH;
-  const bodyW = Math.round(H * 0.115);
-  const legH = Math.round(H * 0.42);
-  const footY = hipY + legH;
-  const armLen = Math.round(H * 0.34);
-  const aw = Math.max(3, Math.round(bodyW * 0.42));
-  const hands = {};
+function anatomy(cx, baseY, H, buildIdx) {
+  const bi = ((((buildIdx === undefined ? 2 : buildIdx) | 0) % 5) + 5) % 5;
+  const build = 0.88 + bi * 0.075;
+  const headH = Math.max(5, Math.round(H * 0.148));
+  const headW = Math.max(2, Math.round(H * 0.058));      // half-width at the brow
+  const top = baseY - H;
+  const neckY = top + headH;
+  const shoulderY = neckY + Math.max(2, Math.round(H * 0.036));
+  const hipY = baseY - Math.round(H * 0.47);
+  const bodyW = Math.max(2.4, H * 0.098 * build);        // half-width at the chest
+  const torsoH = Math.max(3, hipY - shoulderY);
+  const armLen = Math.round(H * 0.30);
+  const foreLen = Math.round(H * 0.145);
+  const aw = Math.max(1.3, bodyW * 0.40 * build);        // arm half-width
+  const armTop = shoulderY + Math.max(1, Math.round(torsoH * 0.10));
+  const stride = Math.max(1, Math.round(bodyW * 0.52));
+  const bootH = Math.max(2, Math.round(H * 0.075));
+  const legH = baseY - hipY;
+
+  const hands = {}, arms = {};
   for (const s of [-1, 1]) {
-    hands[s < 0 ? 'left' : 'right'] = {
-      x: cx + s * Math.round(bodyW * 1.06 + armLen * 0.16),
-      y: shoulderY + 3 + armLen,
+    const key = s < 0 ? 'left' : 'right';
+    const sx = cx + s * bodyW * 1.05;                    // shoulder
+    const ex = sx + s * bodyW * 0.10;                    // elbow
+    const ey = armTop + armLen;
+    arms[key] = { sx, sy: armTop, ex, ey, w: aw };
+    hands[key] = {
+      x: Math.round(sx + s * bodyW * 0.04), y: ey + foreLen,
+      w: Math.max(1, aw * 0.92), h: Math.max(2, Math.round(aw * 1.7)),
     };
   }
+
   return {
-    cx, top, H, headH, headW, shoulderY, torsoH, hipY, bodyW, legH, footY, armLen, aw,
-    head: { cx, cy: top + Math.round(headH * 0.5), w: headW * 2, h: headH },
-    torso: { cx, cy: shoulderY + Math.round(torsoH * 0.45), w: bodyW * 2, h: torsoH },
-    shoulders: { cx, y: shoulderY, w: bodyW * 2.2 },
-    neck: { cx, y: shoulderY - 2 },
-    waist: { cx, y: hipY - 2, w: bodyW * 2 },
+    cx, baseY, top, H, build, buildIdx: bi,
+    headW, headH, neckY, shoulderY, torsoH, hipY, bodyW, armLen, foreLen, aw,
+    armTop, stride, bootH, legH,
+    head: { cx, top, cy: top + Math.round(headH * 0.5), w: headW * 2, h: headH },
+    neck: { cx, y: neckY, w: Math.max(2, bodyW * 0.52) },
+    shoulders: { cx, y: shoulderY, w: bodyW * 2.1 },
+    torso: { cx, y: shoulderY, cy: shoulderY + Math.round(torsoH * 0.45), w: bodyW * 2, h: torsoH },
+    waist: { cx, y: hipY - Math.max(2, Math.round(H * 0.035)), w: bodyW * 2 },
     legs: { cx, y: hipY, h: legH, w: bodyW * 2 },
-    feet: { cx, y: footY - 3, w: bodyW * 2.2 },
-    hands,
+    feet: { cx, y: baseY, w: bodyW * 2.2 },
+    hands, arms,
+    /**
+     * The centre and half-width of one leg `t` of the way from hip to sole,
+     * again straight out of the figure painter: thigh full, knee in, calf out,
+     * ankle in, and the back leg set a little behind the front one.
+     */
+    leg(s, t) {
+      const back = s === 1;
+      const lw = bodyW * (back ? 0.40 : 0.44);
+      const taper = t < 0.42 ? 1 - t * 0.28 : t < 0.62 ? 0.88 : 0.92 - (t - 0.62) * 0.9;
+      return {
+        x: cx + s * stride + (back ? -s * bodyW * 0.10 : 0) + s * t * bodyW * 0.06,
+        w: Math.max(1.1, lw * taper), back,
+      };
+    },
   };
 }
 
+export function paperdollAnchors(r, buildIdx = 2) {
+  const cx = Math.round(r.x + r.w / 2);
+  // The doll does not fill the board: MM6 leaves air round it, and a shield on
+  // the off arm needs somewhere to hang.
+  return anatomy(cx, Math.round(r.y + r.h - 16), Math.max(48, Math.round(r.h - 42)), buildIdx);
+}
+
+/**
+ * The figure painter picks its pose and its build off one integer seed, so find
+ * the seed that asks it for the frontal stance at the build we want. POSES[0]
+ * is 'stand' and the build index is bits 4-6; both are cheap to search for and
+ * the answer is memoised.
+ */
+const _dollSeeds = new Map();
+function figureSeed(pose, buildIdx) {
+  const key = pose * 8 + buildIdx;
+  let s = _dollSeeds.get(key);
+  if (s !== undefined) return s;
+  for (s = 0; s < 8192; s++) if (s % 11 === pose && ((s >>> 4) % 5) === buildIdx) break;
+  _dollSeeds.set(key, s);
+  return s;
+}
+
+// --- painted gear -----------------------------------------------------------
+
+const HILIT = [255, 250, 236];       // the specular, not white
+const COOLD = [42, 48, 62];          // shadows go cool, never just dark
+
+/**
+ * One scanline of a *metal* form.
+ *
+ * The body's cloth ramp lives in figures.js and is reused wholesale through the
+ * figure painter; armour needs its own, because steel is not cloth. It carries
+ * a narrow specular band with a dark core beside it and a bright reflected rim
+ * off the far edge, and it has to be able to stop dead on a plate edge. Pass
+ * `spec: 0.2` and it turns back into leather or cloth. Banded, integer
+ * scanlines, run-length collapsed, palette on the way out - same rules as
+ * everything else in here.
+ */
+function plateRow(ctx, cx, y, hw, c, o = {}) {
+  const steps = o.steps || 6;
+  const lit = o.lit === undefined ? -0.44 : o.lit;
+  const spec = o.spec === undefined ? 1 : o.spec;
+  const k0 = o.lo === undefined ? 0.34 : o.lo;
+  const k1 = o.hi === undefined ? 1.30 : o.hi;
+  const x0 = Math.round(cx - hw), x1 = Math.round(cx + hw);
+  if (x1 < x0) return;
+  const wide = Math.max(0.6, hw);
+  let run = null;
+  for (let x = x0; x <= x1; x++) {
+    const s = (x - cx) / wide;
+    const d = s - lit;
+    let l = 1 - Math.abs(d) * (d < 0 ? 1.05 : 0.78);
+    if (Math.abs(d) < 0.13) l += 0.30 * spec;            // the specular band
+    if (s > 0.56) l -= 0.26;                             // terminator
+    if (s > 0.88) l += 0.12 + 0.14 * spec;               // reflected rim
+    if (s < -0.90) l -= 0.26;                            // outer arris
+    const q = band(clamp(l, 0, 1), steps);
+    const k = k0 + (k1 - k0) * q;
+    const col = k >= 1
+      ? mix(c, HILIT, (k - 1) * (0.35 + spec * 0.45))
+      : mix(mix(c, COOLD, (1 - k) * 0.26), [0, 0, 0], (1 - k) * 0.30);
+    const key = (k * 100) | 0;
+    if (run && run.key === key) { run.w++; continue; }
+    if (run) rct(ctx, run.x, y, run.w, 1, run.col);
+    run = { x, w: 1, key, col };
+  }
+  if (run) rct(ctx, run.x, y, run.w, 1, run.col);
+}
+
+/** A lens: fat in the middle, pointed at both ends. Axe heads and spear blades. */
+function lensHalf(w, t, sharp = 1.6) {
+  return Math.max(1, w * (1 - Math.pow(Math.abs(t * 2 - 1), sharp)));
+}
+
+const GEAR_MAT = {
+  helm: 'steel', armor: 'steel', gauntlets: 'steel', belt: 'leather',
+  boots: 'leather', cloak: 'cloth', amulet: 'gold', ring1: 'gold', ring2: 'gold',
+  mainhand: 'steel', offhand: 'wood', bow: 'wood',
+};
+
+/** MAT.cloth is a purple dye for potion glass; a cloak wants wool. */
+const CLOAK_WOOL = [98, 64, 58];
+
+function gearPaint(item, slot) {
+  const name = item.material || GEAR_MAT[slot] || 'steel';
+  const M2 = matOf(name);
+  const soft = name === 'leather' || name === 'cloth' || name === 'wood' || name === 'bone';
+  let base = M2.m;
+  if ((slot === 'cloak') && !item.material) base = CLOAK_WOOL;
+  return { base, spec: soft ? 0.22 : 1, mat: M2, name };
+}
+
+/**
+ * Paint one equipped item on to the body.
+ *
+ * `A` is the anatomy from `paperdollAnchors`. Nothing here draws a box, a
+ * border or a caption: every piece is modelled on to the limb it is worn on.
+ */
+export function paintWornGear(ctx, A, slot, item) {
+  const it = item || {};
+  const P = gearPaint(it, slot === 'cloakClasp' ? 'cloak' : slot);
+  const accent = it.tint ? hexRGB(it.tint) : null;
+  switch (slot) {
+    case 'helm': return paintHelm(ctx, A, it, P, accent);
+    case 'armor': return paintCuirass(ctx, A, it, P, accent);
+    case 'cloak': return paintCloak(ctx, A, it, P);
+    case 'cloakClasp': return paintCloakClasp(ctx, A, it, P, accent);
+    case 'belt': return paintBelt(ctx, A, it, P);
+    case 'boots': return paintBoots(ctx, A, it, P);
+    case 'gauntlets': return paintGauntlets(ctx, A, it, P);
+    case 'amulet': return paintAmulet(ctx, A, it, P, accent);
+    case 'ring1': return paintRing(ctx, A, 'left', P, accent);
+    case 'ring2': return paintRing(ctx, A, 'right', P, accent);
+    case 'offhand': return paintShield(ctx, A, it, P, accent);
+    case 'mainhand': return paintWeapon(ctx, A, it, P, accent);
+    case 'bow': return paintSlungBow(ctx, A, it, P);
+    default: return undefined;
+  }
+}
+
+/** A helm sitting on the skull, leaving the face open, as a paperdoll must. */
+function paintHelm(ctx, A, it, P, accent) {
+  const cx = A.head.cx;
+  const top = A.head.top, hw = A.headW, hh = A.headH;
+  const heavy = /great|full|plate|horn|barbut/i.test(it.name || '')
+    || (it.armor | 0) >= 8 || it.skill === 'plate';
+  const depth = Math.max(3, Math.round(hh * (heavy ? 0.60 : 0.50)));
+  for (let i = -2; i < depth; i++) {
+    const t = clamp((i + 2) / (depth + 2), 0, 1);
+    // Dome over the crown, then straight down past the temple.
+    const prof = t < 0.34 ? 0.52 + Math.sqrt(t / 0.34) * 0.56 : 1.08;
+    plateRow(ctx, cx, top + i, Math.max(1, Math.round(hw * prof) + 1), P.base,
+      { steps: 6, spec: P.spec, lit: -0.42 });
+  }
+  // The brow rim: a proud band with a hard shadow under it.
+  const rimY = top + depth;
+  const kw = Math.round(hw * 1.08) + 2;
+  plateRow(ctx, cx, rimY, kw, mix(P.base, HILIT, 0.16), { steps: 4, spec: P.spec, lo: 0.62, hi: 1.44 });
+  rct(ctx, cx - kw, rimY + 1, kw * 2, 1, shade(P.base, 0.40));
+  // Nasal bar down the face.
+  const nH = Math.max(3, Math.round(hh * 0.30));
+  rct(ctx, cx - 2, rimY + 2, 4, nH, shade(P.base, 0.80));
+  rct(ctx, cx - 2, rimY + 2, 1, nH, mix(P.base, HILIT, 0.34));
+  rct(ctx, cx + 1, rimY + 2, 1, nH, shade(P.base, 0.44));
+  rct(ctx, cx - 2, rimY + 2 + nH, 4, 1, shade(P.base, 0.34));
+  if (heavy) {
+    // Cheek plates, hinged either side of the face, ending above the jaw.
+    const cd = Math.round(hh * 0.42);
+    for (const s of [-1, 1]) {
+      const w = Math.max(1, hw * 0.30);
+      for (let i = 0; i < cd; i++) {
+        plateRow(ctx, cx + s * hw * 0.80, rimY + 2 + i, w * (1 - (i / cd) * 0.35), P.base,
+          { steps: 5, spec: P.spec, lit: s < 0 ? -0.5 : 0.1 });
+      }
+    }
+  }
+  // Rivets on the rim, and a crest if the piece carries a colour.
+  for (const s of [-1, 1]) {
+    rct(ctx, Math.round(cx + s * hw * 0.72) - 1, rimY - 3, 2, 2, mix(P.base, HILIT, 0.55));
+    rct(ctx, Math.round(cx + s * hw * 0.72) - 1, rimY - 1, 2, 1, shade(P.base, 0.42));
+  }
+  if (accent) {
+    for (let i = 0; i < Math.round(hh * 0.5); i++) {
+      const k = Math.max(1, Math.round(2 - i * 0.06));
+      rct(ctx, cx - k, top - 3 - i, k * 2, 1, i < 2 ? mix(accent, HILIT, 0.4) : accent);
+      rct(ctx, cx + k - 1, top - 3 - i, 1, 1, shade(accent, 0.55));
+    }
+  }
+}
+
+/** A cuirass following the chest: plate, mail or hardened leather. */
+function paintCuirass(ctx, A, it, P, accent) {
+  const { cx, bodyW, shoulderY, torsoH, hipY, H, armTop } = A;
+  const kind = it.skill || (P.name === 'leather' ? 'leather' : 'plate');
+  const chain = kind === 'chain';
+  const leather = kind === 'leather';
+  const sp = chain ? 0.5 : leather ? 0.22 : P.spec;
+  const topY = shoulderY - 1;
+  const botY = hipY - Math.round(H * 0.02);
+  const halfAt = (y) => {
+    const t = clamp((y - shoulderY) / torsoH, 0, 1);
+    const slope = t < 0.11 ? 0.46 + (t / 0.11) * 0.60 : 1.06;
+    return bodyW * (slope - Math.sin(t * Math.PI) * 0.20) * 1.10 + 1.5;
+  };
+
+  for (let y = topY; y <= botY; y++) {
+    plateRow(ctx, cx, y, halfAt(y), P.base, { steps: chain ? 5 : 7, spec: sp, lit: -0.44 });
+  }
+
+  if (chain) {
+    // Mail: a ring grid, offset row to row. Two pixels a ring is what an 8-bit
+    // painter had to work with at this size.
+    for (let y = topY + 2; y <= botY; y += 2) {
+      const k = Math.round(halfAt(y)) - 1;
+      for (let x = -k + (((y >> 1) & 1) ? 0 : 1); x < k; x += 2) {
+        rct(ctx, cx + x, y, 1, 1, shade(P.base, 0.52));
+        rct(ctx, cx + x + 1, y - 1, 1, 1, mix(P.base, HILIT, 0.22));
+      }
+    }
+  } else if (leather) {
+    // Boiled leather: stitched panels with a lit lip above every seam.
+    for (let y = topY + 8; y < botY; y += 9) {
+      const k = Math.round(halfAt(y)) - 2;
+      for (let x = -k; x < k; x += 3) rct(ctx, cx + x, y, 2, 1, shade(P.base, 0.58));
+      rct(ctx, cx - k, y - 1, k * 2, 1, mix(P.base, HILIT, 0.14));
+    }
+  } else {
+    // Plate: a centre ridge with the light running down one side of it, and a
+    // pair of pectoral swells caught by the key.
+    for (let y = topY + Math.round(torsoH * 0.14); y < botY - 3; y++) {
+      rct(ctx, cx - 1, y, 1, 1, mix(P.base, HILIT, 0.30));
+      rct(ctx, cx, y, 1, 1, shade(P.base, 0.62));
+    }
+    const pn = Math.max(2, Math.round(torsoH * 0.16));
+    for (const s of [-1, 1]) {
+      const py0 = topY + Math.round(torsoH * 0.20);
+      for (let i = 0; i < pn; i++) {
+        const t = i / pn;
+        rct(ctx, Math.round(cx + s * bodyW * (0.30 + t * 0.42)), py0 + i, 2, 1,
+          s < 0 ? mix(P.base, HILIT, 0.24) : shade(P.base, 0.70));
+      }
+    }
+  }
+
+  // Gorget: a raised collar round the base of the neck.
+  plateRow(ctx, cx, topY - 2, bodyW * 0.58, mix(P.base, HILIT, 0.10), { steps: 4, spec: sp, lo: 0.6, hi: 1.4 });
+  plateRow(ctx, cx, topY - 1, bodyW * 0.60, P.base, { steps: 4, spec: sp, lo: 0.44, hi: 1.10 });
+
+  // Pauldrons: a cap over the point of each shoulder, sitting on the upper arm
+  // and leaving the chest to the cuirass.
+  for (const s of [-1, 1]) {
+    const px0 = cx + s * bodyW * 1.14;
+    const rx = Math.max(2, bodyW * 0.46), ry = Math.max(2, bodyW * 0.44);
+    for (let j = -Math.round(ry); j <= Math.round(ry * 0.55); j++) {
+      const k = rx * Math.sqrt(Math.max(0, 1 - (j / ry) * (j / ry)));
+      if (k < 1) continue;
+      plateRow(ctx, px0, armTop + j, k, P.base,
+        { steps: 6, spec: sp, lit: s < 0 ? -0.46 : -0.14 });
+    }
+    // The lame edge at the bottom of the cap: a lit lip over a hard shadow.
+    const ey = Math.round(armTop + ry * 0.55);
+    const kk = Math.max(1, Math.round(rx * 0.84));
+    rct(ctx, Math.round(px0 - kk), ey, kk * 2, 1, shade(P.base, 0.42));
+    rct(ctx, Math.round(px0 - kk), ey - 1, kk * 2, 1, mix(P.base, HILIT, 0.30));
+    rct(ctx, Math.round(px0 - kk * 0.3), Math.round(armTop - ry * 0.5), 2, 2, mix(P.base, HILIT, 0.5));
+  }
+
+  // Fauld: three lames hanging over the hips, each with a lit lip and a hard
+  // shadow under its skirt.
+  if (!chain) {
+    const lam = Math.max(2, Math.round(H * 0.022));
+    for (let k = 0; k < 3; k++) {
+      const y0 = botY + 1 + k * lam;
+      const w = bodyW * (1.02 + k * 0.05);
+      for (let i = 0; i < lam; i++) {
+        plateRow(ctx, cx, y0 + i, w, P.base,
+          { steps: 5, spec: sp, lo: i === 0 ? 0.58 : 0.34, hi: i === 0 ? 1.42 : 1.18 });
+      }
+      rct(ctx, Math.round(cx - w), y0 + lam - 1, Math.round(w * 2), 1, shade(P.base, 0.40));
+    }
+  }
+  if (accent) {
+    // A device on the chest, in the piece's own colour.
+    const dy = topY + Math.round(torsoH * 0.34);
+    for (let i = 0; i < 9; i++) {
+      const k = Math.max(1, 5 - Math.abs(i - 4));
+      rct(ctx, cx - k, dy + i, k * 2, 1, i < 3 ? mix(accent, HILIT, 0.25) : accent);
+      rct(ctx, cx + k - 1, dy + i, 1, 1, shade(accent, 0.5));
+    }
+  }
+}
+
+/** The drape, painted behind the body. */
+function paintCloak(ctx, A, it, P) {
+  const { cx, bodyW, shoulderY, hipY, legH } = A;
+  const topY = shoulderY - 4;
+  const botY = hipY + Math.round(legH * 0.52);
+  const span = Math.max(1, botY - topY);
+  for (let y = topY; y <= botY; y++) {
+    const t = (y - topY) / span;
+    const w = bodyW * (1.12 + t * 1.00);
+    plateRow(ctx, cx, y, w, P.base, { steps: 6, spec: 0.16, lit: -0.42, lo: 0.32, hi: 1.16 });
+    // Standing folds: a crease with a lit lip beside it, spreading with the hem.
+    for (const f of [-0.66, -0.24, 0.22, 0.64]) {
+      const fx = Math.round(cx + f * w);
+      rct(ctx, fx, y, 1, 1, shade(P.base, 0.60));
+      rct(ctx, fx - 1, y, 1, 1, mix(P.base, HILIT, 0.13));
+    }
+  }
+  // Hem: a hard shadow under a ragged edge, so the cloth ends rather than stops.
+  const wEnd = bodyW * 2.12;
+  for (let i = 0; i < 3; i++) {
+    const w = wEnd - i;
+    rct(ctx, Math.round(cx - w), botY + i, Math.round(w * 2), 1,
+      i === 0 ? shade(P.base, 0.52) : shade(P.base, 0.34));
+  }
+  for (let x = -Math.round(wEnd); x < wEnd; x += 7) {
+    rct(ctx, cx + x, botY + 3, 4, 1, shade(P.base, 0.30));
+  }
+}
+
+/** The collar and clasp, painted in front of the body at the throat. */
+function paintCloakClasp(ctx, A, it, P, accent) {
+  const { cx, bodyW, shoulderY } = A;
+  for (let i = 0; i < 4; i++) {
+    plateRow(ctx, cx, shoulderY - 5 + i, bodyW * (0.66 + i * 0.14), P.base,
+      { steps: 4, spec: 0.2, lo: i < 2 ? 0.6 : 0.4, hi: i < 2 ? 1.34 : 1.06 });
+  }
+  const g = accent || matOf('gold').m;
+  disc(ctx, cx, shoulderY - 2, 3, pc(shade(g, 0.55)));
+  disc(ctx, cx - 1, shoulderY - 3, 2, pc(g));
+  rct(ctx, cx - 2, shoulderY - 4, 1, 1, pc(mix(g, HILIT, 0.6)));
+}
+
+function paintBelt(ctx, A, it, P) {
+  const { cx, bodyW, hipY, H } = A;
+  const bh = Math.max(3, Math.round(H * 0.030));
+  const y0 = hipY - bh - 1;
+  for (let i = 0; i < bh; i++) {
+    plateRow(ctx, cx, y0 + i, bodyW * 1.04, P.base,
+      { steps: 4, spec: P.spec, lo: i === 0 ? 0.72 : 0.40, hi: i === 0 ? 1.40 : 1.06 });
+  }
+  rct(ctx, Math.round(cx - bodyW * 1.04), y0 + bh, Math.round(bodyW * 2.08), 1, shade(P.base, 0.36));
+  const g = matOf('gold');
+  const bw = Math.max(4, Math.round(bodyW * 0.42));
+  const bx = Math.round(cx - bodyW * 0.16);
+  rct(ctx, bx, y0 - 1, bw, bh + 2, g.m);
+  rct(ctx, bx, y0 - 1, bw, 1, g.l);
+  rct(ctx, bx, y0 + bh, bw, 1, g.d);
+  rct(ctx, bx + 2, y0 + 1, Math.max(1, bw - 4), bh - 1, shade(P.base, 0.5));
+  rct(ctx, bx + Math.round(bw * 0.5), y0, 1, bh, g.l);
+  for (const s of [-1, 1]) {
+    rct(ctx, Math.round(cx + s * bodyW * 0.72), y0 + 1, 2, 2, mix(P.base, HILIT, 0.5));
+  }
+}
+
+function paintBoots(ctx, A, it, P) {
+  const { baseY, bootH, legH, hipY } = A;
+  const tall = /high|riding|thigh|plate/i.test(it.name || '') || (it.armor | 0) >= 6;
+  const t0 = 1 - (tall ? 0.62 : 0.44);
+  for (const s of [-1, 1]) {
+    const cuffY = hipY + Math.round(legH * t0);
+    for (let y = cuffY; y < baseY - bootH; y++) {
+      const t = (y - hipY) / legH;
+      const L = A.leg(s, t);
+      const c = L.back ? shade(P.base, 0.84) : P.base;
+      plateRow(ctx, L.x, y, L.w * 1.16 + 1, c, { steps: 5, spec: P.spec, lit: s < 0 ? -0.44 : -0.16 });
+      // The cuff turns over at the top of the shaft.
+      if (y < cuffY + 3) {
+        plateRow(ctx, L.x, y, L.w * 1.34 + 1, c,
+          { steps: 4, spec: P.spec, lo: 0.62, hi: 1.40 });
+      }
+    }
+    // The foot comes toward you, so it widens and takes a hard shadow.
+    const L = A.leg(s, 1);
+    const c = L.back ? shade(P.base, 0.84) : P.base;
+    for (let i = 0; i < bootH; i++) {
+      const t = i / Math.max(1, bootH - 1);
+      plateRow(ctx, L.x + s * (t > 0.62 ? 0.6 : 0), baseY - bootH + i,
+        L.w * (t > 0.62 ? 1.42 : 1.18) + 1, c, { steps: 5, spec: P.spec, lit: s < 0 ? -0.44 : -0.16 });
+    }
+    rct(ctx, Math.round(L.x - L.w * 1.42), baseY - bootH, Math.round(L.w * 2.84), 1,
+      mix(P.base, HILIT, 0.26));
+    rct(ctx, Math.round(L.x - L.w * 1.42), baseY - 1, Math.round(L.w * 2.84), 1, shade(P.base, 0.34));
+  }
+}
+
+function paintGauntlets(ctx, A, it, P) {
+  for (const s of [-1, 1]) {
+    const h = A.hands[s < 0 ? 'left' : 'right'];
+    const lit = s < 0 ? -0.44 : -0.14;
+    // Cuff, flared over the wrist.
+    for (let i = 0; i < 6; i++) {
+      plateRow(ctx, h.x, h.y - 6 + i, h.w * (1.34 - i * 0.05), P.base,
+        { steps: 5, spec: P.spec, lit, lo: i === 0 ? 0.6 : 0.36, hi: i === 0 ? 1.4 : 1.2 });
+    }
+    for (let i = 0; i < h.h; i++) {
+      plateRow(ctx, h.x, h.y + i, h.w * (i / h.h < 0.55 ? 1.12 : 0.90), P.base,
+        { steps: 5, spec: P.spec, lit });
+    }
+    // Knuckle studs and a finger lame.
+    for (let k = -1; k <= 1; k++) {
+      rct(ctx, Math.round(h.x + k * h.w * 0.58) - 1, h.y + 1, 2, 2, mix(P.base, HILIT, 0.5));
+      rct(ctx, Math.round(h.x + k * h.w * 0.58) - 1, h.y + 3, 2, 1, shade(P.base, 0.44));
+    }
+    rct(ctx, Math.round(h.x - h.w), h.y + Math.round(h.h * 0.62), Math.round(h.w * 2), 1,
+      shade(P.base, 0.50));
+  }
+}
+
+function paintAmulet(ctx, A, it, P, accent) {
+  const { cx, bodyW, shoulderY, torsoH } = A;
+  const g = P.mat;
+  const y0 = shoulderY + 1;
+  const y1 = shoulderY + Math.round(torsoH * 0.26);
+  // The chain: two runs of links, drawn as hard 1px steps, never a curve.
+  for (const s of [-1, 1]) {
+    const n = Math.max(3, y1 - y0);
+    for (let i = 0; i <= n; i++) {
+      const t = i / n;
+      rct(ctx, Math.round(cx + s * bodyW * 0.44 * (1 - t * t)), y0 + i, 1, 1, (i & 1) ? g.l : g.m);
+    }
+  }
+  const st = accent || [178, 40, 44];
+  disc(ctx, cx, y1 + 4, 5, pc(g.d));
+  disc(ctx, cx, y1 + 4, 4, pc(g.m));
+  rct(ctx, cx - 3, y1 + 1, 5, 1, pc(g.l));
+  disc(ctx, cx, y1 + 4, 2, pc(st));
+  rct(ctx, cx - 1, y1 + 3, 1, 1, pc(mix(st, HILIT, 0.6)));
+}
+
+function paintRing(ctx, A, side, P, accent) {
+  const h = A.hands[side];
+  const g = P.mat;
+  const x = Math.round(h.x + (side === 'left' ? -h.w * 0.66 : h.w * 0.40));
+  const y = h.y + Math.round(h.h * 0.46);
+  rct(ctx, x, y, 3, 3, g.m);
+  rct(ctx, x, y, 3, 1, g.l);
+  rct(ctx, x, y + 2, 3, 1, g.d);
+  rct(ctx, x + 1, y - 1, 2, 2, pc(accent || [80, 150, 220]));
+  rct(ctx, x + 1, y - 1, 1, 1, [255, 255, 255]);
+}
+
+/** A shield carried on the off arm, in front of it, casting on to the body. */
+function paintShield(ctx, A, it, P, accent) {
+  const arm = A.arms.left;
+  const rnd = /round|buckler|targe/i.test(it.name || '');
+  const W = Math.max(6, Math.round(A.bodyW * (rnd ? 0.68 : 0.78)));
+  const Hs = Math.max(10, Math.round(A.torsoH * (rnd ? 0.62 : 0.80)));
+  const sx = Math.round(arm.ex - W * 0.42);
+  const sy = Math.round(arm.ey - Hs * 0.46);
+  const face = it.material ? P.base : matOf('wood').m;
+  const rim = matOf(!it.material || it.material === 'wood' ? 'iron' : it.material);
+
+  const halfAt = (t) => (rnd
+    ? Math.max(1, Math.round(W * Math.sqrt(Math.max(0, 1 - Math.pow(t * 2 - 1, 2)))))
+    : t < 0.42 ? W : Math.max(1, Math.round(W * (1 - Math.pow((t - 0.42) / 0.58, 1.9)))));
+
+  // What sells "in front of the arm": the shadow the shield throws on to the
+  // body, following its own edge rather than sitting in a box.
+  for (let i = 0; i < Hs; i++) {
+    const k = halfAt(i / (Hs - 1));
+    if (k < 1) break;
+    stipple(ctx, sx + k, sy + i + 2, 4, 1, [10, 8, 6], 0.46);
+  }
+  for (let i = 0; i < Hs; i++) {
+    const t = i / (Hs - 1);
+    const k = halfAt(t);
+    if (k < 1) break;
+    const y = sy + i;
+    plateRow(ctx, sx, y, k, face, { steps: 6, spec: P.spec, lit: -0.46 });
+    // Iron rim, all the way round the edge.
+    rct(ctx, sx - k, y, 2, 1, mix(rim.m, HILIT, 0.34));
+    rct(ctx, sx + k - 2, y, 2, 1, shade(rim.m, 0.55));
+    if (!rnd && i < 2) rct(ctx, sx - k, y, k * 2, 1, i === 0 ? mix(rim.m, HILIT, 0.30) : rim.m);
+  }
+  // Boss: a raised dome with a lit crown and a hard shadow under it.
+  const by = sy + Math.round(Hs * 0.34);
+  const br = Math.max(2, Math.round(W * 0.30));
+  disc(ctx, sx, by, br, pc(shade(rim.m, 0.55)));
+  disc(ctx, sx, by - 1, br - 1, pc(rim.m));
+  disc(ctx, sx - Math.round(br * 0.32), by - Math.round(br * 0.42), Math.max(1, br >> 1),
+    pc(mix(rim.m, HILIT, 0.42)));
+  rct(ctx, sx - br, by + br - 1, br * 2, 1, pc(shade(rim.m, 0.34)));
+  // A heraldic bend in the piece's own colour.
+  if (accent) {
+    for (let i = 0; i < Hs; i++) {
+      const t = i / (Hs - 1);
+      const k = halfAt(t);
+      if (k < 3) break;
+      const x = Math.round(sx - k + (k * 2 - 5) * t);
+      rct(ctx, x, sy + i, 5, 1, i < 2 ? mix(accent, HILIT, 0.3) : accent);
+      rct(ctx, x + 4, sy + i, 1, 1, shade(accent, 0.55));
+    }
+  }
+}
+
+/** The weapon, hanging from the fist: pommel above it, guard and blade below. */
+function paintWeapon(ctx, A, it, P, accent) {
+  const h = A.hands.right;
+  const { bodyW, H, baseY, shoulderY } = A;
+  const kind = it.icon === 'blade' ? 'sword' : (it.icon || it.type || 'sword');
+  const wood = matOf('wood');
+  const steel = P.mat;
+
+  if (kind === 'staff' || kind === 'spear') {
+    const topY = shoulderY - Math.round(H * 0.10);
+    const botY = Math.min(baseY + 4, h.y + Math.round(H * 0.30));
+    for (let y = topY; y < botY; y++) plateRow(ctx, h.x, y, 2.4, wood.m, { steps: 4, spec: 0.25, lit: -0.5 });
+    for (const yy of [h.y - 4, h.y + h.h + 2]) {
+      for (let i = 0; i < 3; i++) plateRow(ctx, h.x, yy + i, 3.2, matOf('leather').m, { steps: 3, spec: 0.2 });
+    }
+    if (kind === 'spear') {
+      const bl = Math.round(H * 0.09);
+      for (let i = 0; i < bl; i++) {
+        plateRow(ctx, h.x, topY - bl + i, lensHalf(3.4, i / bl, 1.3), steel.m,
+          { steps: 5, spec: 1, lit: -0.5 });
+      }
+      for (let i = 0; i < 3; i++) plateRow(ctx, h.x, topY + i, 3, steel.m, { steps: 3, spec: 1, lo: 0.6, hi: 1.4 });
+    } else {
+      const g = accent || [110, 180, 220];
+      disc(ctx, h.x, topY - 4, 4, pc(shade(g, 0.5)));
+      disc(ctx, h.x, topY - 5, 3, pc(g));
+      rct(ctx, h.x - 2, topY - 6, 1, 1, [255, 255, 255]);
+    }
+    return;
+  }
+
+  // Pommel, and the sliver of wrapped grip above the fist.
+  const pw = Math.max(2, h.w * 0.62);
+  for (let i = 0; i < 4; i++) {
+    plateRow(ctx, h.x, h.y - 7 + i, pw * (i === 0 || i === 3 ? 0.7 : 1), steel.m,
+      { steps: 4, spec: P.spec, lo: i < 2 ? 0.6 : 0.34, hi: i < 2 ? 1.4 : 1.1 });
+  }
+  for (let i = 0; i < 3; i++) plateRow(ctx, h.x, h.y - 3 + i, pw * 0.55, matOf('leather').m, { steps: 3, spec: 0.2 });
+
+  const gy = h.y + h.h;
+  if (kind === 'mace' || kind === 'club') {
+    const hl = Math.max(4, Math.round(H * 0.075));
+    const top = gy + Math.round(H * 0.10);
+    for (let y = gy; y < top; y++) plateRow(ctx, h.x, y, 2.2, steel.m, { steps: 4, spec: P.spec, lit: -0.5 });
+    for (let i = 0; i < hl; i++) {
+      const k = Math.max(2, bodyW * 0.30 * (0.55 + Math.sin((i / (hl - 1)) * Math.PI) * 0.55));
+      plateRow(ctx, h.x, top + i, k, steel.m, { steps: 6, spec: P.spec, lit: -0.44 });
+    }
+    // Flanges: hard ribs down the head, lit on one side, dark on the other.
+    for (const f of [-0.62, 0, 0.62]) {
+      for (let i = 2; i < hl - 2; i++) {
+        const k = bodyW * 0.30 * (0.55 + Math.sin((i / (hl - 1)) * Math.PI) * 0.55);
+        const x = Math.round(h.x + f * k);
+        rct(ctx, x, top + i, 1, 1, mix(steel.m, HILIT, 0.45));
+        rct(ctx, x + 1, top + i, 1, 1, shade(steel.m, 0.5));
+      }
+    }
+    plateRow(ctx, h.x, top + hl, 2.6, steel.m, { steps: 3, spec: P.spec, lo: 0.5, hi: 1.3 });
+    return;
+  }
+
+  if (kind === 'axe') {
+    const shaft = Math.min(Math.round(H * 0.26), baseY - gy - 2);
+    for (let y = gy; y < gy + shaft; y++) plateRow(ctx, h.x, y, 2.4, wood.m, { steps: 4, spec: 0.25, lit: -0.5 });
+    const hd = Math.round(H * 0.10);
+    const hx = h.x + bodyW * 0.34;
+    const y0 = gy + shaft - hd - 2;
+    for (let i = 0; i < hd; i++) {
+      const k = lensHalf(bodyW * 0.30, i / hd, 1.5);
+      plateRow(ctx, hx, y0 + i, k, steel.m, { steps: 6, spec: P.spec, lit: -0.2 });
+      // The cutting edge is the outer side, and the brightest thing on it.
+      rct(ctx, Math.round(hx + k) - 1, y0 + i, 2, 1, mix(steel.m, HILIT, 0.6));
+    }
+    // The eye, where the head is wedged on to the haft.
+    for (let i = -2; i < hd + 2; i++) {
+      if (y0 + i < gy) continue;
+      plateRow(ctx, h.x, y0 + i, 3.4, steel.m, { steps: 4, spec: P.spec, lit: -0.5 });
+    }
+    return;
+  }
+
+  // Blade family: crossguard, then a tapered blade with a fuller.
+  const gw = Math.max(3, Math.round(bodyW * (kind === 'dagger' ? 0.26 : 0.46)));
+  for (let i = 0; i < 3; i++) {
+    plateRow(ctx, h.x, gy + i, gw, steel.m,
+      { steps: 4, spec: P.spec, lo: i === 0 ? 0.62 : 0.36, hi: i === 0 ? 1.42 : 1.10 });
+  }
+  rct(ctx, h.x - gw, gy + 3, gw * 2, 1, shade(steel.m, 0.36));
+  for (const s of [-1, 1]) {
+    rct(ctx, Math.round(h.x + s * gw) - (s < 0 ? 0 : 1), gy - 1, 1, 2, mix(steel.m, HILIT, 0.4));
+  }
+  const bw = Math.max(2, bodyW * (kind === 'dagger' ? 0.13 : 0.19));
+  const len = Math.min(Math.round(H * (kind === 'dagger' ? 0.10 : 0.24)), baseY - gy - 2);
+  for (let i = 0; i < len; i++) {
+    const t = i / len;
+    const k = Math.max(1, bw * (t < 0.82 ? 1 - t * 0.10 : (1 - t) / 0.18));
+    const y = gy + 4 + i;
+    plateRow(ctx, h.x, y, k, steel.m, { steps: 5, spec: P.spec, lit: -0.55 });
+    if (k > 2.5 && t < 0.80) rct(ctx, h.x, y, 1, 1, shade(steel.m, 0.62));   // fuller
+    if (accent && (i % 6) === 2 && t < 0.7) rct(ctx, h.x - 1, y, 1, 1, pc(accent));
+  }
+}
+
+/** A bow slung at the side, drawn behind the body. */
+function paintSlungBow(ctx, A, it, P) {
+  const { cx, bodyW, shoulderY, hipY } = A;
+  const bx = Math.round(cx + bodyW * 2.05);
+  const y0 = shoulderY - Math.round(A.H * 0.05);
+  const y1 = hipY + Math.round(A.legH * 0.30);
+  const span = Math.max(4, y1 - y0);
+  const R = Math.max(3, bodyW * 0.34);
+  const wood = P.name === 'wood' ? matOf('wood') : P.mat;
+  for (let i = 0; i <= span; i++) {
+    const t = i / span;
+    // Belly toward the body, tips flicking back: a recurve, not an arc.
+    let d = R * (1 - 4 * (t - 0.5) * (t - 0.5));
+    if (t < 0.10) d -= R * 0.5 * (1 - t / 0.10);
+    if (t > 0.90) d -= R * 0.5 * (1 - (1 - t) / 0.10);
+    plateRow(ctx, bx - d, y0 + i, 2.2, wood.m, { steps: 4, spec: 0.25, lit: -0.5 });
+  }
+  for (let i = 2; i < span - 1; i++) rct(ctx, bx, y0 + i, 1, 1, [214, 204, 176]);
+  for (let i = -4; i <= 4; i++) {
+    plateRow(ctx, bx - R, y0 + Math.round(span / 2) + i, 2.8, matOf('leather').m, { steps: 3, spec: 0.2 });
+  }
+}
+
+// --- the body and the board -------------------------------------------------
+
+/**
+ * The doll's body. Straight through to the figure painter in src/art/figures.js
+ * at doll scale, in the frontal stance, with this character's build, skin, hair
+ * and clothes.
+ */
 export function paperdollBody(ctx, r, o = {}) {
-  const skin = o.skin || SKIN.mid;
-  const tunic = o.tunic || [92, 74, 52];
-  const trews = o.trews || [70, 56, 38];
-  const A = paperdollAnchors(r);
-  const { cx, top, H, headH, headW, shoulderY, torsoH, hipY, bodyW, legH, footY } = A;
-
-  // Legs.
-  for (const s of [-1, 1]) {
-    const lx = cx + s * Math.round(bodyW * 0.48);
-    for (let i = 0; i < legH; i++) {
-      const t = i / legH;
-      const k = Math.max(2, Math.round(bodyW * (0.46 - t * 0.14)));
-      const c = t < 0.62 ? trews : skin;
-      rct(ctx, lx - k, hipY + i, k * 2, 1, s < 0 ? c : shade(c, 0.88));
-      rct(ctx, lx - k, hipY + i, Math.max(1, k), 1, mix(c, [255, 240, 210], 0.16));
-      rct(ctx, lx + k - 1, hipY + i, 1, 1, shade(c, 0.62));
-      if (t < 0.62 && (i % 11) === 5) rct(ctx, lx - k + 1, hipY + i, k, 1, shade(c, 0.80));
-    }
-    // Bare foot.
-    rct(ctx, lx - Math.round(bodyW * 0.4), footY - 2, Math.round(bodyW * 0.9), 3, shade(skin, 0.82));
-  }
-
-  // Torso: chest wide, waist in, with a lit left flank.
-  for (let i = 0; i < torsoH; i++) {
-    const t = i / torsoH;
-    const k = Math.round(bodyW * (1.02 - Math.sin(t * Math.PI) * 0.16));
-    const y = shoulderY + i;
-    rct(ctx, cx - k, y, k * 2, 1, tunic);
-    rct(ctx, cx - k, y, Math.max(1, Math.round(k * 0.62)), 1, mix(tunic, [255, 240, 208], 0.20));
-    rct(ctx, cx + Math.round(k * 0.38), y, k - Math.round(k * 0.38), 1, shade(tunic, 0.66));
-    if ((i % 8) === 3) rct(ctx, cx - k + 2, y, Math.round(k * 1.2), 1, shade(tunic, 0.82));
-  }
-  rct(ctx, cx - bodyW, shoulderY, Math.round(bodyW * 1.1), 1, mix(tunic, [255, 248, 224], 0.4));
-  // Waist cord.
-  rct(ctx, cx - bodyW, hipY - 4, bodyW * 2, 4, [62, 44, 26]);
-  rct(ctx, cx - bodyW, hipY - 4, bodyW * 2, 1, [116, 90, 54]);
-
-  // Arms held slightly away from the body so a weapon can sit in the hand.
-  const armLen = A.armLen;
-  for (const s of [-1, 1]) {
-    const aw = A.aw;
-    for (let i = 0; i < armLen; i++) {
-      const t = i / armLen;
-      const ax = cx + s * Math.round(bodyW * 1.06 + i * 0.16);
-      const c = t < 0.5 ? tunic : skin;
-      rct(ctx, ax - (aw >> 1), shoulderY + 2 + i, aw, 1, s < 0 ? c : shade(c, 0.84));
-      rct(ctx, ax - (aw >> 1), shoulderY + 2 + i, 1, 1, mix(c, [255, 244, 214], 0.28));
-      rct(ctx, ax + (aw >> 1) - 1, shoulderY + 2 + i, 1, 1, shade(c, 0.6));
-    }
-    const hx = A.hands[s < 0 ? 'left' : 'right'].x;
-    rct(ctx, hx - (aw >> 1) - 1, shoulderY + 2 + armLen, aw + 2, aw + 1, skin);
-    rct(ctx, hx - (aw >> 1) - 1, shoulderY + 2 + armLen, aw + 2, 1, mix(skin, [255, 244, 214], 0.3));
-  }
-
-  // Neck, head.
-  rct(ctx, cx - 3, shoulderY - 4, 7, 5, shade(skin, 0.72));
-  paintedHead(ctx, cx, top, headW, headH, { skin, hair: o.hair, eye: o.eye });
-
+  const A = paperdollAnchors(r, o.buildIdx);
+  paintedPerson(ctx, A.cx, A.baseY, A.H, {
+    cloth: o.tunic || [92, 74, 52],
+    sleeve: o.sleeve || o.tunic || [92, 74, 52],
+    legsColor: o.trews || [70, 56, 38],
+    beltColor: o.beltColor || [58, 40, 24],
+    boots: o.boots || [58, 42, 28],
+    skin: o.skin, hair: o.hair, eye: o.eye,
+    beard: o.beard || false, longHair: o.longHair || false,
+    seed: figureSeed(0, A.buildIdx),
+  });
   return A;
+}
+
+const _dollArt = new Map();
+
+/**
+ * The whole doll - body plus everything worn on it - painted once into its own
+ * canvas and blitted from then on. It is on screen every frame of the sheet and
+ * of the inventory, and none of the painting above is cheap enough for that.
+ * `key` must cover the appearance and the loadout.
+ */
+export function paperdollArt(w, h, look = {}, eq = {}, key = '') {
+  const k = `${w}x${h}|${key}`;
+  const hit = _dollArt.get(k);
+  if (hit) return hit;
+  const c = mkCanvas(w, h);
+  const g = c.getContext('2d');
+  g.imageSmoothingEnabled = false;
+  const r = { x: 0, y: 0, w, h };
+  const A = paperdollAnchors(r, look.buildIdx);
+  // Behind the body: the cloak hangs off the shoulders, the bow is slung.
+  if (eq.cloak) paintWornGear(g, A, 'cloak', eq.cloak);
+  if (eq.bow) paintWornGear(g, A, 'bow', eq.bow);
+  paperdollBody(g, r, look);
+  for (const slot of ['boots', 'belt', 'armor', 'gauntlets', 'amulet', 'ring1',
+    'ring2', 'helm', 'offhand', 'mainhand']) {
+    if (eq[slot]) paintWornGear(g, A, slot, eq[slot]);
+  }
+  if (eq.cloak) paintWornGear(g, A, 'cloakClasp', eq.cloak);
+  // A dozen is four characters with three loadouts between them; past that the
+  // oldest goes.
+  if (_dollArt.size > 12) _dollArt.delete(_dollArt.keys().next().value);
+  _dollArt.set(k, c);
+  return c;
+}
+
+/**
+ * The board the doll stands against: the panel's own tooled hide, sunk into the
+ * chrome with a carved lip and a tooled rule, lit from the top left in banded
+ * steps. Not a flat field with a patch on it.
+ */
+export function paperdollField(ctx, x, y, w, h) {
+  const c = cached(`pdf:${w}x${h}`, () => {
+    // Tooled hide with the key light baked into its value rather than stippled
+    // over the top of it: grain, a long fibre, and a fall from the panel's top
+    // left to its bottom right in ten bands.
+    // Kept dark and a little cool: the doll has to stand off it.
+    const lo = [30, 24, 16], hi = [88, 72, 48];
+    const cv = paintCanvas(w, h, (ax, ay) => {
+      const coarse = fbm2(ax * 0.042, ay * 0.052, 3, 4, 0.5, 43) * 0.5 + 0.5;
+      const fibre = valueNoise2(ax * 0.9, ay * 6.0, 61) - 0.5;
+      const pore = (hash2(ax, ay, 17) - 0.5) * 0.05;
+      const key = 1 - (ax / w) * 0.26 - (ay / h) * 0.44;
+      let t = 0.50 + (coarse - 0.5) * 0.16 + fibre * 0.05 + pore + (key - 0.62) * 0.62;
+      // Worn edge, on a noisy boundary rather than a clean inset.
+      const wob = valueNoise2(ax * 0.08, ay * 0.08, 9) * 4;
+      const e = Math.min(Math.min(ax, w - 1 - ax) + wob, Math.min(ay, h - 1 - ay) + wob);
+      if (e < 11) t -= (1 - clamp(e / 11, 0, 1)) * 0.30;
+      return mix(lo, hi, band(clamp(t, 0, 1), 10));
+    }, 2);
+    const g = cv.getContext('2d');
+    // Carved recess: hard shadow on the top and left, burnished lip opposite.
+    rct(g, 0, 0, w, 1, [22, 16, 10]); rct(g, 0, 0, 1, h, [22, 16, 10]);
+    rct(g, 1, 1, w - 2, 1, [44, 34, 22]); rct(g, 1, 1, 1, h - 2, [44, 34, 22]);
+    rct(g, 0, h - 1, w, 1, [132, 110, 74]); rct(g, w - 1, 0, 1, h, [132, 110, 74]);
+    rct(g, 1, h - 2, w - 2, 1, [96, 78, 52]); rct(g, w - 2, 1, 1, h - 3, [96, 78, 52]);
+    // A tooled rule just inside it, the way a bound panel is finished.
+    for (const [rx, ry, rw, rh] of [[5, 5, w - 10, 1], [5, h - 6, w - 10, 1],
+      [5, 5, 1, h - 11], [w - 6, 5, 1, h - 11]]) {
+      rct(g, rx, ry, rw, rh, [30, 22, 14]);
+    }
+    rct(g, 6, 6, w - 12, 1, [116, 96, 64]);
+    rct(g, 6, h - 5, w - 12, 1, [116, 96, 64]);
+    return cv;
+  });
+  blit(ctx, c, x, y);
 }
 
 // --- painted spell sigils ---------------------------------------------------

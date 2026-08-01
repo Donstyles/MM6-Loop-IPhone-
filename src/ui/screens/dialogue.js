@@ -18,7 +18,7 @@
 
 import { layout } from '../../core/layout.js';
 import { Rand, clamp, smoothstep, fbm2, valueNoise2, hash2 } from '../../core/rng.js';
-import { rampCss, ramp, snap, quantizeImageData } from '../../core/palette.js';
+import { rampCss, ramp, snap, quantizeImageData, BAYER8 } from '../../core/palette.js';
 import * as F from '../../art/font.js';
 import { PORTRAIT_W, PORTRAIT_H } from '../../art/portraits.js';
 import { Screen, A, PANEL, portraitOf, wrapLines, drawWrapped } from './screenbase.js';
@@ -352,24 +352,105 @@ export function baked(key, w, h, painter) {
   return c;
 }
 
+/** BAYER8 ships flat and normalised to [-0.5, +0.5]. */
+function bay8(x, y) { return BAYER8[((y & 7) << 3) | (x & 7)]; }
+
 /**
- * A pool of light: lamps, fires, stained glass, magic.
+ * Light, painted into the surface it falls on.
  *
- * Three hard rings and a Bayer-stippled skirt. A smooth radial alpha falloff
- * cannot exist in a 256-colour indexed frame - an 8-bit painter fakes light
- * with a few banded steps and a dither at the edge, so that is what this is.
+ * MM6 does not draw halos. A lamp is a small bright painted object and the
+ * light it throws is *in the wall texture* around it: two or three hard value
+ * steps with a dithered outer boundary, over the top of the masonry or the
+ * boards, which stay legible underneath. A smooth radial falloff cannot occur
+ * in a 256-colour indexed frame at all, and a big additive disc reads as a
+ * modern bloom no matter how it is quantised afterwards.
+ *
+ * So this reads the plate back, lifts it in three quantised steps toward the
+ * lamp's colour, and stipples the outermost step. `r` is taken as the caller's
+ * idea of "reach" and pulled in hard: the lit patch has to read as a fixture,
+ * not as weather.
  */
-export function glow(ctx, cx, cy, r, css, alpha = 0.5) {
-  MM6.lightPool(ctx, cx, cy, r, css, alpha);
+export function glow(ctx, cx, cy, r, css, strength = 0.5) {
+  const c = MM6.hexRGB(css);
+  // Deliberately small. A hand painter lit the stone immediately around a
+  // sconce and left the rest of the wall alone; anything wider than about a
+  // fixture and a half is a bloom whatever it is made of.
+  const R = Math.max(4, Math.round(Math.min(r * 0.30, 26)));
+  const X = Math.round(cx), Y = Math.round(cy);
+  const cw = ctx.canvas.width, ch = ctx.canvas.height;
+  const x0 = Math.max(0, X - R), y0 = Math.max(0, Y - R);
+  const x1 = Math.min(cw, X + R + 1), y1 = Math.min(ch, Y + R + 1);
+  if (x1 <= x0 || y1 <= y0) return;
+  let img;
+  try { img = ctx.getImageData(x0, y0, x1 - x0, y1 - y0); } catch { return; }
+  const d = img.data, iw = img.width;
+  // Three steps, hard-edged, modest: light that burns its own middle out to
+  // white is exactly the bloom this replaces.
+  const STEP = [0.36, 0.19, 0.09];
+  const s = clamp(strength, 0, 1.2);
+  // A machined circle is as much of a tell as a gradient, so the reach wobbles
+  // by sector: the boundary is painted, not swept with a compass.
+  const SEC = 20;
+  const reach = new Float32Array(SEC);
+  for (let i = 0; i < SEC; i++) reach[i] = R * (0.80 + hash2(i, R, 13) * 0.32);
+  const INV = SEC / (Math.PI * 2);
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const dx = x - X, dy = y - Y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist >= R * 1.12) continue;
+      let si = ((Math.atan2(dy, dx) + Math.PI) * INV) | 0;
+      if (si >= SEC) si = SEC - 1;
+      const t = dist / reach[si];
+      if (t >= 1) continue;
+      const b = t < 0.38 ? 0 : t < 0.72 ? 1 : 2;
+      // The boundary of a painted light is a 1-bit dither, never a fade.
+      if (b === 2 && bay8(x, y) >= 0) continue;
+      const i = ((y - y0) * iw + (x - x0)) * 4;
+      if (d[i + 3] === 0) continue;
+      const k = STEP[b] * s;
+      d[i] = Math.min(255, d[i] + c[0] * k);
+      d[i + 1] = Math.min(255, d[i + 1] + c[1] * k);
+      d[i + 2] = Math.min(255, d[i + 2] + c[2] * k);
+    }
+  }
+  ctx.putImageData(img, x0, y0);
 }
 
+/**
+ * Scanline polygon fill.
+ *
+ * Canvas antialiases every diagonal it fills, and a feathered edge is the one
+ * thing an indexed frame genuinely cannot hold - quantising it afterwards just
+ * turns the feather into a fringe of wrong colours. Every span here is an
+ * integer fillRect, so the silhouette is cut, not faded.
+ */
 export function poly(ctx, pts, css) {
-  ctx.fillStyle = css;
-  ctx.beginPath();
-  ctx.moveTo(pts[0] | 0, pts[1] | 0);
-  for (let i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i] | 0, pts[i + 1] | 0);
-  ctx.closePath();
-  ctx.fill();
+  const n = pts.length >> 1;
+  if (n < 3) return;
+  let minY = Infinity, maxY = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const y = pts[i * 2 + 1];
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  ctx.fillStyle = typeof css === 'string' ? css : MM6.pc(css);
+  const xs = [];
+  for (let y = Math.round(minY); y <= Math.round(maxY); y++) {
+    xs.length = 0;
+    const sy = y + 0.5;
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+      const ay = pts[j * 2 + 1], by = pts[i * 2 + 1];
+      if ((ay <= sy) === (by <= sy)) continue;
+      xs.push(pts[j * 2] + ((sy - ay) / (by - ay)) * (pts[i * 2] - pts[j * 2]));
+    }
+    if (xs.length < 2) continue;
+    xs.sort((a, b) => a - b);
+    for (let k = 0; k + 1 < xs.length; k += 2) {
+      const sx = Math.round(xs[k]), ex = Math.round(xs[k + 1]);
+      if (ex > sx) ctx.fillRect(sx, y, ex - sx, 1);
+    }
+  }
 }
 
 /**
@@ -377,31 +458,88 @@ export function poly(ctx, pts, css) {
  *
  * The old signature took a body colour and a rim colour because everyone in
  * town was a flat black cloak-and-circle silhouette. Both are still accepted -
- * the body colour seeds the cloth and the rim seeds the key light - but what
- * comes out is a painted figure, not a blob.
+ * and ignored - but what comes out is a painted figure, not a blob.
+ *
+ * The seed is the whole trick. figures.js picks pose, build, wardrobe and face
+ * off it, so two people who happen to stand at the same table need genuinely
+ * different seeds or they come out as the same mannequin twice. Callers that
+ * care pass `seed` explicitly; the fallback hashes the position hard enough
+ * that a 12-pixel step changes the person.
  */
 export function figure(ctx, x, y, h, bodyCss, rimCss, o = {}) {
-  // Spread the seed hard, or two people standing at the same table come out in
-  // the same coat.
-  const seed = Math.round(hash2(Math.round(x), Math.round(y * 3 + h), 91) * 4096);
-  const CLOTHS = [
-    [96, 62, 40], [72, 66, 92], [104, 88, 52], [66, 84, 66],
-    [110, 70, 66], [58, 62, 74], [92, 78, 96], [84, 96, 78],
-  ];
-  const SKINS = [[214, 172, 136], [192, 146, 106], [162, 116, 80], [126, 88, 60]];
-  const HAIRS = [[58, 36, 20], [110, 76, 36], [32, 26, 24], [152, 132, 96]];
-  // figures.js, not the paintbox's own: it models cloth as a turning tube with
-  // creases, gives the face a brow and nose that cast, and picks one of eleven
-  // seeded poses, so a tavern is a room of people rather than a row of the same
-  // mannequin. Same options object either way.
+  const seed = o.seed !== undefined
+    ? (o.seed >>> 0)
+    : (Math.round(hash2(Math.round(x) * 31 + 7, Math.round(y) * 17 + Math.round(h) * 53, 91)
+      * 4294967295) >>> 0);
+  const look = Figures.figureLook(seed);
   Figures.paintedFigure(ctx, x, y, h, {
-    cloth: o.cloth || CLOTHS[seed % CLOTHS.length],
-    skin: o.skin || SKINS[(seed >> 2) % SKINS.length],
-    hair: o.hair || HAIRS[(seed >> 3) % HAIRS.length],
-    hood: o.hood !== undefined ? o.hood : (seed % 5 === 0),
-    robe: o.robe !== undefined ? o.robe : (seed % 3 === 0),
+    seed,
+    cloth: o.cloth || look.cloth,
+    skin: o.skin || look.skin,
+    hair: o.hair || look.hair,
+    hood: o.hood !== undefined ? o.hood : look.hood,
+    robe: o.robe !== undefined ? o.robe : look.robe,
+    beard: o.beard !== undefined ? o.beard : look.beard,
+    longHair: o.longHair !== undefined ? o.longHair : look.longHair,
     hat: o.hat,
+    hatColor: o.hatColor,
+    apron: o.apron,
+    boots: o.boots,
+    eye: o.eye,
+    shadow: o.shadow,
   });
+}
+
+/**
+ * A fire.
+ *
+ * MM6 draws fire as an overlapping cluster of small particle tongues tinted
+ * around #FF3C1E with 1-bit alpha and no falloff - never as a row of separate
+ * saw-teeth. Three things make the difference: an ember bar at the base that is
+ * brighter than anything above it, tongues laid out on a bell so the middle of
+ * the fire is the tallest part, and enough of them that they overlap instead of
+ * standing side by side.
+ */
+export function paintFire(g, cx, baseY, w, h, seed = 3) {
+  const n = Math.max(5, Math.round(w / 6));
+  // Ember bed: a hot bar, banded, brightest at the top where the flame leaves.
+  const EMBER = [[104, 26, 10], [158, 44, 14], [214, 84, 22], [255, 156, 52]];
+  for (let i = 0; i < EMBER.length; i++) {
+    const k = Math.max(1, Math.round(w * (0.50 - i * 0.055)));
+    MM6.rct(g, Math.round(cx - k), Math.round(baseY) - i, k * 2, 1, EMBER[i]);
+  }
+  const tongues = [];
+  for (let i = 0; i < n; i++) {
+    const t = n === 1 ? 0.5 : i / (n - 1);
+    const off = (t - 0.5) * w * 0.90;
+    const bell = 1 - Math.abs(t - 0.5) * 1.30;
+    const jitter = hash2(i * 13, seed | 0, 7);
+    tongues.push([
+      cx + off,
+      Math.round(baseY - 1 - Math.abs(off) * 0.08),
+      Math.max(5, w * 0.30 * (0.72 + bell * 0.45 + jitter * 0.20)),
+      Math.max(6, h * (0.34 + bell * 0.70 + jitter * 0.18)),
+    ]);
+  }
+  // Short outer tongues sit behind the tall middle ones.
+  tongues.sort((a, b) => a[3] - b[3]);
+  for (let i = 0; i < tongues.length; i++) {
+    const t = tongues[i];
+    MM6.flame(g, t[0], t[1], t[2], t[3], i * 1.9 + (seed | 0));
+  }
+}
+
+/** A contact shadow: the dark the object sits in, stippled, never a soft blob. */
+export function contactShadow(g, cx, y, halfW, halfH = 3) {
+  const HW = Math.max(1, Math.round(halfW));
+  const HH = Math.max(1, Math.round(halfH));
+  for (let dy = -HH; dy <= HH; dy++) {
+    const k = Math.round(HW * Math.sqrt(Math.max(0, 1 - (dy * dy) / (HH * HH))));
+    if (k <= 0) continue;
+    const core = Math.round(k * 0.62);
+    MM6.rct(g, Math.round(cx) - core, Math.round(y) + dy, core * 2, 1, [16, 11, 6]);
+    MM6.stipple(g, Math.round(cx) - k, Math.round(y) + dy, k * 2, 1, [16, 11, 6], 0.55);
+  }
 }
 
 /** Back wall: coursed stone or plaster, darkening into the corners. */
@@ -445,54 +583,169 @@ export function paintFloor(g, x, y, w, h, o = {}) {
   }, seed);
 }
 
-/** A shelf plank with the shadow it throws on the wall behind. */
+/**
+ * A shelf plank: a carved edge, not a rule.
+ *
+ * A period-2 dotted line reads as `border-style: dotted` and is the loudest
+ * CSS tell in the set. A plank in a painted interior is a lit arris along the
+ * top nose, the board face below it, a dark undercut, and then the shadow the
+ * nose throws on the wall - which falls off in one hard line and one short
+ * Bayer skirt, because that is the only partial coverage 8 bits has.
+ */
 export function paintShelf(g, x, y, w, o = {}) {
-  const th = o.th || 4;
-  g.fillStyle = rampCss('wood', 7); g.fillRect(x, y, w, th);
-  g.fillStyle = rampCss('wood', 10); g.fillRect(x, y, w, 1);
-  g.fillStyle = rampCss('wood', 2); g.fillRect(x, y + th, w, 1);
-  g.save();
-  g.globalAlpha = 0.32; g.fillStyle = '#000000';
-  g.fillRect(x, y + th + 1, w, o.shadow || 6);
-  g.restore();
+  const th = Math.max(3, o.th || 4);
+  const X = Math.round(x), Y = Math.round(y), W = Math.round(w);
+  MM6.rct(g, X, Y, W, th, ramp('wood', 6));
+  MM6.rct(g, X, Y, W, 1, ramp('wood', 11));            // lit arris
+  MM6.rct(g, X, Y + 1, W, 1, ramp('wood', 8));
+  MM6.rct(g, X, Y + th - 1, W, 1, ramp('wood', 2));    // undercut
+  // Grain along the board, so the plank is not one flat bar.
+  for (let i = 0; i < W; i += 7) {
+    const n = hash2(i, Y, 17);
+    MM6.rct(g, X + i, Y + 1 + ((n * 2) | 0), Math.max(2, 3 + ((n * 5) | 0)), 1, ramp('wood', n > 0.5 ? 7 : 5));
+  }
+  MM6.rct(g, X, Y + th, W, 1, ramp('wood', 0));        // cast shadow, hard line
+  const sh = Math.max(1, o.shadow === undefined ? 4 : o.shadow);
+  for (let i = 0; i < sh; i++) {
+    MM6.stipple(g, X, Y + th + 1 + i, W, 1, [14, 10, 6], 0.60 - (i / sh) * 0.52);
+  }
+  // Brackets under the board, so it is fixed to something.
+  if (o.brackets !== false) {
+    for (let i = 12; i < W - 8; i += 64) {
+      MM6.rct(g, X + i, Y + th, 3, 5, ramp('wood', 3));
+      MM6.rct(g, X + i, Y + th, 1, 5, ramp('wood', 6));
+    }
+  }
 }
 
 /** Heavy counter across the foreground. */
 export function paintCounter(g, x, y, w, h, o = {}) {
-  g.fillStyle = rampCss('wood', 5); g.fillRect(x, y, w, h);
-  g.fillStyle = rampCss('wood', 9); g.fillRect(x, y, w, 3);
-  g.fillStyle = rampCss('wood', 12); g.fillRect(x, y, w, 1);
-  for (let i = x + 8; i < x + w; i += 27) {
-    g.fillStyle = rampCss('wood', 3); g.fillRect(i, y + 4, 1, h - 4);
+  const X = Math.round(x), Y = Math.round(y), W = Math.round(w), H = Math.round(h);
+  MM6.rct(g, X, Y, W, H, ramp('wood', 5));
+  // The top surface catches the room light; the front falls away below it.
+  MM6.rct(g, X, Y, W, 3, ramp('wood', 9));
+  MM6.rct(g, X, Y, W, 1, ramp('wood', 12));            // arris
+  MM6.rct(g, X, Y + 3, W, 1, ramp('wood', 3));         // shadow under the nose
+  for (let i = X + 8; i < X + W; i += 27) {
+    MM6.rct(g, i, Y + 4, 1, H - 4, ramp('wood', 3));
+    MM6.rct(g, i + 1, Y + 4, 1, H - 4, ramp('wood', 7));
   }
-  g.fillStyle = rampCss('wood', 2); g.fillRect(x, y + h - 2, w, 2);
-  if (o.cloth) { g.fillStyle = rampCss(o.cloth, 6); g.fillRect(x + 10, y + 3, w - 20, 5); }
+  // Plank grain on the front face.
+  for (let i = 0; i < W; i += 5) {
+    const n = hash2(i, Y + 3, 41);
+    if (n > 0.62) MM6.rct(g, X + i, Y + 6 + ((n * (H - 9)) | 0), 4, 1, ramp('wood', 4));
+  }
+  MM6.rct(g, X, Y + H - 2, W, 2, ramp('wood', 1));
+  if (o.cloth) {
+    MM6.rct(g, X + 10, Y + 3, W - 20, 5, ramp(o.cloth, 6));
+    MM6.rct(g, X + 10, Y + 3, W - 20, 1, ramp(o.cloth, 9));
+  }
 }
 
-/** Barrel, crate, sack - the clutter every MM6 interior has in its corners. */
+/**
+ * Barrel, crate, sack - the clutter every MM6 interior has in its corners.
+ *
+ * Each is a small painted object: a lit face turned to the room's key light, a
+ * shadow face away from it, and the dark it sits in. `x, y` is the near-left
+ * foot; `s` is the height.
+ */
 export function paintClutter(g, x, y, kind, s = 20) {
+  const S = Math.max(8, Math.round(s));
+  const X = Math.round(x), Y = Math.round(y);
   if (kind === 'barrel') {
-    g.fillStyle = rampCss('wood', 5); g.fillRect(x, y - s, s * 0.8, s);
-    g.fillStyle = rampCss('wood', 8); g.fillRect(x, y - s, 2, s);
-    g.fillStyle = rampCss('grey', 6);
-    g.fillRect(x, y - s + 3, s * 0.8, 2);
-    g.fillRect(x, y - 6, s * 0.8, 2);
-    g.fillStyle = rampCss('wood', 9); g.fillRect(x, y - s, s * 0.8, 2);
+    const hw = Math.round(S * 0.40);
+    const cx = X + hw;
+    contactShadow(g, cx + 2, Y, hw * 1.25, Math.max(2, S * 0.11));
+    // Staves: the belly bulges, so the silhouette swells at the middle and the
+    // value turns across it rather than stepping once down the side.
+    for (let i = 0; i < S; i++) {
+      const t = i / S;
+      const belly = 1 - Math.pow(Math.abs(t - 0.5) * 2, 2) * 0.18;
+      const k = Math.max(2, Math.round(hw * belly));
+      for (let dx = -k; dx <= k; dx++) {
+        // Key light upper-left: a five-step turn across the barrel.
+        const u = (dx + k) / (2 * k);
+        const v = MM6.band(1 - Math.abs(u - 0.30) * 1.45, 5);
+        const grain = hash2(dx + 40, i, 23) * 0.10 - 0.05;
+        MM6.rct(g, cx + dx, Y - S + i, 1, 1,
+          MM6.mix([44, 28, 14], [148, 108, 62], clamp(v + grain, 0, 1)));
+      }
+    }
+    for (let sx = -hw; sx <= hw; sx += 4) {
+      MM6.rct(g, cx + sx, Y - S + 2, 1, S - 4, [38, 24, 12]);
+    }
+    // Iron hoops: a dark band with one lit pixel row along its top.
+    for (const hy of [Math.round(S * 0.14), Math.round(S * 0.52), Math.round(S * 0.88)]) {
+      const t = hy / S;
+      const belly = 1 - Math.pow(Math.abs(t - 0.5) * 2, 2) * 0.18;
+      const k = Math.max(2, Math.round(hw * belly)) + 1;
+      MM6.rct(g, cx - k, Y - S + hy, k * 2, 2, [52, 50, 46]);
+      MM6.rct(g, cx - k, Y - S + hy, k * 2, 1, [122, 118, 110]);
+      MM6.rct(g, cx + Math.round(k * 0.35), Y - S + hy, Math.round(k * 0.65), 2, [30, 28, 26]);
+    }
+    // Lid, seen slightly from above.
+    const lh = Math.max(2, Math.round(S * 0.11));
+    for (let dy = -lh; dy <= lh; dy++) {
+      const k = Math.round(hw * 0.92 * Math.sqrt(Math.max(0, 1 - (dy * dy) / (lh * lh))));
+      if (k <= 0) continue;
+      MM6.rct(g, cx - k, Y - S + dy, k * 2, 1,
+        MM6.mix([70, 50, 28], [166, 128, 78], MM6.band((dy + lh) / (2 * lh), 4)));
+    }
+    MM6.rct(g, cx - Math.round(hw * 0.9), Y - S - lh + 1, Math.round(hw * 1.8), 1, [186, 150, 96]);
   } else if (kind === 'crate') {
-    g.fillStyle = rampCss('wood', 6); g.fillRect(x, y - s, s, s);
-    g.fillStyle = rampCss('wood', 3);
-    g.fillRect(x, y - s, s, 1); g.fillRect(x, y - 1, s, 1);
-    g.fillRect(x, y - s, 1, s); g.fillRect(x + s - 1, y - s, 1, s);
-    g.fillStyle = rampCss('wood', 9);
-    g.fillRect(x + 1, y - s + 1, s - 2, 1);
-    for (let i = 1; i < s - 1; i++) g.fillRect(x + i, y - s + i, 1, 1);
+    const d = Math.max(3, Math.round(S * 0.26));      // how far the top face runs back
+    contactShadow(g, X + S / 2 + 2, Y, S * 0.72, Math.max(2, S * 0.10));
+    // Front face: boards with seams, lit from the upper left.
+    for (let i = 0; i < S; i++) {
+      const t = i / S;
+      const v = MM6.band(0.72 - t * 0.34, 5);
+      MM6.rct(g, X, Y - S + i, S, 1, MM6.mix([34, 22, 12], [138, 100, 58], v));
+    }
+    for (let i = 3; i < S; i += Math.max(4, Math.round(S / 4))) {
+      MM6.rct(g, X, Y - S + i, S, 1, [40, 26, 14]);
+      MM6.rct(g, X, Y - S + i + 1, S, 1, [116, 84, 48]);
+    }
+    // Diagonal brace, painted as two bars rather than a keyline.
+    for (let i = 0; i < S; i++) {
+      MM6.rct(g, X + i, Y - S + i, 2, 1, [96, 68, 38]);
+      MM6.rct(g, X + i, Y - S + i + 2, 2, 1, [48, 32, 16]);
+    }
+    // Top face: a parallelogram running back and to the right, and brighter.
+    poly(g, [X, Y - S, X + d, Y - S - d, X + S + d, Y - S - d, X + S, Y - S],
+      MM6.pc([158, 118, 70]));
+    poly(g, [X + 1, Y - S - 1, X + d, Y - S - d + 1, X + S + d - 2, Y - S - d + 1, X + S - 1, Y - S - 1],
+      MM6.pc([176, 134, 82]));
+    // Right face, in shadow.
+    poly(g, [X + S, Y - S, X + S + d, Y - S - d, X + S + d, Y - d, X + S, Y],
+      MM6.pc([62, 42, 22]));
+    MM6.rct(g, X + S, Y - S, 1, S, [30, 20, 10]);
   } else {
-    g.fillStyle = rampCss('sand', 6);
-    g.beginPath();
-    g.ellipse((x + s / 2) | 0, (y - s * 0.35) | 0, s * 0.5, s * 0.4, 0, 0, Math.PI * 2);
-    g.fill();
-    g.fillStyle = rampCss('sand', 9);
-    g.fillRect((x + s * 0.3) | 0, (y - s * 0.7) | 0, 3, 4);
+    // Sack: a slumped bag, wide at the foot, gathered and tied at the neck.
+    const hw = Math.round(S * 0.34);
+    const cx = X + hw;
+    contactShadow(g, cx + 1, Y, hw * 1.30, Math.max(2, S * 0.11));
+    const neck = Math.round(S * 0.72);
+    for (let i = 0; i < S; i++) {
+      const t = i / S;                                 // 0 at the top of the sack
+      // Slumped profile: pinched at the tie, swelling to the floor.
+      const prof = t < 0.26
+        ? 0.30 + t * 0.9
+        : 0.54 + Math.sin(Math.min(1, (t - 0.26) / 0.74) * 2.2) * 0.52;
+      const k = Math.max(1, Math.round(hw * prof));
+      for (let dx = -k; dx <= k; dx++) {
+        const u = (dx + k) / (2 * k);
+        const v = MM6.band(1 - Math.abs(u - 0.32) * 1.30 - t * 0.16, 5);
+        const weave = ((dx + i) & 3) === 0 ? -0.06 : 0;
+        MM6.rct(g, cx + dx, Y - S + i, 1, 1,
+          MM6.mix([56, 44, 26], [206, 180, 128], clamp(v + weave, 0, 1)));
+      }
+      // Creases pulling down from the tie.
+      if (t > 0.30 && ((i * 3) % 11) === 2) {
+        MM6.rct(g, cx - Math.round(k * 0.4), Y - S + i, Math.max(1, Math.round(k * 0.5)), 1, [92, 74, 46]);
+      }
+    }
+    MM6.rct(g, cx - Math.round(hw * 0.34), Y - S + neck - Math.round(S * 0.62), Math.round(hw * 0.68), 2, [92, 66, 32]);
+    MM6.rct(g, cx - Math.round(hw * 0.36), Y - S + 1, Math.round(hw * 0.72), 1, [230, 208, 158]);
   }
 }
 
@@ -1016,47 +1269,57 @@ export function paintRoom(g, w, h, kind = 'house') {
   g.fillStyle = rampCss('wood', 9);
   g.fillRect(wx + ww / 2 - 2, wy, 1, wh);
   g.fillRect(wx, wy + wh / 2 - 2, ww, 1);
-  glow(g, wx + ww / 2, wy + wh / 2, 120, '#fff0c0', 0.5);
+  // Daylight painted into the plaster round the reveal, not a halo over it.
+  glow(g, wx + ww / 2, wy + wh / 2, 132, '#fff0c0', 0.42);
 
-  // Light cast on the floor from the window.
-  g.save();
-  g.globalAlpha = 0.18;
-  g.fillStyle = '#ffe8b0';
-  poly(g, [wx, horizon, wx + ww, horizon, wx + ww + 60, h, wx - 30, h], '#ffe8b0');
-  g.restore();
+  // The patch the window throws on the boards. A painter of the period drew the
+  // patch, keystoned by the viewing angle and stepped in a few flat bands; the
+  // air between window and floor stays unpainted, because MM6 has no shafts.
+  MM6.litPatch(g, wx + ww / 2 + 14, horizon, ww * 0.5, h - 2, ww * 0.92, '#ffe8b0', 4);
 
   // Hearth on the right.
   g.fillStyle = rampCss('stone', 4);
   g.fillRect(w - 130, horizon - 96, 104, 96);
   g.fillStyle = rampCss('stone', 7);
   g.fillRect(w - 130, horizon - 96, 104, 6);
-  g.fillStyle = '#140a04';
+  g.fillStyle = rampCss('stone', 2);
+  g.fillRect(w - 130, horizon - 90, 104, 2);
+  // The firebox is a black socket; the fire sits inside it, not on top of it.
+  g.fillStyle = '#100702';
   g.fillRect(w - 116, horizon - 62, 76, 62);
-  MM6.rct(g, w - 112, horizon - 10, 68, 6, [70, 44, 22]);
-  for (let i = 0; i < 5; i++) {
-    MM6.flame(g, w - 104 + i * 13, horizon - 6, 14 + (i % 3) * 5, 26 + (i % 4) * 8, i * 1.7);
-  }
-  glow(g, w - 78, horizon - 26, 52, '#ff8020', 0.7);
+  MM6.rct(g, w - 116, horizon - 62, 76, 2, [6, 4, 2]);
+  MM6.rct(g, w - 112, horizon - 12, 68, 5, [64, 40, 20]);
+  MM6.rct(g, w - 112, horizon - 12, 68, 1, [104, 70, 36]);
+  paintFire(g, w - 78, horizon - 8, 62, 40, 11);
+  glow(g, w - 78, horizon - 22, 108, '#ff8020', 0.85);
 
-  paintClutter(g, 24, h - 12, 'barrel', 30);
-  paintClutter(g, 60, h - 10, 'crate', 24);
-  paintClutter(g, w - 46, h - 14, 'sack', 26);
-
-  // A rug in the middle distance so the floor is not empty.
-  const rgx = Math.round(w / 2), rgy = horizon + 40, rgw = 118, rgh = 30;
+  // A rug in the middle distance so the floor is not empty. It goes down before
+  // anything that stands on it, or the weave crosses the innkeeper's boots.
+  const rgx = Math.round(w * 0.40), rgy = horizon + 44, rgw = 104, rgh = 26;
   for (let dy = -rgh; dy <= rgh; dy++) {
     const k = Math.round(rgw * Math.sqrt(Math.max(0, 1 - (dy * dy) / (rgh * rgh))));
     const t = (dy + rgh) / (rgh * 2);
     MM6.rct(g, rgx - k, rgy + dy, k * 2, 1, rampCss('blood', 2 + Math.round(t * 2)));
     if (k > 26) {
       MM6.rct(g, rgx - k + 10, rgy + dy, k * 2 - 20, 1, rampCss('blood', 5 + Math.round(t * 2)));
-      MM6.rct(g, rgx - k + 24, rgy + dy, k * 2 - 48, 1, rampCss('sand', 4 + Math.round(t * 2)));
+      MM6.rct(g, rgx - k + 24, rgy + dy, k * 2 - 48, 1, rampCss('sand', 3 + Math.round(t * 2)));
     }
     if (k > 34 && (dy + rgh) % 7 === 3) {
       for (let x = -k + 30; x < k - 30; x += 16) MM6.rct(g, rgx + x, rgy + dy, 6, 1, rampCss('blood', 8));
     }
   }
-  for (let x = -rgw + 8; x < rgw - 8; x += 5) MM6.rct(g, rgx + x, rgy + rgh, 2, 3, rampCss('sand', 8));
+  // Fringe: a continuous run of threads, not a dotted rule.
+  for (let x = -rgw + 10; x < rgw - 10; x += 2) {
+    MM6.rct(g, rgx + x, rgy + rgh, 1, 2 + (((x >> 1) & 1) ? 1 : 0), rampCss('sand', 6 + ((x >> 1) & 1)));
+  }
+
+  // Somebody lives here. An empty painted room with a portrait beside it reads
+  // as a backdrop with the actor missing.
+  figure(g, w * 0.62, horizon + 60, 112, null, null, { seed: 0x51a7, apron: [104, 96, 74] });
+
+  paintClutter(g, 22, h - 10, 'barrel', 32);
+  paintClutter(g, 62, h - 8, 'crate', 24);
+  paintClutter(g, w - 52, h - 12, 'sack', 28);
 
   // Vignette: the original interiors are all painted dark at the edges.
   vignette(g, w, h);

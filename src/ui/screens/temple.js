@@ -8,13 +8,13 @@
 // ---------------------------------------------------------------------------
 
 import { rampCss } from '../../core/palette.js';
-import { clamp } from '../../core/rng.js';
+import { clamp, hash2 } from '../../core/rng.js';
 import * as F from '../../art/font.js';
 import { healCost, worstCondition, CONDITIONS, maxHP, maxSP } from '../../game/stats.js';
 import {
   HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, paintWall, paintFloor,
   paintClutter, vignette, members, activeMember, charName, partyGold, spend, hasCondition,
-  clearCondition, conditionIds, MM6, C_WHITE, C_CANARY, C_DIM, C_RED, C_GREEN,
+  clearCondition, conditionIds, contactShadow, MM6, C_WHITE, C_CANARY, C_DIM, C_RED, C_GREEN,
 } from './dialogue.js';
 
 const GODS = ['The Sun', 'The Moon', 'The Sky', 'The Forge', 'The Deep'];
@@ -25,28 +25,51 @@ export function paintTempleInterior(g, w, h, tint = '#e1cd23') {
   paintWall(g, 0, 0, w, horizon, { ramp: 'stone', lo: 0.10, hi: 0.44, course: 22, seed: 51 });
   paintFloor(g, 0, horizon, w, h - horizon, { ramp: 'stone', seed: 55 });
 
-  // Flagstones, drawn straight rather than in perspective boards.
-  g.save();
-  g.globalAlpha = 0.5;
-  for (let y = horizon; y < h; y += 14) {
-    g.fillStyle = rampCss('stone', 2);
-    g.fillRect(0, y, w, 1);
-    const off = ((y - horizon) / 14) % 2 ? 26 : 0;
-    for (let x = off; x < w; x += 52) g.fillRect(x, y, 1, 14);
+  // Flagstones. The courses compress toward the back wall, and each slab takes
+  // a value of its own - a chiselled joint plus per-slab jitter, not a grid of
+  // hairlines laid over a wash at half opacity.
+  {
+    let y = horizon, step = 7;
+    let row = 0;
+    while (y < h) {
+      const sy = Math.round(y), sh = Math.max(3, Math.round(step));
+      const pitch = Math.max(14, Math.round(step * 3.6));
+      const off = (row & 1) ? Math.round(pitch / 2) : 0;
+      for (let x = 0; x < w; x++) {
+        const bx = (x + off) % pitch;
+        const joint = bx < 2;
+        const slab = hash2(Math.floor((x + off) / pitch), row, 44);
+        for (let dy = 0; dy < sh && sy + dy < h; dy++) {
+          const top = dy < 2;
+          const v = joint || dy >= sh - 1 ? 0.20 : (top ? 0.62 : 0.48) + slab * 0.22;
+          MM6.rct(g, x, sy + dy, 1, 1, MM6.mix([26, 26, 22], [176, 174, 162], MM6.band(v, 7)));
+        }
+      }
+      y += step;
+      step *= 1.34;
+      row++;
+    }
   }
-  g.restore();
 
-  // Columns.
+  // Columns: a turned shaft, so the light wraps rather than stepping once.
   for (const cx of [46, w - 46]) {
-    g.fillStyle = rampCss('stone', 6);
-    g.fillRect(cx - 14, 12, 28, horizon - 4);
-    g.fillStyle = rampCss('stone', 9);
-    g.fillRect(cx - 14, 12, 5, horizon - 4);
-    g.fillStyle = rampCss('stone', 3);
-    g.fillRect(cx + 8, 12, 6, horizon - 4);
-    g.fillStyle = rampCss('stone', 8);
-    g.fillRect(cx - 20, 8, 40, 10);
-    g.fillRect(cx - 18, horizon - 12, 36, 12);
+    for (let dx = -14; dx <= 14; dx++) {
+      const u = (dx + 14) / 28;
+      const v = MM6.band(1 - Math.abs(u - 0.28) * 1.35, 6);
+      MM6.rct(g, cx + dx, 12, 1, horizon - 4, MM6.mix([32, 32, 28], [186, 184, 172], v));
+    }
+    // Fluting.
+    for (let f = -10; f <= 10; f += 5) {
+      MM6.rct(g, cx + f, 12, 1, horizon - 4, MM6.pc([40, 40, 34]));
+      MM6.rct(g, cx + f + 1, 12, 1, horizon - 4, MM6.pc([150, 148, 136]));
+    }
+    // Capital and base, each with a lit top arris and a shadow beneath.
+    for (const [by, bh] of [[8, 11], [horizon - 13, 13]]) {
+      MM6.rct(g, cx - 20, by, 40, bh, [128, 126, 116]);
+      MM6.rct(g, cx - 20, by, 40, 2, [206, 204, 190]);
+      MM6.rct(g, cx - 20, by + bh - 2, 40, 2, [40, 40, 34]);
+      MM6.rct(g, cx + 10, by, 10, bh, [86, 84, 76]);
+    }
   }
 
   // Rose window. Deep jewel glass - garnet, lapis, bottle-green, amethyst,
@@ -80,7 +103,9 @@ export function paintTempleInterior(g, w, h, tint = '#e1cd23') {
   // The boss at the centre, an amber roundel.
   MM6.disc(g, rx, ry, 11, MM6.shade(MM6.hexRGB(tint), 0.55));
   MM6.disc(g, rx, ry, 8, tint);
-  MM6.lightPool(g, rx, ry, 96, tint, 0.5);
+  // The stone immediately around the tracery takes colour; the rest of the nave
+  // does not. No pool, no bloom, no shaft.
+  glow(g, rx, ry, 190, tint, 0.5);
 
   // The window falls on the floor, not through the air. MM6 has no volumetric
   // light and no god rays: a painter of the period drew the *patch* the window
@@ -88,30 +113,50 @@ export function paintTempleInterior(g, w, h, tint = '#e1cd23') {
   // few flat value bands, and left the nave itself unpainted.
   MM6.litPatch(g, rx, horizon + 4, rr * 0.70, h - 2, rr * 1.30, tint, 5);
 
-  // Altar: marble, #D0CCC0 to #F0EEE6 with #A8A498 veining.
-  const ax = rx - 62, ay = horizon + 18;
-  for (let y = 0; y < 34; y++) {
-    const t = 1 - y / 34;
-    MM6.rct(g, ax, ay + y, 124, 1, MM6.mix([160, 156, 146], [240, 238, 230], MM6.band(0.35 + t * 0.55, 6)));
+  // Altar: marble, #D0CCC0 to #F0EEE6 with #A8A498 veining, and modelled - a
+  // top slab seen slightly from above, a front face that falls away from it,
+  // and a shadowed return on the right. A white box with sticks on it is not a
+  // painted object.
+  const aw = 124, ad = 13;
+  const ax = rx - aw / 2, ay = horizon + 22, ah = 30;
+  contactShadow(g, rx + 6, ay + ah + 2, aw * 0.58, 5);
+  // Front face.
+  for (let y = 0; y < ah; y++) {
+    const t = y / ah;
+    for (let x = 0; x < aw; x++) {
+      const v = MM6.band(0.60 - t * 0.30 - (x / aw) * 0.10, 6);
+      const vein = hash2(Math.floor(x / 3), Math.floor((y + x * 0.4) / 5), 88);
+      MM6.rct(g, ax + x, ay + y, 1, 1,
+        MM6.mix([104, 102, 94], [238, 236, 228], clamp(v + (vein > 0.86 ? -0.13 : 0), 0, 1)));
+    }
   }
-  MM6.rct(g, ax, ay, 124, 3, [240, 238, 230]);
-  MM6.rct(g, ax, ay + 31, 124, 3, [136, 132, 122]);
-  for (let i = 0; i < 9; i++) {
-    // Veining.
-    const vy = ay + 4 + ((i * 7) % 26);
-    MM6.lineH(g, ax + 6 + i * 13, vy, ax + 22 + i * 13, vy + 3, MM6.pc([168, 164, 152]), 1);
+  // Shadowed return on the right.
+  poly(g, [ax + aw, ay, ax + aw + ad, ay - ad, ax + aw + ad, ay + ah - ad, ax + aw, ay + ah],
+    MM6.pc([86, 84, 78]));
+  // Top slab, running back and to the right, and the brightest thing on it.
+  poly(g, [ax, ay, ax + ad, ay - ad, ax + aw + ad, ay - ad, ax + aw, ay], MM6.pc([216, 214, 204]));
+  poly(g, [ax + 2, ay - 1, ax + ad, ay - ad + 1, ax + aw + ad - 3, ay - ad + 1, ax + aw - 2, ay - 1],
+    MM6.pc([242, 240, 232]));
+  MM6.rct(g, ax, ay - 1, aw, 1, [252, 250, 244]);       // lit arris
+  MM6.rct(g, ax, ay + ah - 2, aw, 2, [92, 90, 84]);     // plinth shadow
+  // Gilt band across the front.
+  MM6.rct(g, ax + 12, ay + 12, aw - 24, 4, [150, 118, 44]);
+  MM6.rct(g, ax + 12, ay + 12, aw - 24, 1, [238, 206, 124]);
+  MM6.rct(g, ax + 12, ay + 15, aw - 24, 1, [82, 62, 20]);
+  // Candles: painted wax, and the flames are the only light on the slab.
+  for (let i = 0; i < 5; i++) {
+    const cx2 = ax + 20 + i * 21 + Math.round(ad * 0.5);
+    MM6.candle(g, cx2, ay - ad + 1, 13 + (i % 2) * 3, i * 1.7);
+    glow(g, cx2 + 2, ay - ad - 14 - (i % 2) * 3, 42, '#ffc060', 0.55);
   }
-  MM6.rct(g, ax + 14, ay + 13, 96, 3, [186, 150, 60]);
-  MM6.rct(g, ax + 14, ay + 13, 96, 1, [236, 208, 128]);
-  // Candles, each with a real flame sprite.
-  for (let i = 0; i < 5; i++) MM6.candle(g, ax + 16 + i * 24, ay - 1, 15, i * 1.7);
 
   // A robed acolyte to one side.
-  figure(g, w * 0.80, horizon + 44, 96, null, null, {
-    robe: true, hood: true, cloth: [148, 142, 128], skin: [212, 170, 132], hair: [72, 52, 32],
+  figure(g, w * 0.80, horizon + 54, 104, null, null, {
+    seed: 0x7ac3,
+    robe: true, hood: true, cloth: [128, 120, 104], skin: [212, 170, 132], hair: [72, 52, 32],
   });
 
-  paintClutter(g, 22, h - 8, 'crate', 22);
+  paintClutter(g, 20, h - 6, 'crate', 26);
   vignette(g, w, h);
 }
 

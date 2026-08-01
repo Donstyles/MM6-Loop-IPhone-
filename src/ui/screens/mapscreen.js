@@ -21,8 +21,17 @@ import * as M from './mm6art.js';
 /** Keep sketch features clear of the sea: bias samples toward the land side. */
 function coastPad(t) { return 0.18 + t * 0.80; }
 
-/** MM6's four map-book zooms, in world units across the window. */
+/**
+ * MM6's four map-book zooms (`uMapBookMapZoom`).
+ *
+ * These are *scale factors*, not spans: the engine plots a point at
+ * `centre + (world - party) * zoom / 65536`, so 384 fits the whole 65536-unit
+ * region into 384 pixels and 3072 is eight times into it. Reading them as a
+ * world span is what turned the map book into four flat quadrants of one tile
+ * blown up eighteen times; `spanOf` does the conversion once.
+ */
 export const ZOOMS = [384, 768, 1536, 3072];
+const WORLD = 65536;
 const TILE = 512;
 
 const VIEW = { x: 12, y: 12, w: 437, h: 250 };
@@ -37,27 +46,38 @@ export class MapScreen extends Screen {
 
   onOpen() {
     this.pan.x = 0; this.pan.z = 0;
-    const indoor = this.session.map && this.session.map.indoor;
-    this.zoom = indoor ? 1 : 2;
+    // The book opens at its closest zoom - 1536 outdoors, 3072 indoors.
+    this.zoom = this.session.map && this.session.map.indoor ? 3 : 2;
     this.sound('page');
   }
 
   handleKey(code) {
     if (code === 'Escape' || code === 'KeyM') { this.close(); return true; }
-    if (code === 'Equal' || code === 'NumpadAdd') { this.setZoom(this.zoom - 1); return true; }
-    if (code === 'Minus' || code === 'NumpadSubtract') { this.setZoom(this.zoom + 1); return true; }
-    if (code === 'ArrowLeft') { this.pan.x -= TILE; return true; }
-    if (code === 'ArrowRight') { this.pan.x += TILE; return true; }
-    if (code === 'ArrowUp') { this.pan.z -= TILE; return true; }
-    if (code === 'ArrowDown') { this.pan.z += TILE; return true; }
+    if (code === 'Equal' || code === 'NumpadAdd') { this.setZoom(this.zoom + 1); return true; }
+    if (code === 'Minus' || code === 'NumpadSubtract') { this.setZoom(this.zoom - 1); return true; }
+    if (code === 'ArrowLeft') { this.panBy(-TILE, 0); return true; }
+    if (code === 'ArrowRight') { this.panBy(TILE, 0); return true; }
+    if (code === 'ArrowUp') { this.panBy(0, -TILE); return true; }
+    if (code === 'ArrowDown') { this.panBy(0, TILE); return true; }
     return false;
   }
 
+  /** Panning steps a whole 512-unit tile at a time, and stays on the sheet. */
+  panBy(dx, dz) {
+    const lim = Math.max(0, WORLD / 2 - this.span() / 2);
+    this.pan.x = Math.max(-lim, Math.min(lim, this.pan.x + dx));
+    this.pan.z = Math.max(-lim, Math.min(lim, this.pan.z + dz));
+  }
+
   setZoom(i) {
+    // 3072 is the indoor-only step; outdoors the book stops at 1536.
     const max = this.session.map && this.session.map.indoor ? 3 : 2;
     const z = Math.max(0, Math.min(max, i));
     if (z !== this.zoom) { this.zoom = z; this.sound('click'); }
   }
+
+  /** World units across the width of the chart at the current zoom. */
+  span(w = VIEW.w) { return (w * WORLD) / ZOOMS[this.zoom]; }
 
   get player() {
     const p = this.session && this.session.player;
@@ -67,7 +87,7 @@ export class MapScreen extends Screen {
 
   /** World -> page pixel. */
   projector(rect) {
-    const span = ZOOMS[this.zoom];
+    const span = this.span(rect.w);
     const s = rect.w / span;
     const p = this.player;
     const cx = p.x + this.pan.x, cz = p.z + this.pan.z;
@@ -95,7 +115,11 @@ export class MapScreen extends Screen {
     let drawn = false;
     if (map && typeof map.drawMinimap === 'function') {
       try {
-        map.drawMinimap(ctx, rect, this.session.player, ZOOMS[this.zoom], this.pan);
+        // The automap plates centre themselves on the party and ignore a pan
+        // argument, so the pan is handed to them as a moved party instead.
+        const p = this.player;
+        map.drawMinimap(ctx, rect, { x: p.x + this.pan.x, z: p.z + this.pan.z },
+          this.span(rect.w), this.pan);
         drawn = true;
       } catch (e) { drawn = false; }
     }
@@ -106,7 +130,6 @@ export class MapScreen extends Screen {
 
     this.drawMarkers(ctx, rect, map);
     this.drawParty(ctx, rect);
-    this.drawRose(ctx, rect);
     ctx.restore();
 
     // Painted border rule around the chart.
@@ -157,8 +180,8 @@ export class MapScreen extends Screen {
 
   /** Outdoor maps are a pre-rendered picture, sampled nearest-neighbour. */
   drawMapImage(ctx, rect, img) {
-    const world = (this.session.map && this.session.map.worldSize) || 65536;
-    const span = ZOOMS[this.zoom];
+    const world = (this.session.map && this.session.map.worldSize) || WORLD;
+    const span = this.span(rect.w);
     const p = this.player;
     const cx = p.x + this.pan.x, cz = p.z + this.pan.z;
     const u = (cx + world / 2) / world, v = (cz + world / 2) / world;
@@ -293,8 +316,9 @@ export class MapScreen extends Screen {
 
   drawParty(ctx, rect) {
     const p = this.player;
-    const cx = Math.round(rect.x + rect.w / 2 - this.pan.x * (rect.w / ZOOMS[this.zoom]));
-    const cy = Math.round(rect.y + rect.h / 2 - this.pan.z * (rect.w / ZOOMS[this.zoom]));
+    const proj = this.projector(rect);
+    const cx = Math.round(proj.x(p.x));
+    const cy = Math.round(proj.y(p.z));
     // MM6 draws one of eight fixed arrow sprites (MAPDIR1..8); snap the yaw the
     // same way rather than rotating anything.
     const dir = ((Math.round((p.yaw / (Math.PI * 2)) * 8) % 8) + 8) % 8;
@@ -326,8 +350,8 @@ export class MapScreen extends Screen {
       return hit.click && !off;
     };
     const maxZ = this.session.map && this.session.map.indoor ? 3 : 2;
-    if (mk('zin', '+', bx, 'Zoom in', this.zoom === 0)) this.setZoom(this.zoom - 1);
-    if (mk('zout', '-', bx + 28, 'Zoom out', this.zoom === maxZ)) this.setZoom(this.zoom + 1);
+    if (mk('zin', '+', bx, 'Zoom in', this.zoom === maxZ)) this.setZoom(this.zoom + 1);
+    if (mk('zout', '-', bx + 28, 'Zoom out', this.zoom === 0)) this.setZoom(this.zoom - 1);
     // No numeric zoom readout: MM6 changes the scale and shows you the result.
   }
 

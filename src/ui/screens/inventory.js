@@ -21,6 +21,7 @@ import {
   WHITE, CANARY, HILITE, drawTabs, drawWrapped,
 } from './screenbase.js';
 import * as M from './mm6art.js';
+import { CLASSES } from '../../game/stats.js';
 
 // --- item model -------------------------------------------------------------
 
@@ -105,11 +106,15 @@ export function itemIcon(item, cell = CELL) {
 
 // --- paperdoll --------------------------------------------------------------
 //
-// MM6 paints a body and then paints the equipped items straight onto it at
-// their anatomical positions: helm on the head, armour over the torso, boots at
-// the feet, the weapon in the hand. There is no slot chrome - no boxes, no
-// outlines, no glyphs. Empty slots simply show the body. The drag-and-drop hit
-// rectangles below are derived from the painted anatomy and are never drawn.
+// MM6 paints a body and then paints the equipped items straight on to it at
+// their anatomical positions: the helm on the skull, the cuirass following the
+// chest, the shield on the off arm, the blade hanging from the fist, the boots
+// on the feet, the cloak behind the shoulders. There is no slot chrome - no
+// cells, no boxes, no borders, no captions - and an empty slot simply shows the
+// body. The painting is all in mm6art.js; what is left here is the character's
+// own build and colouring, the hit rectangles (which are never drawn), and the
+// cache, because the doll is on screen every frame and is far too much painting
+// to redo at 60Hz.
 
 const WELL = { x: SIDE.x + 4, y: 6, w: 164, h: 282 };
 
@@ -118,56 +123,45 @@ function equipOf(ch) {
   return ch.equipment;
 }
 
-/** Where each slot's art lands on the painted body, and how big it is. */
-function slotPlacement(anchor) {
-  const a = anchor;
-  const hw = a.head.w, tw = a.torso.w;
+/**
+ * The hit rectangles, derived from the painted anatomy. Nothing is drawn for
+ * them. They are tested most-specific first, because a click is consumed by the
+ * first region that takes it and the cloak's rectangle covers most of the body.
+ */
+const HIT_ORDER = ['helm', 'amulet', 'mainhand', 'offhand', 'ring1', 'ring2',
+  'gauntlets', 'belt', 'boots', 'bow', 'armor', 'cloak'];
+
+function slotPlacement(a) {
+  const bw = a.bodyW, hw = a.headW;
+  const rect = (x0, y0, x1, y1) => ({ x: Math.round(x0), y: Math.round(y0), w: Math.round(x1 - x0), h: Math.round(y1 - y0) });
+  const lh = a.hands.left, rh = a.hands.right;
   return {
-    // The helm sits on the crown and leaves the face showing, as a paperdoll must.
-    helm: { cx: a.head.cx, cy: a.head.cy - Math.round(a.head.h * 0.30), w: Math.round(hw * 1.18), h: Math.round(a.head.h * 0.68) },
-    amulet: { cx: a.neck.cx, cy: a.neck.y + 8, w: 20, h: 22 },
-    cloak: { cx: a.torso.cx, cy: a.torso.cy + 12, w: Math.round(tw * 2.0), h: Math.round(a.torso.h * 1.9) },
-    armor: { cx: a.torso.cx, cy: a.torso.cy + 2, w: Math.round(tw * 1.16), h: Math.round(a.torso.h * 1.10) },
-    belt: { cx: a.waist.cx, cy: a.waist.y + 1, w: Math.round(tw * 1.24), h: 12 },
-    boots: { cx: a.feet.cx, cy: a.feet.y - 2, w: Math.round(a.feet.w * 1.15), h: 26 },
-    gauntlets: { cx: a.torso.cx, cy: a.hands.left.y + 4, w: Math.round(tw * 2.1), h: 20 },
-    mainhand: { cx: a.hands.right.x + 6, cy: a.hands.right.y + 26, w: 26, h: 74 },
-    offhand: { cx: a.hands.left.x - 10, cy: a.hands.left.y + 12, w: 38, h: 46 },
-    bow: { cx: a.torso.cx + Math.round(tw * 1.7), cy: a.torso.cy + 10, w: 40, h: 72 },
-    ring1: { cx: a.hands.left.x - 1, cy: a.hands.left.y + 12, w: 13, h: 13 },
-    ring2: { cx: a.hands.right.x + 1, cy: a.hands.right.y + 12, w: 13, h: 13 },
+    helm: rect(a.cx - hw - 3, a.top - 6, a.cx + hw + 3, a.top + a.headH * 0.55),
+    amulet: rect(a.cx - bw * 0.5, a.shoulderY - 2, a.cx + bw * 0.5, a.shoulderY + a.torsoH * 0.34),
+    armor: rect(a.cx - bw * 1.2, a.shoulderY - 3, a.cx + bw * 1.2, a.hipY + 2),
+    cloak: rect(a.cx - bw * 2.2, a.shoulderY - 8, a.cx + bw * 2.2, a.hipY + a.legH * 0.6),
+    belt: rect(a.cx - bw * 1.1, a.hipY - a.H * 0.05, a.cx + bw * 1.1, a.hipY + 4),
+    boots: rect(a.cx - bw * 1.3, a.baseY - a.legH * 0.42, a.cx + bw * 1.3, a.baseY + 4),
+    gauntlets: rect(lh.x - lh.w * 1.6, lh.y - 8, rh.x + rh.w * 1.6, rh.y + rh.h + 4),
+    mainhand: rect(rh.x - bw * 0.8, rh.y - 10, rh.x + bw * 0.8, rh.y + a.H * 0.30),
+    offhand: rect(a.arms.left.ex - bw * 1.6, a.arms.left.ey - a.torsoH * 0.55,
+      a.arms.left.ex + bw * 0.5, a.arms.left.ey + a.torsoH * 0.45),
+    bow: rect(a.cx + bw * 1.6, a.shoulderY - a.H * 0.06, a.cx + bw * 2.6, a.hipY + a.legH * 0.3),
+    ring1: rect(lh.x - lh.w * 1.4, lh.y + lh.h * 0.3, lh.x, lh.y + lh.h * 0.9),
+    ring2: rect(rh.x, rh.y + rh.h * 0.3, rh.x + rh.w * 1.4, rh.y + rh.h * 0.9),
   };
 }
 
-/** Paint one worn item onto the body at its placement. */
-function paintWorn(ctx, slot, item, p) {
-  const kind = wornKind(slot, item);
-  const c = M.itemArt(kind, Math.max(6, p.w), Math.max(8, p.h), {
-    mat: item.material || wornMaterial(slot), accent: item.tint || null,
-  });
-  const x = Math.round(p.cx - c.width / 2), y = Math.round(p.cy - c.height / 2);
-  // Painted contact shadow: two stippled rows under the piece, no soft edge.
-  M.stipple(ctx, x + 2, y + 3, c.width, c.height, [12, 10, 8], 0.30);
-  M.blit(ctx, c, x, y);
-  if (item.broken) M.stipple(ctx, x, y, c.width, c.height, [200, 24, 12], 0.42);
-  else if (item.identified === false) M.stipple(ctx, x, y, c.width, c.height, [0, 200, 40], 0.30);
-}
-
-function wornKind(slot, item) {
-  const t = typeOf(item);
-  const k = item.icon || t.icon;
-  if (k === 'blade') return 'sword';
-  if (slot === 'armor' && item.skill) return item.skill === 'chain' ? 'chain' : 'armor';
-  return k;
-}
-
-function wornMaterial(slot) {
-  switch (slot) {
-    case 'boots': case 'belt': return 'leather';
-    case 'cloak': return 'cloth';
-    case 'amulet': case 'ring1': case 'ring2': return 'gold';
-    default: return 'steel';
+/** What the cached doll bitmap is keyed on: everything that changes its pixels. */
+function dollKey(look, eq) {
+  let k = `${look.buildIdx}|${look.skin}|${look.hair}|${look.tunic}|${look.trews}|`
+    + `${look.boots}|${look.beard ? 1 : 0}|${look.longHair ? 1 : 0}`;
+  for (const slot of SLOTS) {
+    const it = eq[slot];
+    k += it ? `|${slot}:${it.type || ''}:${it.icon || ''}:${it.material || ''}:${it.skill || ''}`
+      + `:${it.tint || ''}:${it.armor | 0}:${it.name || ''}` : '';
   }
+  return k;
 }
 
 /**
@@ -181,36 +175,19 @@ export function drawPaperdoll(ctx, screen, ch) {
   A.stone(ctx, SIDE.x, 0, SIDE.w, 352, { rivets: true, gold: true });
 
   const eq = equipOf(ch);
-  const cloth = clothOf(ch);
-  const place = slotPlacement(M.paperdollAnchors(r));
-
-  ctx.save();
-  ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
-  // The doll stands on the panel's own tooled hide, not in a black well.
-  M.paper(ctx, r.x, r.y, r.w, r.h, 'hide', 43);
-  // Anything worn behind the body goes down first: the cloak hangs behind the
-  // shoulders and the bow is slung across the back.
-  if (eq.cloak) paintWorn(ctx, 'cloak', eq.cloak, place.cloak);
-  if (eq.bow) paintWorn(ctx, 'bow', eq.bow, place.bow);
-  M.paperdollBody(ctx, { x: r.x, y: r.y, w: r.w, h: r.h }, cloth);
-  for (const slot of ['armor', 'belt', 'boots', 'gauntlets', 'helm', 'amulet',
-    'offhand', 'mainhand', 'ring1', 'ring2']) {
-    if (eq[slot]) paintWorn(ctx, slot, eq[slot], place[slot]);
-  }
-  ctx.restore();
+  const look = lookOf(ch);
+  // The board, then the doll, painted once and blitted from then on.
+  M.paperdollField(ctx, r.x, r.y, r.w, r.h);
+  M.blit(ctx, M.paperdollArt(r.w, r.h, look, eq, dollKey(look, eq)), r.x, r.y);
 
   // Hit rectangles only: nothing is drawn for them, per MM6.
-  const carried = ui.cursorItem;
-  for (const slot of SLOTS) {
+  const place = slotPlacement(M.paperdollAnchors(r, look.buildIdx));
+  for (const slot of HIT_ORDER) {
     const p = place[slot];
     if (!p) continue;
-    const x = Math.round(p.cx - p.w / 2), y = Math.round(p.cy - p.h / 2);
     const item = eq[slot] || null;
-    const hit = ui.region(`doll:${slot}`, x, y, p.w, p.h, item ? itemLabel(item) : slotLabel(slot));
-    // The only feedback is on the carried item's legal targets, and it is a
-    // painted stipple rather than an outline.
-    if (carried && slotFor(carried, slot)) M.stipple(ctx, x, y, p.w, p.h, [225, 205, 35], 0.22);
-    else if (hit.hover && item) M.stipple(ctx, x, y, p.w, p.h, [255, 246, 220], 0.14);
+    const hit = ui.region(`doll:${slot}`, p.x, p.y, p.w, p.h,
+      item ? itemLabel(item) : slotLabel(slot));
     if (hit.rightClick && item && screen.showPopup) screen.showPopup(item);
     else if (hit.click && screen.slotClick) screen.slotClick(ch, slot, item || null);
   }
@@ -224,17 +201,40 @@ export function drawPaperdoll(ctx, screen, ch) {
   F.drawText(ctx, ch.name || '', r.x + r.w / 2, gy + 18, { face: 'small', align: 'center', color: WHITE });
 }
 
-/** Skin, hair and cloth for a character, so four party members do not match. */
-function clothOf(ch) {
-  const seed = ((ch && (ch.portraitSeed | 0)) || 1) + (ch && ch.name ? ch.name.length : 0);
-  const skins = [[216, 174, 138], [196, 148, 108], [166, 118, 82], [124, 84, 56]];
-  const hairs = [[54, 34, 20], [104, 72, 34], [30, 24, 22], [148, 128, 92], [96, 42, 26]];
-  const tunics = [[92, 74, 52], [70, 82, 60], [88, 62, 60], [64, 70, 92], [96, 84, 56]];
+/** Build by class line: a Knight is not shaped like a Sorcerer. */
+const LINE_LOOK = {
+  knight: { build: 4, tunic: [96, 60, 52] },
+  paladin: { build: 3, tunic: [66, 74, 96] },
+  archer: { build: 1, tunic: [64, 84, 58] },
+  cleric: { build: 2, tunic: [112, 100, 74] },
+  sorcerer: { build: 0, tunic: [58, 56, 88] },
+  druid: { build: 2, tunic: [78, 84, 56] },
+};
+
+/**
+ * The character's own body: build off the class line, skin, hair and clothes
+ * off the portrait seed, so the doll is this person rather than a mannequin and
+ * four party members never match.
+ */
+function lookOf(ch) {
+  const seed = (((ch && ch.portraitSeed) | 0) >>> 0) + (ch && ch.name ? ch.name.length : 0);
+  const klass = CLASSES[(ch && ch.class) || ''] || null;
+  const L = LINE_LOOK[klass ? klass.line : 'knight'] || LINE_LOOK.knight;
+  const female = ch && ch.sex === 'f';
+  const skins = [[222, 180, 144], [206, 160, 122], [186, 136, 98], [156, 114, 78],
+    [122, 84, 56], [92, 62, 42]];
+  const hairs = [[54, 34, 20], [104, 72, 34], [30, 24, 22], [148, 128, 92],
+    [96, 42, 26], [176, 172, 164]];
   return {
+    // A woman is drawn a build lighter; the male lines keep their own.
+    buildIdx: Math.max(0, L.build - (female ? 1 : 0)),
     skin: skins[seed % skins.length],
     hair: hairs[(seed * 3) % hairs.length],
-    tunic: tunics[(seed * 5) % tunics.length],
+    tunic: L.tunic,
     trews: [58, 48, 34],
+    boots: [62, 44, 28],
+    beard: !female && (seed % 3) === 0,
+    longHair: female || (seed % 5) === 0,
   };
 }
 

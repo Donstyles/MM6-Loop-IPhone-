@@ -9,3 +9,12 @@ shots/
 # these; they are named per-task and deleted when that task is done, so they
 # should never be committed.
 tools/scripts/_*.mjs
+
+# Per-agent scratch: a private capture server config and one-off dump scripts.
+# Several agents work this tree at once, so each spins up its own server on its
+# own port rather than fighting over the shared one.
+vite.*.config.js
+!vite.config.js
+!vite.capture.config.js
+tools/_*.mjs
+tools/mycap.sh

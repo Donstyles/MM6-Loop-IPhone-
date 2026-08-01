@@ -7,14 +7,14 @@
 // ---------------------------------------------------------------------------
 
 import { rampCss } from '../../core/palette.js';
-import { clamp } from '../../core/rng.js';
+import { clamp, hash2 } from '../../core/rng.js';
 import * as F from '../../art/font.js';
 import { maxHP, maxSP, effectiveStat } from '../../game/stats.js';
 import {
   HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, hotText, rngFor, paintWall,
   paintFloor, paintShelf, paintCounter, paintClutter, vignette, members, activeMember,
-  charName, partyGold, spend, earn, addCondition, hasCondition, MM6, C_WHITE, C_CANARY, C_DIM,
-  C_RED, C_GREEN,
+  charName, partyGold, spend, earn, addCondition, hasCondition, paintFire, contactShadow,
+  MM6, C_WHITE, C_CANARY, C_DIM, C_RED, C_GREEN,
 } from './dialogue.js';
 
 const RUMOURS = [
@@ -31,6 +31,93 @@ const HINTS = [
   { text: 'Old Merrow buried his savings behind the mill before the goblins came.', quest: true },
   { text: 'A knight of the Sun offers gold for the head of the beast in Corlagon\'s Estate.', quest: true },
 ];
+
+/**
+ * A round table, painted as an object.
+ *
+ * The old one was a grey disc on a stick with three white cubes on it. This is
+ * a top face lit from the room's key, a turned edge that falls into shadow, a
+ * pedestal with splayed feet, and the dark the whole thing sits in. `s` is the
+ * depth scale: a table at the back of the room is smaller than one at the
+ * front, which is the entire reason the room reads as having a floor.
+ */
+function paintTable(g, cx, cy, s, lit = 0) {
+  const rx = Math.round(44 * s), ry = Math.max(4, Math.round(13 * s));
+  const edge = Math.max(2, Math.round(6 * s));
+  contactShadow(g, cx + 4 * s, cy + edge + 20 * s, rx * 0.92, Math.max(2, 5 * s));
+  // Pedestal: a tapered post with three feet.
+  const legH = Math.round(26 * s);
+  const pw = Math.max(2, Math.round(5 * s));
+  for (let i = 0; i < legH; i++) {
+    const t = i / legH;
+    const k = Math.max(1, Math.round(pw * (0.8 + t * 0.5)));
+    MM6.rct(g, cx - k, cy + i, k * 2, 1, MM6.mix([44, 28, 14], [104, 74, 40], MM6.band(0.72 - t * 0.3, 4)));
+    MM6.rct(g, cx - k, cy + i, Math.max(1, Math.round(k * 0.5)), 1,
+      MM6.mix([60, 40, 20], [132, 96, 54], MM6.band(0.8 - t * 0.3, 4)));
+  }
+  for (const [fx, fw] of [[-1, 0.9], [1, 0.9], [0, 0.6]]) {
+    poly(g, [cx, cy + legH - 4 * s, cx + fx * rx * 0.55, cy + legH + 4 * s,
+      cx + fx * rx * 0.55, cy + legH + 7 * s, cx, cy + legH + Math.round(2 * s)],
+    MM6.pc([56, 36, 18]));
+    if (fx) {
+      MM6.rct(g, Math.round(cx + fx * rx * 0.55 - (fx > 0 ? 3 : 0)), Math.round(cy + legH + 4 * s),
+        Math.max(2, Math.round(4 * fw)), 1, [112, 80, 44]);
+    }
+  }
+  // The turned edge of the top, seen from just above: a band of end grain.
+  for (let dy = 0; dy < edge; dy++) {
+    const k = Math.round(rx * Math.sqrt(Math.max(0, 1 - ((dy - edge) * (dy - edge)) / (ry * ry * 4))));
+    const v = MM6.band(0.44 - dy / edge * 0.26, 4);
+    MM6.rct(g, cx - k, cy - 1 + dy, k * 2, 1, MM6.mix([30, 19, 9], [126, 90, 50], v));
+  }
+  // Top face. Boards run across it, and the key light rakes from the upper left.
+  //
+  // The lamp overhead is paid for here rather than by stamping a disc of light
+  // over the finished plate: the boards under the lantern simply get painted a
+  // couple of value steps hotter, in the same banded ramp as everything else,
+  // which is how a 1998 illustrator lit a table.
+  for (let dy = -ry; dy <= 0; dy++) {
+    const k = Math.round(rx * Math.sqrt(Math.max(0, 1 - (dy * dy) / (ry * ry))));
+    if (k <= 0) continue;
+    for (let dx = -k; dx <= k; dx++) {
+      const v = MM6.band(0.78 - (dx / rx) * 0.16 + (dy / ry) * 0.30, 5);
+      const boardEdge = (Math.round((dx + rx) / Math.max(4, 11 * s)) * Math.max(4, 11 * s)) - (dx + rx);
+      const seam = Math.abs(boardEdge) < 1 ? -0.22 : 0;
+      const grain = hash2(dx + 80, dy + 40, 29) * 0.10 - 0.05;
+      const pool = lit
+        ? lit * MM6.band(1 - Math.sqrt((dx * dx) / (rx * rx) + (dy * dy) / (ry * ry) * 0.5), 3)
+        : 0;
+      const c = MM6.mix([48, 32, 16], [176, 132, 78], clamp(v + seam + grain, 0, 1));
+      MM6.rct(g, cx + dx, cy + dy - 1, 1, 1,
+        pool > 0 ? MM6.mix(c, [255, 206, 132], pool * 0.55) : c);
+    }
+  }
+  // Lit arris along the far rim, shadow along the near one.
+  const kf = Math.round(rx * 0.86);
+  MM6.rct(g, cx - kf, cy - ry, kf * 2, 1, [198, 156, 96]);
+}
+
+/** A tankard: a pewter body with a lit side, a dark side, a handle and foam. */
+function paintTankard(g, x, y, s) {
+  const bw = Math.max(3, Math.round(6 * s));
+  const bh = Math.max(4, Math.round(9 * s));
+  for (let i = 0; i < bh; i++) {
+    const t = i / bh;
+    for (let dx = 0; dx < bw; dx++) {
+      const u = dx / (bw - 1 || 1);
+      const v = MM6.band(1 - Math.abs(u - 0.28) * 1.5 - t * 0.12, 4);
+      MM6.rct(g, x + dx, y - bh + i, 1, 1, MM6.mix([46, 46, 44], [178, 178, 170], v));
+    }
+  }
+  // Handle on the shadowed side.
+  MM6.rct(g, x + bw, y - bh + 2, 1, Math.max(2, bh - 4), [88, 88, 84]);
+  MM6.rct(g, x + bw - 1, y - bh + 2, 1, 1, [124, 124, 118]);
+  MM6.rct(g, x + bw - 1, y - 3, 1, 1, [124, 124, 118]);
+  // Ale and a head of foam.
+  MM6.rct(g, x, y - bh, bw, 1, [232, 226, 206]);
+  MM6.rct(g, x, y - bh - 1, Math.max(2, bw - 1), 1, [244, 240, 226]);
+  MM6.rct(g, x, y - 1, bw, 1, [22, 20, 18]);
+}
 
 /** Firelight from the right, lamps over the tables, patrons in silhouette. */
 export function paintTavernInterior(g, w, h) {
@@ -49,28 +136,52 @@ export function paintTavernInterior(g, w, h) {
   g.fillStyle = rampCss('wood', 3);
   g.fillRect(0, 0, w, 20); g.fillRect(0, 62, w, 6);
 
-  // Hearth on the right, the room's key light.
-  const hx = w - 108;
-  g.fillStyle = rampCss('stone', 5); g.fillRect(hx - 16, horizon - 104, 124, 104);
-  g.fillStyle = rampCss('stone', 8); g.fillRect(hx - 16, horizon - 104, 124, 6);
-  g.fillStyle = '#170a03'; g.fillRect(hx, horizon - 74, 82, 74);
-  // Logs first, then flames over them: an EMITS_FIRE sprite with 1-bit alpha,
-  // no soft edge and no falloff.
-  g.fillStyle = rampCss('wood', 3);
-  for (let i = 0; i < 4; i++) g.fillRect(hx + 6 + i * 18, horizon - 12, 16, 6);
-  MM6.rct(g, hx + 4, horizon - 8, 74, 6, [72, 46, 24]);
-  for (let i = 0; i < 5; i++) {
-    MM6.flame(g, hx + 14 + i * 14, horizon - 8, 16 + (i % 3) * 5, 32 + (i % 4) * 9, i * 2.1);
+  // Hearth on the right, the room's key light. The chimney breast is coursed
+  // ashlar, not a flat grey plate: blocks of jittered value with chiselled
+  // joints, which is what the wall textures in §12 of the spec actually are.
+  const hx = w - 104;
+  const hbx = hx - 18, hby = horizon - 106, hbw = 124, hbh = 106;
+  for (let y = 0; y < hbh; y++) {
+    const row = Math.floor(y / 15);
+    const off = (row & 1) * 17;
+    for (let x = 0; x < hbw; x++) {
+      const bx = (x + off) % 34;
+      const joint = bx < 2 || (y % 15) < 2;
+      const blk = hash2(Math.floor((x + off) / 34), row, 71);
+      const v = joint ? 0.16 : 0.44 + blk * 0.30 - (y / hbh) * 0.14;
+      MM6.rct(g, hbx + x, hby + y, 1, 1, MM6.mix([28, 27, 24], [174, 172, 160], MM6.band(v, 7)));
+    }
   }
-  glow(g, hx + 41, horizon - 24, 90, '#ff8828', 0.9);
+  // Mantel shelf.
+  MM6.rct(g, hbx - 4, hby, hbw + 8, 7, [122, 118, 106]);
+  MM6.rct(g, hbx - 4, hby, hbw + 8, 2, [186, 182, 168]);
+  MM6.rct(g, hbx - 4, hby + 7, hbw + 8, 2, [34, 32, 28]);
+  // A black socket behind the fire. Without it the tongues read as a saw-tooth
+  // silhouette pasted on masonry rather than as a fire burning in a hole.
+  g.fillStyle = '#0d0602'; g.fillRect(hx, horizon - 66, 78, 66);
+  MM6.rct(g, hx - 3, horizon - 69, 84, 3, [22, 20, 18]);
+  MM6.rct(g, hx, horizon - 66, 78, 4, [4, 3, 1]);
+  MM6.rct(g, hx, horizon - 66, 4, 66, [4, 3, 1]);
+  MM6.rct(g, hx + 74, horizon - 66, 4, 66, [4, 3, 1]);
+  // Logs, then the fire on top of them.
+  for (let i = 0; i < 3; i++) {
+    const lx = hx + 14 + i * 17;
+    MM6.rct(g, lx, horizon - 12, 15, 5, [56, 34, 16]);
+    MM6.rct(g, lx, horizon - 12, 15, 1, [98, 66, 32]);
+    MM6.rct(g, lx, horizon - 8, 15, 1, [24, 14, 6]);
+  }
+  paintFire(g, hx + 39, horizon - 9, 50, 34, 5);
+  glow(g, hx + 39, horizon - 22, 190, '#ff8828', 1.05);
 
-  // Bar counter along the left, bottles behind it.
-  paintShelf(g, 16, 96, 150, { th: 4 });
-  paintShelf(g, 16, 130, 150, { th: 4 });
+  // Bar counter along the left, bottles behind it. The shelving stops short of
+  // the end of the bar so the landlord has somewhere to stand that is not
+  // inside it.
+  paintShelf(g, 12, 96, 108, { th: 4 });
+  paintShelf(g, 12, 130, 108, { th: 4 });
   // Bottles: painted glass with a shoulder, a neck, a cork and a specular
   // stripe - not 3px bars.
-  for (let i = 0; i < 12; i++) {
-    const x = 22 + i * 12;
+  for (let i = 0; i < 9; i++) {
+    const x = 18 + i * 11;
     const bh = 15 + (i % 3) * 5;
     const liq = [[138, 64, 32], [192, 112, 48], [106, 58, 24], [72, 96, 60]][i % 4];
     const top = 96 - bh;
@@ -87,39 +198,79 @@ export function paintTavernInterior(g, w, h) {
     if (i < 10) { g.fillStyle = rampCss('wood', 6); g.fillRect(x + 2, 128 - 12, 4, 12); }
   }
   paintCounter(g, 0, horizon - 6, 176, 26, { cloth: null });
-  figure(g, 96, horizon - 8, 84, null, null, { cloth: [116, 82, 52], skin: [212, 168, 130], hood: false, robe: false });
+  // The landlord stands at the end of the bar, clear of the bottle shelf.
+  figure(g, 142, horizon - 4, 96, null, null, {
+    seed: 0x2c19, cloth: [116, 82, 52], skin: [212, 168, 130],
+    hood: false, robe: false, apron: [186, 176, 150],
+  });
 
-  // Tables with patrons, tankards and lamps.
-  const tables = [[210, horizon + 44, 1], [330, horizon + 26, 0.85], [124, horizon + 76, 1.15]];
-  for (const [tx, ty, s] of tables) {
-    g.fillStyle = rampCss('wood', 4);
-    g.beginPath(); g.ellipse(tx, ty, 44 * s, 14 * s, 0, 0, Math.PI * 2); g.fill();
-    g.fillStyle = rampCss('wood', 8);
-    g.beginPath(); g.ellipse(tx, ty - 3 * s, 44 * s, 13 * s, 0, 0, Math.PI * 2); g.fill();
-    g.fillStyle = rampCss('wood', 3);
-    g.fillRect(tx - 3, ty, 6, 22 * s);
-    // Tankards.
-    for (let i = 0; i < 3; i++) {
-      g.fillStyle = rampCss('grey', 7);
-      g.fillRect(tx - 22 * s + i * 16 * s, ty - 12 * s, 6, 8);
-      g.fillStyle = rampCss('sand', 11);
-      g.fillRect(tx - 22 * s + i * 16 * s, ty - 13 * s, 6, 2);
+  // --- tables ---------------------------------------------------------------
+  //
+  // Depth is the whole point here. The near table is a third bigger than the
+  // far one and its patrons are taller in the same proportion, so the boards
+  // actually recede; painting all three at one size is what made the room read
+  // as a flat elevation. Far tables go down first, near ones over the top.
+  const tables = [
+    { x: 318, d: 0.14, seeds: [0x9d3, 0x41f7, 0x7b2c] },
+    { x: 222, d: 0.52, seeds: [0xc48a, 0x1e65] },
+    { x: 104, d: 1.00, seeds: [0x5f31, 0xa9d4] },
+  ];
+  for (const T of tables) {
+    // Scale and station both come off the depth, so nothing has to be hand-placed.
+    const s = 0.72 + T.d * 0.62;
+    const ty = Math.round(horizon + 16 + T.d * 74);
+    const tx = Math.round(T.x);
+
+    // Patrons behind the table are drawn first and stand a little higher up the
+    // floor, so the table edge cuts them at the waist the way it should.
+    T.seeds.forEach((seed, i) => {
+      if (i % 2) return;                       // odds sit in front, drawn later
+      const side = i === 0 ? -1 : 1;
+      figure(g, tx + side * 46 * s, ty - 6 * s, Math.round((60 + (seed & 7) * 2.5) * s),
+        null, null, { seed });
+    });
+
+    paintTable(g, tx, ty, s, 1);
+
+    // What is on the table.
+    const mugs = 2 + (T.seeds.length > 2 ? 1 : 0);
+    for (let i = 0; i < mugs; i++) {
+      paintTankard(g, Math.round(tx - 20 * s + i * 17 * s), Math.round(ty - 5 * s), s);
     }
-    // Patrons around it, each a painted person rather than a cut-out.
-    figure(g, tx - 40 * s, ty + 8 * s, 62 * s);
-    figure(g, tx + 40 * s, ty + 8 * s, 58 * s);
-    // Hanging lamp: a brass box with a flame in it and a banded pool of light.
-    const ly = ty - 56 * s;
-    MM6.rct(g, tx - 1, 0, 2, ly, [58, 52, 44]);
-    MM6.rct(g, tx - 6, ly, 12, 10, [128, 96, 40]);
-    MM6.rct(g, tx - 6, ly, 12, 1, [196, 158, 82]);
-    MM6.rct(g, tx - 4, ly + 2, 8, 7, [30, 24, 16]);
-    MM6.flame(g, tx, ly + 9, 6, 9, tx);
-    glow(g, tx, ly + 6, 46 * s, '#ffc060', 0.55);
+    // A trencher of bread, because three mugs and nothing else is a prop shelf.
+    MM6.ellip(g, tx + 22 * s, ty - 6 * s, 8 * s, 3 * s, [126, 116, 92]);
+    MM6.ellip(g, tx + 22 * s, ty - 7 * s, 6 * s, 2 * s, [178, 148, 96]);
+
+    T.seeds.forEach((seed, i) => {
+      if (!(i % 2)) return;
+      figure(g, tx + (i === 1 ? 1 : -1) * 40 * s, ty + 20 * s,
+        Math.round((64 + (seed & 7) * 2.5) * s), null, null, { seed });
+    });
+
+    // Hanging lamp: a brass lantern on a chain, and the light it paints on the
+    // ceiling boards and the table below it.
+    const ly = Math.round(ty - 96 * s);
+    const lw = Math.max(6, Math.round(11 * s));
+    MM6.rct(g, tx - 1, 0, 2, ly, [46, 40, 32]);
+    MM6.rct(g, tx - 1, 0, 1, ly, [92, 82, 66]);
+    MM6.rct(g, tx - lw / 2 - 1, ly - 3, lw + 2, 3, [96, 72, 30]);
+    MM6.rct(g, tx - lw / 2 - 1, ly - 3, lw + 2, 1, [176, 142, 74]);
+    for (let i = 0; i < 9; i++) {
+      const v = MM6.band(1 - Math.abs(i / 8 - 0.3) * 1.4, 4);
+      MM6.rct(g, tx - lw / 2 + i * (lw / 9), ly, Math.max(1, lw / 9 + 1), 9,
+        MM6.mix([48, 34, 12], [188, 152, 76], v));
+    }
+    MM6.rct(g, tx - lw / 2 + 2, ly + 2, lw - 4, 6, [22, 16, 10]);
+    MM6.flame(g, tx, ly + 8, 5, 8, tx);
+    MM6.rct(g, tx - lw / 2 - 1, ly + 9, lw + 2, 2, [116, 88, 36]);
+    // Only the brass itself and the boards immediately around it take light.
+    // The wall behind a lamp hung in the middle of a room is metres away; a
+    // disc of light painted onto it is the halo this screen used to have.
+    glow(g, tx, ly + 5, 34 * s, '#ffc060', 0.7);
   }
 
-  paintClutter(g, 18, h - 6, 'barrel', 34);
-  paintClutter(g, 62, h - 4, 'barrel', 28);
+  paintClutter(g, 14, h - 4, 'barrel', 38);
+  paintClutter(g, 58, h - 2, 'sack', 30);
   vignette(g, w, h);
 }
 
