@@ -14,7 +14,7 @@ import { healCost, worstCondition, CONDITIONS, maxHP, maxSP } from '../../game/s
 import {
   HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, paintWall, paintFloor,
   paintClutter, vignette, members, activeMember, charName, partyGold, spend, hasCondition,
-  clearCondition, conditionIds, contactShadow, MM6, C_WHITE, C_CANARY, C_DIM, C_RED, C_GREEN,
+  clearCondition, conditionIds, contactShadow, poseSeed, MM6, C_WHITE, C_CANARY, C_DIM, C_RED, C_GREEN,
 } from './dialogue.js';
 
 const GODS = ['The Sun', 'The Moon', 'The Sky', 'The Forge', 'The Deep'];
@@ -29,26 +29,30 @@ export function paintTempleInterior(g, w, h, tint = '#e1cd23') {
   // a value of its own - a chiselled joint plus per-slab jitter, not a grid of
   // hairlines laid over a wash at half opacity.
   {
-    let y = horizon, step = 7;
+    let y = horizon, step = 5;
     let row = 0;
     while (y < h) {
       const sy = Math.round(y), sh = Math.max(3, Math.round(step));
-      const pitch = Math.max(14, Math.round(step * 3.6));
+      const pitch = Math.max(12, Math.round(step * 2.6));
       const off = (row & 1) ? Math.round(pitch / 2) : 0;
       for (let x = 0; x < w; x++) {
         const bx = (x + off) % pitch;
         const joint = bx < 2;
         const slab = hash2(Math.floor((x + off) / pitch), row, 44);
         for (let dy = 0; dy < sh && sy + dy < h; dy++) {
-          const top = dy < 2;
-          const v = joint || dy >= sh - 1 ? 0.20 : (top ? 0.62 : 0.48) + slab * 0.22;
-          MM6.rct(g, x, sy + dy, 1, 1, MM6.mix([26, 26, 22], [176, 174, 162], MM6.band(v, 7)));
+          const top = dy < 1;
+          const v = joint || dy >= sh - 1 ? 0.10 : (top ? 0.40 : 0.28) + slab * 0.16;
+          MM6.rct(g, x, sy + dy, 1, 1, MM6.mix([16, 16, 14], [112, 110, 100], MM6.band(v, 7)));
         }
       }
       y += step;
-      step *= 1.34;
+      step *= 1.24;
       row++;
     }
+    // Base course where the wall meets the floor, so the two planes separate.
+    MM6.rct(g, 0, horizon - 5, w, 5, MM6.pc([84, 82, 74]));
+    MM6.rct(g, 0, horizon - 5, w, 1, MM6.pc([150, 148, 136]));
+    MM6.rct(g, 0, horizon, w, 2, MM6.pc([16, 16, 14]));
   }
 
   // Columns: a turned shaft, so the light wraps rather than stepping once.
@@ -75,7 +79,12 @@ export function paintTempleInterior(g, w, h, tint = '#e1cd23') {
   // Rose window. Deep jewel glass - garnet, lapis, bottle-green, amethyst,
   // amber - in heavy black leading, painted pane by pane in hard scanlines.
   // Nothing here is a pure hue and nothing is stroked.
-  const rx = Math.round(w / 2), ry = 88, rr = 62;
+  // It sits low, immediately over the altar. The healing table covers the top
+  // third of the illustration whenever the screen is open, and a rose window
+  // hung up there is a window nobody ever sees; down here it is behind the
+  // altar, it explains the patch of colour on the flagstones, and it clears
+  // the table.
+  const rx = Math.round(w / 2), ry = 152, rr = 44;
   MM6.disc(g, rx, ry, rr + 8, rampCss('stone', 3));
   MM6.disc(g, rx, ry, rr + 5, rampCss('stone', 6));
   const GLASS = [
@@ -111,15 +120,27 @@ export function paintTempleInterior(g, w, h, tint = '#e1cd23') {
   // light and no god rays: a painter of the period drew the *patch* the window
   // throws on the flagstones, keystoned by the viewing angle and stepped in a
   // few flat value bands, and left the nave itself unpainted.
-  MM6.litPatch(g, rx, horizon + 4, rr * 0.70, h - 2, rr * 1.30, tint, 5);
+  // Dimmed: litPatch blends additively, so handing it the glass colour at full
+  // value bleaches the flagstones into a white carpet.
+  const dim = MM6.shade(MM6.hexRGB(tint), 0.46);
+  const dimHex = `#${[0, 1, 2].map((i) => Math.round(dim[i]).toString(16).padStart(2, '0')).join('')}`;
+  MM6.litPatch(g, rx, horizon + 4, rr * 0.58, h - 2, rr * 1.05, dimHex, 4);
 
   // Altar: marble, #D0CCC0 to #F0EEE6 with #A8A498 veining, and modelled - a
   // top slab seen slightly from above, a front face that falls away from it,
   // and a shadowed return on the right. A white box with sticks on it is not a
   // painted object.
   const aw = 124, ad = 13;
-  const ax = rx - aw / 2, ay = horizon + 22, ah = 30;
-  contactShadow(g, rx + 6, ay + ah + 2, aw * 0.58, 5);
+  const ax = rx - aw / 2, ay = horizon + 20, ah = 30;
+  contactShadow(g, rx + 6, ay + ah + 14, aw * 0.62, 6);
+  // Stepped plinth. Without a foot the altar reads as a slab hanging in the air.
+  for (let i = 0; i < 2; i++) {
+    const px = ax - 10 + i * 6, pw = aw + 20 - i * 12, py = ay + ah + i * 6;
+    MM6.rct(g, px, py, pw, 7, MM6.pc([120, 118, 110]));
+    MM6.rct(g, px, py, pw, 2, MM6.pc([188, 186, 176]));
+    MM6.rct(g, px, py + 5, pw, 2, MM6.pc([54, 54, 50]));
+    MM6.rct(g, px + pw - 8, py, 8, 7, MM6.pc([86, 84, 78]));
+  }
   // Front face.
   for (let y = 0; y < ah; y++) {
     const t = y / ah;
@@ -152,8 +173,8 @@ export function paintTempleInterior(g, w, h, tint = '#e1cd23') {
 
   // A robed acolyte to one side.
   figure(g, w * 0.80, horizon + 54, 104, null, null, {
-    seed: 0x7ac3,
-    robe: true, hood: true, cloth: [128, 120, 104], skin: [212, 170, 132], hair: [72, 52, 32],
+    seed: poseSeed('stand', 3172),
+    robe: true, hood: true, cloth: [104, 98, 84], skin: [190, 148, 110], hair: [72, 52, 32],
   });
 
   paintClutter(g, 20, h - 6, 'crate', 26);

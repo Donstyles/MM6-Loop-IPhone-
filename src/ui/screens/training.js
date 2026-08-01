@@ -8,14 +8,14 @@
 // ---------------------------------------------------------------------------
 
 import { rampCss } from '../../core/palette.js';
-import { clamp } from '../../core/rng.js';
+import { clamp, hash2 } from '../../core/rng.js';
 import * as F from '../../art/font.js';
 import * as M from './mm6art.js';
 import { xpForLevel, trainingCost, maxHP, maxSP, CLASSES } from '../../game/stats.js';
 import {
   HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, paintWall, paintFloor,
-  paintShelf, paintClutter, vignette, members, charName, partyGold, spend, C_WHITE, C_GOLD,
-  C_CANARY, C_DIM, C_RED, C_GREEN,
+  paintShelf, paintClutter, vignette, members, charName, partyGold, spend, contactShadow, poseSeed,
+  C_WHITE, C_GOLD, C_CANARY, C_DIM, C_RED, C_GREEN,
 } from './dialogue.js';
 import { LevelUpScreen } from './levelup.js';
 
@@ -29,58 +29,102 @@ export function paintTrainingInterior(g, w, h) {
   // High windows throwing light bars onto the sand.
   for (let i = 0; i < 3; i++) {
     const wx = 54 + i * 140;
-    g.fillStyle = rampCss('wood', 3); g.fillRect(wx - 4, 18, 56, 60);
-    g.fillStyle = rampCss('sky', 12); g.fillRect(wx, 22, 48, 52);
-    g.fillStyle = rampCss('sky', 14); g.fillRect(wx, 22, 48, 22);
-    g.fillStyle = rampCss('wood', 5);
-    g.fillRect(wx + 22, 22, 3, 52); g.fillRect(wx, 46, 48, 3);
-    glow(g, wx + 24, 48, 60, '#ffe8b0', 0.35);
-    // The shaft of light on the sand, kept faint so the floor stays a floor.
-    g.save();
-    g.globalAlpha = 0.055;
-    poly(g, [wx, horizon, wx + 48, horizon, wx + 76, h, wx - 20, h], '#fff0c0');
-    g.restore();
+    // Reveal, then glazing: banded daylight with old green glass at the edges.
+    M.rct(g, wx - 5, 17, 58, 62, [58, 42, 24]);
+    M.rct(g, wx - 5, 17, 58, 2, [124, 94, 56]);
+    M.rct(g, wx - 5, 77, 58, 2, [26, 18, 10]);
+    for (let y = 0; y < 52; y++) {
+      const t = M.band(y / 52, 6);
+      for (let x = 0; x < 48; x++) {
+        const edge = Math.min(x, 47 - x, y, 51 - y) < 3 ? 0.80 : 1;
+        M.rct(g, wx + x, 22 + y, 1, 1,
+          M.shade(M.mix([222, 236, 248], [150, 180, 208], t), edge));
+      }
+    }
+    M.rct(g, wx + 22, 22, 3, 52, [64, 48, 28]);
+    M.rct(g, wx, 46, 48, 3, [64, 48, 28]);
+    M.rct(g, wx + 22, 22, 1, 52, [122, 96, 58]);
+    M.rct(g, wx, 46, 48, 1, [122, 96, 58]);
+    glow(g, wx + 24, 48, 120, '#ffe8b0', 0.45);
+    // The patch the window throws on the sand, keystoned and banded. No shaft:
+    // MM6 has no volumetric light anywhere in the game.
+    // Dim and narrow: litPatch blends additively, so a full-value daylight
+    // colour here burns the boards out into three white spotlights.
+    M.litPatch(g, wx + 30, horizon, 16, h - 4, 34, '#8c7448', 3);
   }
 
-  // Weapon rack on the right wall.
+  // Weapon rack on the right wall: a pegged board with real weapons on it.
   paintShelf(g, w - 132, 128, 110, { th: 5 });
   for (let i = 0; i < 6; i++) {
     const x = w - 124 + i * 18;
-    g.fillStyle = rampCss('wood', 6); g.fillRect(x, 84, 3, 44);
-    g.fillStyle = rampCss('grey', 9);
-    if (i % 2) { g.fillRect(x - 3, 78, 9, 8); } else { g.fillRect(x - 1, 74, 6, 12); }
+    M.rct(g, x + 2, 86, 3, 42, [42, 30, 18]);              // shadow on the plaster
+    // Haft, with a lit side.
+    for (let y = 84; y < 128; y++) {
+      M.rct(g, x, y, 3, 1, [72, 50, 28]);
+      M.rct(g, x, y, 1, 1, [126, 94, 54]);
+    }
+    if (i % 2) {
+      // Axe head: a lit bevel, a dark flat and a socket.
+      poly(g, [x - 4, 76, x + 3, 74, x + 7, 80, x + 3, 88, x - 4, 86], M.pc([160, 164, 172]));
+      poly(g, [x - 4, 78, x + 1, 77, x + 3, 82, x + 1, 86, x - 4, 85], M.pc([96, 100, 108]));
+      M.rct(g, x - 5, 78, 1, 8, [214, 218, 226]);
+      M.rct(g, x, 74, 3, 14, [58, 42, 24]);
+    } else {
+      // Spear head: a leaf blade with a raised midrib.
+      poly(g, [x + 1, 68, x + 5, 78, x + 1, 86, x - 3, 78], M.pc([104, 108, 116]));
+      poly(g, [x + 1, 69, x + 3, 78, x + 1, 84, x, 78], M.pc([196, 200, 208]));
+      M.rct(g, x - 1, 84, 5, 3, [138, 106, 40]);
+    }
   }
 
-  // Straw practice dummies.
+  // Straw practice dummies: a post, a bound straw body with visible binding,
+  // a crossbar for arms and a burlap head, all sitting in their own shadow.
   for (const [dx, scale] of [[96, 1], [w - 190, 0.86]]) {
-    const base = horizon + 52 * scale;
-    g.fillStyle = rampCss('wood', 4);
-    g.fillRect(dx - 2, base - 74 * scale, 5, 74 * scale);
-    g.fillStyle = rampCss('sand', 8);
-    g.beginPath(); g.ellipse(dx, base - 78 * scale, 13 * scale, 15 * scale, 0, 0, Math.PI * 2); g.fill();
-    g.fillStyle = rampCss('sand', 6);
-    g.fillRect(dx - 20 * scale, base - 66 * scale, 40 * scale, 22 * scale);
-    g.fillStyle = rampCss('wood', 5);
-    g.fillRect(dx - 26 * scale, base - 62 * scale, 52 * scale, 4);
-    g.fillStyle = rampCss('sand', 11);
-    g.fillRect(dx - 18 * scale, base - 64 * scale, 3, 18 * scale);
-    // Sand kicked up at the foot.
-    g.save(); g.globalAlpha = 0.5;
-    g.fillStyle = rampCss('sand', 5);
-    g.beginPath(); g.ellipse(dx, base + 2, 26 * scale, 6, 0, 0, Math.PI * 2); g.fill();
-    g.restore();
+    const base = Math.round(horizon + 52 * scale);
+    contactShadow(g, dx + 4, base + 2, 26 * scale, 5);
+    M.rct(g, dx - 2, base - 74 * scale, 5, 74 * scale, [58, 42, 24]);
+    M.rct(g, dx - 2, base - 74 * scale, 1, 74 * scale, [110, 82, 48]);
+    // Crossbar arms.
+    M.rct(g, dx - 27 * scale, base - 63 * scale, 54 * scale, 5, [66, 48, 26]);
+    M.rct(g, dx - 27 * scale, base - 63 * scale, 54 * scale, 1, [124, 94, 54]);
+    // Straw torso: vertical stalks, lit from the upper left, bound twice.
+    const tw = Math.round(21 * scale), th = Math.round(30 * scale);
+    for (let x = -tw; x <= tw; x++) {
+      const u = (x + tw) / (2 * tw);
+      const v = M.band(1 - Math.abs(u - 0.30) * 1.30, 5);
+      for (let y = 0; y < th; y++) {
+        const stalk = hash2(x, Math.floor(y / 4), 51) * 0.16 - 0.08;
+        M.rct(g, dx + x, base - 66 * scale + y, 1, 1,
+          M.mix([70, 56, 26], [224, 198, 128], clamp(v + stalk, 0, 1)));
+      }
+    }
+    for (const by of [0.24, 0.68]) {
+      const yy = Math.round(base - 66 * scale + th * by);
+      M.rct(g, dx - tw, yy, tw * 2, 2, [96, 72, 34]);
+      M.rct(g, dx - tw, yy, tw * 2, 1, [156, 122, 62]);
+    }
+    // Head.
+    const hr = Math.round(11 * scale);
+    for (let dy = -hr; dy <= hr; dy++) {
+      const k = Math.round(hr * Math.sqrt(Math.max(0, 1 - (dy * dy) / (hr * hr))));
+      for (let ddx = -k; ddx <= k; ddx++) {
+        const d = Math.sqrt((ddx + 4) * (ddx + 4) + (dy + 4) * (dy + 4)) / (hr * 1.8);
+        M.rct(g, dx + ddx, base - 78 * scale + dy, 1, 1,
+          M.mix([214, 190, 140], [64, 50, 28], M.band(clamp(d, 0, 1), 5)));
+      }
+    }
+    M.rct(g, dx - hr, base - 78 * scale + Math.round(hr * 0.4), hr * 2, 2, [92, 70, 36]);
   }
 
-  // Two sparring silhouettes in the middle distance.
-  figure(g, w * 0.44, horizon + 66, 84, 'rgba(20,16,14,0.9)', 'rgba(255,224,160,0.4)');
-  figure(g, w * 0.56, horizon + 70, 88, 'rgba(20,16,14,0.9)', 'rgba(255,224,160,0.35)');
-  g.strokeStyle = rampCss('grey', 11); g.lineWidth = 2;
-  g.beginPath();
-  g.moveTo(w * 0.47, horizon + 26); g.lineTo(w * 0.53, horizon + 16);
-  g.stroke();
+  // Two sparring figures in the middle distance, with a sword between them.
+  figure(g, w * 0.42, horizon + 72, 92, null, null, { seed: poseSeed('reach', 1741) });
+  figure(g, w * 0.58, horizon + 78, 98, null, null, { seed: poseSeed('lean', 903) });
+  // The blade: a lit edge over a dark flat, drawn as two offset bars.
+  M.lineH(g, w * 0.46, horizon + 30, w * 0.54, horizon + 18, M.pc([64, 66, 72]), 3);
+  M.lineH(g, w * 0.46, horizon + 29, w * 0.54, horizon + 17, M.pc([198, 202, 210]), 1);
 
-  paintClutter(g, 20, h - 8, 'barrel', 30);
-  paintClutter(g, w - 48, h - 6, 'crate', 26);
+  paintClutter(g, 18, h - 6, 'barrel', 32);
+  paintClutter(g, w - 52, h - 4, 'crate', 28);
   vignette(g, w, h);
 }
 

@@ -12,11 +12,11 @@
 
 
 import { rampCss } from '../../core/palette.js';
-import { clamp, Rand } from '../../core/rng.js';
+import { clamp, hash2 } from '../../core/rng.js';
 import * as F from '../../art/font.js';
 import { maxHP, maxSP } from '../../game/stats.js';
 import {
-  Screen, PANEL, A, plate, baked, glow, poly, rngFor, paintFloor, paintClutter, vignette,
+  Screen, PANEL, A, baked, poly, rngFor, paintFloor, paintClutter, vignette,
   members, hasCondition, clearCondition, say, MM6, C_WHITE, C_GOLD, C_CANARY, C_DIM,
   C_RED, C_GREEN,
 } from './dialogue.js';
@@ -32,19 +32,100 @@ const GLASS = { x: 275, y: 167, w: 46, h: 66 };
 
 const MINUTES_PER_SECOND = 60 * 8;   // the wait animation runs fast, not instant
 
+/**
+ * MM6's message box: the 9-slice carved-wood frame (`cornr_*` / `edge_*`) -
+ * a #3E2E1E body inside an #8A6E46 bevel, with a corner block pinned at each
+ * end of it. Never a black rounded rectangle with a dotted stroke.
+ */
+export function msgFrame(ctx, x, y, w, h) {
+  const body = [62, 46, 30], bevel = [138, 110, 70], key = [22, 15, 8];
+  x |= 0; y |= 0; w |= 0; h |= 0;
+  MM6.rct(ctx, x, y, w, h, key);
+  MM6.rct(ctx, x + 1, y + 1, w - 2, h - 2, bevel);
+  // Tooled grain along the frame band: the edge pieces are carved, not filled.
+  for (let i = 2; i < w - 2; i += 3) {
+    MM6.rct(ctx, x + i, y + 2, 2, 1, MM6.shade(bevel, 0.74));
+    MM6.rct(ctx, x + i, y + h - 3, 2, 1, MM6.shade(bevel, 0.62));
+  }
+  MM6.rct(ctx, x + 1, y + 1, w - 2, 1, MM6.mix(bevel, [255, 236, 200], 0.36));
+  MM6.rct(ctx, x + 1, y + h - 2, w - 2, 1, MM6.shade(bevel, 0.52));
+  MM6.rct(ctx, x + 4, y + 4, w - 8, h - 8, MM6.shade(body, 0.6));
+  MM6.rct(ctx, x + 5, y + 5, w - 10, h - 10, body);
+  MM6.rct(ctx, x + 5, y + h - 6, w - 10, 1, MM6.mix(body, [138, 110, 70], 0.4));
+  // Corner blocks.
+  for (const [cx, cy] of [[x + 1, y + 1], [x + w - 7, y + 1], [x + 1, y + h - 7], [x + w - 7, y + h - 7]]) {
+    MM6.rct(ctx, cx, cy, 6, 6, MM6.shade(bevel, 0.82));
+    MM6.rct(ctx, cx, cy, 6, 1, MM6.mix(bevel, [255, 236, 200], 0.5));
+    MM6.rct(ctx, cx + 2, cy + 2, 2, 2, MM6.shade(bevel, 0.5));
+  }
+}
+
+/**
+ * A painted bedroll lying on the floor: a rolled wool mat with a blanket
+ * turned back over it and a bundle for a pillow. Built from integer scanlines
+ * so the silhouette is cut, never a half-ellipse clipped by the panel edge.
+ */
+function paintBedroll(g, cx, cy, len, tone) {
+  const wool = MM6.hexRGB(tone);
+  const lit = MM6.mix(wool, [255, 240, 214], 0.30);
+  const dark = MM6.shade(wool, 0.52);
+  const half = Math.round(len / 2);
+  const H = Math.max(7, Math.round(len * 0.30));
+  const top = cy - Math.round(H / 2);
+  // Cast shadow on the ground, a stippled skirt under the roll.
+  MM6.stipple(g, cx - half - 2, cy + Math.round(H / 2) - 2, len + 6, 4, [22, 16, 10], 0.55);
+  for (let j = 0; j < H; j++) {
+    // The round of the roll: five value steps from the lit ridge down to the
+    // shaded flank, with the ends bitten square rather than curved.
+    const t = j / (H - 1);
+    const bite = j === 0 || j === H - 1 ? 7 : j === 1 || j === H - 2 ? 4 : j === 2 || j === H - 3 ? 2 : 0;
+    const y = top + j;
+    const c = t < 0.16 ? MM6.mix(wool, lit, 0.45)
+      : t < 0.34 ? lit
+        : t < 0.58 ? wool
+          : t < 0.80 ? MM6.mix(wool, dark, 0.5) : dark;
+    MM6.rct(g, cx - half + bite, y, len - bite * 2, 1, c);
+  }
+  // Two straps buckled round it, and the blanket turned back at the head.
+  for (const sx of [-Math.round(len * 0.22), Math.round(len * 0.16)]) {
+    MM6.rct(g, cx + sx, top + 1, 3, H - 2, MM6.shade(wool, 0.42));
+    MM6.rct(g, cx + sx, top + 2, 1, H - 4, MM6.mix(wool, [255, 236, 200], 0.22));
+  }
+  MM6.rct(g, cx + half - 9, top + 2, 7, H - 4, MM6.shade(wool, 0.60));
+  MM6.rct(g, cx + half - 9, top + 2, 7, 1, lit);
+  // The bundle at the head end, used for a pillow.
+  MM6.ellip(g, cx - half + 5, top + 1, 8, 5, MM6.mix(wool, [200, 186, 150], 0.7));
+  MM6.ellip(g, cx - half + 4, top, 6, 3, [212, 200, 168]);
+}
+
 /** Camp interior: rock wall, bedrolls, a banked fire and the window opening. */
 export function paintRestPanel(g, w, h) {
-  // Cave-mouth wall.
-  g.fillStyle = rampCss('stone', 3);
-  g.fillRect(0, 0, w, h);
-  for (let y = 0; y < h; y += 4) {
-    for (let x = 0; x < w; x += 4) {
-      const n = ((x * 7 + y * 13) % 17) / 17;
-      g.fillStyle = rampCss('stone', 2 + Math.round(n * 4));
-      g.fillRect(x, y, 4, 4);
+  // Back wall: coursed ashlar, not a noise field. Every block is a painted
+  // slab with its own value, a lit top arris and a shadowed foot; the mortar
+  // is the dark ground showing between them.
+  const floorTop = h - 120;
+  g.fillStyle = rampCss('stone', 1);
+  g.fillRect(0, 0, w, floorTop + 4);
+  const BW = 34, BH = 17;
+  for (let row = 0; row * BH < floorTop + 4; row++) {
+    const y = row * BH;
+    const off = (row & 1) ? -Math.round(BW / 2) : 0;
+    for (let bx = off; bx < w; bx += BW) {
+      const n = hash2(bx * 0.37, row, 11);
+      const chip = hash2(bx * 0.11, row * 3, 29);
+      const base = MM6.mix([54, 50, 44], [120, 114, 102], 0.24 + n * 0.42);
+      MM6.rct(g, bx + 1, y + 1, BW - 2, BH - 2, base);
+      MM6.rct(g, bx + 1, y + 1, BW - 2, 1, MM6.mix(base, [236, 230, 214], 0.34));
+      MM6.rct(g, bx + 1, y + BH - 2, BW - 2, 1, MM6.shade(base, 0.62));
+      MM6.rct(g, bx + 1, y + 1, 1, BH - 2, MM6.mix(base, [236, 230, 214], 0.18));
+      MM6.rct(g, bx + BW - 2, y + 1, 1, BH - 2, MM6.shade(base, 0.70));
+      // Weathering: a chipped corner and a couple of pits per block.
+      if (chip > 0.72) MM6.rct(g, bx + 2, y + BH - 5, 3, 3, MM6.shade(base, 0.74));
+      if (chip < 0.22) MM6.rct(g, bx + BW - 7, y + 3, 2, 2, MM6.shade(base, 0.78));
+      MM6.stipple(g, bx + 1, y + 1, BW - 2, BH - 2, MM6.shade(base, 0.80), 0.10);
     }
   }
-  paintFloor(g, 0, h - 120, w, 120, { ramp: 'dirt', seed: 202 });
+  paintFloor(g, 0, floorTop, w, 120, { ramp: 'dirt', seed: 202 });
 
   // Window reveal, so the sky sits in a hole in the rock.
   g.fillStyle = rampCss('wood', 3);
@@ -55,6 +136,12 @@ export function paintRestPanel(g, w, h) {
   // Campfire on the right: a ring of stones, a leaning stack of logs and a
   // flame sprite. The key light for the whole panel comes off it.
   const fx = w - 96, fy = h - 104;
+  // The light it throws is painted into the floor as three hard bands - a
+  // radial alpha falloff has no index in a 256-colour frame.
+  for (const [rx, ry, c] of [[92, 34, [96, 74, 44]], [66, 25, [124, 94, 52]], [44, 17, [148, 112, 58]]]) {
+    MM6.ellip(g, fx, fy + 10, rx, ry, c);
+  }
+  MM6.stipple(g, fx - 112, fy - 12, 224, 56, [150, 112, 56], 0.22);
   for (let i = 0; i < 11; i++) {
     const a = (i / 11) * Math.PI * 2;
     const sx = fx + Math.cos(a) * 44, sy = fy + Math.sin(a) * 17;
@@ -73,22 +160,17 @@ export function paintRestPanel(g, w, h) {
   for (let i = 0; i < 5; i++) {
     MM6.flame(g, fx - 18 + i * 9, fy + 2, 16 + (i % 3) * 6, 34 + (i % 4) * 11, i * 1.9);
   }
-  glow(g, fx, fy - 12, 86, '#ff7818', 0.75);
 
-  // Bedrolls in the foreground.
-  for (let i = 0; i < 3; i++) {
-    const bx = 34 + i * 84;
-    g.fillStyle = rampCss(['blood', 'swamp', 'water'][i], 4);
-    g.beginPath(); g.ellipse(bx, h - 30, 38, 13, -0.1, 0, Math.PI * 2); g.fill();
-    g.fillStyle = rampCss(['blood', 'swamp', 'water'][i], 6);
-    g.beginPath(); g.ellipse(bx - 6, h - 33, 30, 9, -0.1, 0, Math.PI * 2); g.fill();
-    g.fillStyle = rampCss('sand', 9);
-    g.beginPath(); g.ellipse(bx + 26, h - 36, 10, 7, 0, 0, Math.PI * 2); g.fill();
-  }
+  // Bedrolls laid out on the floor, well inside the panel so nothing is cut
+  // in half by its edge.
+  // Two bedrolls laid out down the free side of the camp, clear of the keys
+  // and clear of the panel edge - nothing here is a shape cut in half.
+  paintBedroll(g, 36, h - 68, 62, '#8a7048');
+  paintBedroll(g, 34, h - 26, 62, '#6e6a58');
 
-  paintClutter(g, 12, h - 6, 'sack', 24);
+  paintClutter(g, 262, h - 4, 'sack', 24);
   paintClutter(g, w - 42, h - 8, 'barrel', 26);
-  vignette(g, w, h, 0.45);
+  vignette(g, w, h, 0.32);
 }
 
 export class RestScreen extends Screen {
@@ -212,7 +294,26 @@ export class RestScreen extends Screen {
     this.drawStatus(ctx);
   }
 
-  /** The window: sky colour, sun or moon, and clouds that drift while you wait. */
+  /**
+   * One painted cloud: a flat-bottomed bank of lumps with a lit crown, a
+   * shadowed underside and a 1-bit dithered lower edge. Nothing in MM6's sky
+   * has a soft edge, so nothing here does either.
+   */
+  paintCloud(ctx, cx, cy, s, body, lit, shade) {
+    const lumps = [[-1.05, 0.10, 0.86], [-0.35, -0.30, 1.10], [0.45, -0.14, 0.95], [1.15, 0.12, 0.72]];
+    const base = Math.round(cy + 7 * s);
+    for (const [dx, dy, r] of lumps) {
+      MM6.ellip(ctx, cx + dx * 15 * s, cy + dy * 9 * s, 13 * s * r, 8 * s * r, body);
+    }
+    MM6.rct(ctx, Math.round(cx - 22 * s), base - Math.round(4 * s), Math.round(44 * s), Math.round(4 * s), body);
+    for (const [dx, dy, r] of lumps) {
+      MM6.ellip(ctx, cx + dx * 15 * s, cy + dy * 9 * s - 2 * s, 11 * s * r, 4 * s * r, lit);
+    }
+    MM6.rct(ctx, Math.round(cx - 22 * s), base - Math.round(2 * s), Math.round(44 * s), Math.round(2 * s), shade);
+    MM6.stipple(ctx, Math.round(cx - 22 * s), base, Math.round(44 * s), 2, shade, 0.5);
+  }
+
+  /** The window: the sky's own colour and its cloud cover, drifting as you wait. */
   drawSky(ctx) {
     const c = this.clock;
     const tod = c ? (c.minutes % 1440) / 1440 : 0.4;
@@ -236,44 +337,21 @@ export class RestScreen extends Screen {
       ctx.fillRect(SKY.x, SKY.y + Math.floor((i * SKY.h) / 16), SKY.w, Math.ceil(SKY.h / 16) + 1);
     }
 
-    // Sun or moon, tracking the hour across the opening. The disc is a hard
-    // 1-bit silhouette with a couple of banded rings round it - a lemon circle
-    // with a soft alpha halo cannot exist in an indexed frame.
-    const dayT = clamp((hour - 6) / 12, 0, 1);
-    const nightT = clamp(((hour + 24 - 21) % 24) / 8, 0, 1);
-    const bx = SKY.x + SKY.w * (night ? nightT : dayT);
-    const by = SKY.y + SKY.h * 0.75 - Math.sin((night ? nightT : dayT) * Math.PI) * SKY.h * 0.55;
-    if (night) {
-      // Stars first, so the moon sits over them.
-      const r = new Rand(7);
-      for (let i = 0; i < 30; i++) {
-        MM6.rct(ctx, SKY.x + r.int(0, SKY.w - 1), SKY.y + r.int(0, SKY.h * 0.7), 1, 1,
-          i % 4 ? [192, 208, 224] : [255, 255, 255]);
-      }
-      MM6.lightPool(ctx, bx, by, 24, '#9fb8d0', 0.45);
-      MM6.disc(ctx, bx, by, 9, '#e8f0f8');
-      MM6.disc(ctx, bx, by, 8, '#d0dcea');
-      MM6.disc(ctx, bx - 5, by - 2, 8, rampCss('water', 3));
-    } else {
-      MM6.lightPool(ctx, bx, by, 30, dusk ? '#c86828' : '#d8c060', 0.5);
-      MM6.disc(ctx, bx, by, 11, dusk ? '#c87838' : '#e8dc9c');
-      MM6.disc(ctx, bx, by, 8, dusk ? '#e8a050' : '#f8f0c8');
-    }
-
-    // Clouds drift, faster while time is being burned. Painted as stacked
-    // scanline bars, so the silhouette is cut rather than feathered.
+    // There is no sun disc, no moon and no stars anywhere in MM6 - the sky is
+    // cloud, lit or unlit - so the window shows cloud cover and nothing else.
+    // It drifts, faster while time is being burned.
     const speed = this.pending ? 26 : 3;
-    const off = (this.t * speed) % (SKY.w + 120);
-    for (let i = 0; i < 4; i++) {
-      const cx = SKY.x - 60 + ((off + i * 90) % (SKY.w + 120));
-      const cy = SKY.y + 18 + (i % 3) * 22;
-      const s = 0.7 + (i % 3) * 0.25;
-      const body = night ? [58, 70, 92] : dusk ? [190, 140, 108] : [214, 220, 230];
-      const lit = night ? [86, 100, 124] : dusk ? [226, 178, 132] : [246, 248, 252];
-      for (let k = 0; k < 4; k++) {
-        MM6.ellip(ctx, cx + k * 12 * s, cy + (k % 2) * 3, 14 * s, 6 * s, body);
-        MM6.ellip(ctx, cx + k * 12 * s, cy + (k % 2) * 3 - 2, 12 * s, 3 * s, lit);
-      }
+    const off = (this.t * speed) % (SKY.w + 160);
+    const body = night ? [46, 56, 74] : dusk ? [176, 128, 100] : [206, 212, 224];
+    const lit = night ? [72, 84, 106] : dusk ? [224, 176, 130] : [244, 246, 250];
+    const shd = night ? [30, 38, 52] : dusk ? [130, 92, 76] : [166, 174, 190];
+    // The sky is never empty in MM6: it is covered, and the banks compress
+    // toward the horizon, so the low ones are flatter and closer together.
+    for (let i = 0; i < 11; i++) {
+      const cx = SKY.x - 80 + ((off * (0.55 + (i % 4) * 0.22) + i * 47) % (SKY.w + 160));
+      const cy = SKY.y + 6 + (i % 5) * 17;
+      const s = 1.15 - (i % 5) * 0.15;
+      this.paintCloud(ctx, cx, cy, s, body, lit, shd);
     }
     // Hills along the bottom of the opening: two ridges with a lit crest, not
     // flat triangles.
@@ -285,6 +363,16 @@ export class RestScreen extends Screen {
         ctx.fillRect(SKY.x + x, top, 1, SKY.y + SKY.h - top);
         ctx.fillStyle = rampCss('foliage', night ? shd + 1 : ramp2 + 2);
         ctx.fillRect(SKY.x + x, top, 1, 2);
+        // Woodland on the slope: a checker-dithered band under the crest and a
+        // tree mark here and there, so the ridge is not a flat cut-out.
+        ctx.fillStyle = rampCss('foliage', night ? shd + 1 : ramp2 + 3);
+        for (let k = 2; k < 9; k++) {
+          if (((SKY.x + x + top + k) & 1) === 0) ctx.fillRect(SKY.x + x, top + k, 1, 1);
+        }
+        if (((x * 7 + depth * 13) % 23) === 0) {
+          ctx.fillStyle = rampCss('foliage', night ? shd : Math.max(1, ramp2 - 1));
+          ctx.fillRect(SKY.x + x, top + 1, 2, 3);
+        }
       }
     }
     ctx.restore();
@@ -329,9 +417,13 @@ export class RestScreen extends Screen {
       const t = i / (g.h - 1);
       const pinch = Math.abs(t - 0.5) * 2;
       const k = Math.max(2, Math.round((g.w / 2 - 5) * (0.16 + pinch * 0.84)));
-      MM6.rct(ctx, g.x + g.w / 2 - k, g.y + i, k * 2, 1, [96, 116, 130]);
-      MM6.rct(ctx, g.x + g.w / 2 - k, g.y + i, Math.max(1, (k * 0.5) | 0), 1, [154, 178, 194]);
-      MM6.rct(ctx, g.x + g.w / 2 + k - 1, g.y + i, 1, 1, [56, 70, 82]);
+      const mid = g.x + g.w / 2;
+      // Blown glass: a dark rim on the silhouette, a body a couple of steps
+      // above it and one hard specular band down the left third.
+      MM6.rct(ctx, mid - k, g.y + i, k * 2, 1, [74, 84, 84]);
+      MM6.rct(ctx, mid - k, g.y + i, 1, 1, [40, 46, 48]);
+      MM6.rct(ctx, mid - k + Math.max(1, (k * 0.34) | 0), g.y + i, 2, 1, [172, 190, 186]);
+      MM6.rct(ctx, mid + k - 2, g.y + i, 2, 1, [50, 58, 60]);
     }
 
     // Sand: top cone empties, bottom fills.
@@ -368,19 +460,25 @@ export class RestScreen extends Screen {
       ['hour', BTN_HOUR, 'Wait 1 Hour', !this.pending],
       ['five', BTN_FIVE, 'Wait 5 Minutes', !this.pending],
     ];
+    // Carved wood keys, not grey slabs: the camp is lit by firelight, and a
+    // pale label on dark oak is the only pairing that stays legible in it.
+    let seed = 12;
     for (const [id, r, label, on] of defs) {
       const hit = this.ui.region(`rest:${id}`, r.x, r.y, r.w, r.h,
         id === 'rest8' && !on ? ((p.food | 0) <= 0 ? 'You have no food.' : 'Enemies are too close.') : null);
-      A.button(ctx, r.x, r.y, r.w, r.h, null, hit.down && on ? 'down' : 'up');
-      F.drawText(ctx, label, r.x + r.w / 2, r.y + (r.h - 11) / 2 + (hit.down && on ? 1 : 0), {
-        align: 'center', color: !on ? C_DIM : hit.hover ? C_GOLD : C_WHITE,
+      const d = A.button(ctx, r.x, r.y, r.w, r.h, null,
+        !on ? 'disabled' : hit.down ? 'down' : hit.hover ? 'hot' : 'up',
+        { material: 'wood', seed: (seed += 7) });
+      F.drawText(ctx, label, r.x + r.w / 2 + d, r.y + (r.h - 11) / 2 + d, {
+        align: 'center', color: !on ? C_DIM : hit.hover ? C_GOLD : C_CANARY,
       });
       if (hit.click && on) { this.sound('click'); this.begin(id); }
     }
     const ex = this.ui.region('rest:exit', BTN_EXIT.x, BTN_EXIT.y, BTN_EXIT.w, BTN_EXIT.h);
-    A.button(ctx, BTN_EXIT.x, BTN_EXIT.y, BTN_EXIT.w, BTN_EXIT.h, null, ex.down ? 'down' : 'up');
-    F.drawText(ctx, 'Exit', BTN_EXIT.x + BTN_EXIT.w / 2, BTN_EXIT.y + (BTN_EXIT.h - 11) / 2,
-      { align: 'center', color: ex.hover ? C_GOLD : C_WHITE });
+    const ed = A.button(ctx, BTN_EXIT.x, BTN_EXIT.y, BTN_EXIT.w, BTN_EXIT.h, null,
+      ex.down ? 'down' : ex.hover ? 'hot' : 'up', { material: 'wood', seed: 47 });
+    F.drawText(ctx, 'Exit', BTN_EXIT.x + BTN_EXIT.w / 2 + ed, BTN_EXIT.y + (BTN_EXIT.h - 11) / 2 + ed,
+      { align: 'center', color: ex.hover ? C_GOLD : C_CANARY });
     if (ex.click) { this.sound('click'); this.close(); }
   }
 
@@ -396,10 +494,10 @@ export class RestScreen extends Screen {
     // twelve pixels below, and food is on the right panel. All that belongs
     // here is whatever the last action reported.
     if (this.messageT < 8 && this.message) {
-      const my = PANEL.y + PANEL.h - 34;
-      MM6.stipple(ctx, PANEL.x + 12, my, PANEL.w - 24, 22, [0, 0, 0], 0.66);
-      F.drawText(ctx, this.message, PANEL.x + PANEL.w / 2, my + 6,
-        { align: 'center', color: this.messageColor || C_WHITE, maxWidth: PANEL.w - 40 });
+      const my = PANEL.y + PANEL.h - 40;
+      msgFrame(ctx, PANEL.x + 12, my, PANEL.w - 24, 30);
+      F.drawText(ctx, this.message, PANEL.x + PANEL.w / 2, my + 10,
+        { align: 'center', color: this.messageColor || C_WHITE, maxWidth: PANEL.w - 48 });
     }
   }
 

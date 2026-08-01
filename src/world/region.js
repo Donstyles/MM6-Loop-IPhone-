@@ -959,36 +959,67 @@ const SURFACE_OF = {
  * come from the terrain palette, then roads, water and settlements go on top.
  */
 function buildMinimapPlate(hm, def, towns, dungeons, roads) {
-  // 8 pixels per 512-unit tile. The panel is often zoomed to a few tiles, and
-  // at coarse sampling that crop is just flat quadrants of colour - which is
-  // exactly what a schematic-looking automap is.
+  // 8 plate pixels per 512-unit tile. The map book crops this at up to 1.5x,
+  // so the plate has to carry detail *below* tile size or the page comes out
+  // as flat quadrants of one colour: heights are sampled per pixel rather than
+  // per cell, the boundary between two ground textures is broken up rather
+  // than stepped, and coast, roads and buildings are drawn on top as line work.
   const S = 1024;
   const c = document.createElement('canvas');
   c.width = S; c.height = S;
   const g = c.getContext('2d');
   const step = hm.size / S;
+  const N = hm.size, HS = N + 1;
 
   const tint = {};
   for (const id of hm.texIds) tint[id] = textureTint(id);
+  /** Bilinear height, in tile coordinates. */
+  const hAt = (u, v) => {
+    const i = clamp(Math.floor(u), 0, N - 1), j = clamp(Math.floor(v), 0, N - 1);
+    const fu = clamp(u - i, 0, 1), fv = clamp(v - j, 0, 1);
+    const a = hm.height[j * HS + i], b = hm.height[j * HS + i + 1];
+    const d = hm.height[(j + 1) * HS + i], e = hm.height[(j + 1) * HS + i + 1];
+    return (a + (b - a) * fu) + ((d + (e - d) * fu) - (a + (b - a) * fu)) * fv;
+  };
+
   const img = g.createImageData(S, S);
   for (let y = 0; y < S; y++) {
     for (let x = 0; x < S; x++) {
-      const i = Math.min(hm.size - 1, (x * step) | 0);
-      const j = Math.min(hm.size - 1, (y * step) | 0);
-      const id = hm.texIds[hm.tileTex[j * hm.size + i]];
+      const u = x * step, v = y * step;
+      // Break the cell boundary with a per-pixel jitter, the way a painted map
+      // has ragged edges between meadow and scrub instead of a tile seam.
+      const i = clamp(Math.floor(u + (hash2(x, y, 17) - 0.5) * 0.7), 0, N - 1);
+      const j = clamp(Math.floor(v + (hash2(x, y, 29) - 0.5) * 0.7), 0, N - 1);
+      const id = hm.texIds[hm.tileTex[j * N + i]];
       const t = tint[id] || tint[hm.texIds[0]];
-      const h = hm.height[j * (hm.size + 1) + i];
+      const h = hAt(u, v);
       let r = t.r * 255, gg = t.g * 255, b = t.b * 255;
-      if (h < hm.water) { r = 34; gg = 62; b = 96; }
-      else {
-        // Relief shading so the plate reads as landform, not a colour blob.
-        // Sampled against the cell one step north-west, which is where the
-        // automap's implied light comes from.
-        const hl = hm.height[Math.max(0, j - 1) * (hm.size + 1) + Math.max(0, i - 1)];
-        const k = clamp(1 + (h - hl) / 260, 0.45, 1.55);
-        r *= k; gg *= k; b *= k;
+      if (h < hm.water) {
+        // Sea and lake: three depth bands, and a hard line along the shore.
+        const d = (hm.water - h) / 900;
+        const k = d > 0.55 ? 0 : d > 0.22 ? 1 : 2;
+        r = [22, 30, 42][k]; gg = [46, 58, 76][k]; b = [78, 96, 112][k];
+        const coast = hAt(u + step * 1.5, v) >= hm.water || hAt(u - step * 1.5, v) >= hm.water
+          || hAt(u, v + step * 1.5) >= hm.water || hAt(u, v - step * 1.5) >= hm.water;
+        if (coast) { r = 20; gg = 26; b = 30; }
+        // Cartographer's swell: a faint stipple that dies away from the shore.
+        else if (k === 2 && ((x + y) & 7) === 0) { r += 14; gg += 16; b += 18; }
+      } else {
+        // Relief: the light comes off the north-west, sampled a pixel out so
+        // slopes read at plate resolution rather than at cell resolution.
+        const hl = hAt(u - step, v - step);
+        const kk = clamp(1 + (h - hl) / 90, 0.52, 1.48);
+        r *= kk; gg *= kk; b *= kk;
+        // Shore sand just above the waterline.
+        if (h < hm.water + 110) { r = r * 0.4 + 186 * 0.6; gg = gg * 0.4 + 168 * 0.6; b = b * 0.4 + 118 * 0.6; }
+        // Grain, so a flat meadow is still painted rather than filled.
+        const grain = 1 + (hash2(x, y, 5) - 0.5) * 0.13
+          + (fbm2(x * 0.06, y * 0.06, 2, 2, 0.5, 91) - 0.5) * 0.16;
+        r *= grain; gg *= grain; b *= grain;
       }
-      if (hm.roadMask[j * hm.size + i]) { r = r * 0.45 + 190 * 0.55; gg = gg * 0.45 + 165 * 0.55; b = b * 0.45 + 120 * 0.55; }
+      if (hm.roadMask[j * N + i]) {
+        r = r * 0.45 + 190 * 0.55; gg = gg * 0.45 + 165 * 0.55; b = b * 0.45 + 120 * 0.55;
+      }
       const o = (y * S + x) * 4;
       img.data[o] = clamp(r, 0, 255);
       img.data[o + 1] = clamp(gg, 0, 255);
@@ -999,56 +1030,85 @@ function buildMinimapPlate(hm, def, towns, dungeons, roads) {
   g.putImageData(img, 0, 0);
 
   const toPx = (wx, wz) => [
-    (wx - hm.origin) / (hm.size * hm.tile) * S,
-    (wz - hm.origin) / (hm.size * hm.tile) * S,
+    (wx - hm.origin) / (N * hm.tile) * S,
+    (wz - hm.origin) / (N * hm.tile) * S,
   ];
+  const px = (v) => v / (N * hm.tile) * S;
 
-  g.lineCap = 'round';
-  g.lineJoin = 'round';
-  g.strokeStyle = '#b09468';
-  g.lineWidth = 1.6;
+  // Hard-edged polyline: stacked squares, no stroke() - a stroked path is
+  // antialiased, and a soft edge cannot exist on a palettised plate.
+  const track = (pts, width, colour) => {
+    const t = Math.max(1, Math.round(width));
+    g.fillStyle = colour;
+    for (let k = 1; k < pts.length; k++) {
+      const [x0, y0] = toPx(pts[k - 1].x, pts[k - 1].z);
+      const [x1, y1] = toPx(pts[k].x, pts[k].z);
+      const n = Math.max(1, Math.round(Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0))));
+      for (let s = 0; s <= n; s++) {
+        const x = Math.round(x0 + ((x1 - x0) * s) / n) - (t >> 1);
+        const y = Math.round(y0 + ((y1 - y0) * s) / n) - (t >> 1);
+        g.fillRect(x, y, t, t);
+      }
+    }
+  };
+
+  // Highways: a dark casing with an ochre metalled surface on it.
   for (const rd of roads) {
-    g.beginPath();
-    rd.points.forEach((p, i) => {
-      const [x, y] = toPx(p.x, p.z);
-      i ? g.lineTo(x, y) : g.moveTo(x, y);
-    });
-    g.stroke();
+    if (!rd.points || rd.points.length < 2) continue;
+    track(rd.points, 4, '#6e5a38');
+    track(rd.points, 2, '#c2a468');
   }
+
   // Towns are drawn as what they are - lanes and building footprints on open
   // ground - not as a filled block. A solid square is most of the automap at
   // the zoom the panel actually uses, and MM6's plate lets you read a town's
   // street plan off it.
-  const px = (v) => v / (hm.size * hm.tile) * S;
   for (const t of towns) {
     for (const rd of t.roads || []) {
-      g.strokeStyle = '#c2ab7e';
-      g.lineWidth = Math.max(1, px(rd.width || 256));
-      g.beginPath();
-      rd.points.forEach((p, i) => {
-        const [rx, ry] = toPx(p.x, p.z);
-        i ? g.lineTo(rx, ry) : g.moveTo(rx, ry);
-      });
-      g.stroke();
+      if (!rd.points || rd.points.length < 2) continue;
+      const w = Math.max(2, px(rd.width || 256));
+      track(rd.points, w + 2, '#7a6544');
+      track(rd.points, w, '#c8b184');
+    }
+    // The wall, where the town has one: a ring of masonry round the plan.
+    // Towns and cities are walled; villages sit open on the road.
+    if (t.size !== 'village' && isFinite(t.radius)) {
+      const W = t.radius * 0.98;
+      const ring = [
+        { x: t.x - W, z: t.z - W }, { x: t.x + W, z: t.z - W },
+        { x: t.x + W, z: t.z + W }, { x: t.x - W, z: t.z + W }, { x: t.x - W, z: t.z - W },
+      ];
+      track(ring, 4, '#332c22');
+      track(ring, 2, '#9a9084');
     }
     for (const b of t.buildings || []) {
       const fp = b.footprint || { w: 512, d: 512 };
-      const w = Math.max(2, px(fp.w)), d = Math.max(2, px(fp.d));
+      const w = Math.max(3, Math.round(px(fp.w))), d = Math.max(3, Math.round(px(fp.d)));
       const [bx, by] = toPx(b.x, b.z);
-      g.fillStyle = b.shop ? '#8c6a3c' : '#6b5a44';
-      g.fillRect(Math.round(bx - w / 2), Math.round(by - d / 2), Math.round(w), Math.round(d));
-      g.fillStyle = '#3a3026';
-      g.fillRect(Math.round(bx - w / 2), Math.round(by + d / 2) - 1, Math.round(w), 1);
+      const x0 = Math.round(bx - w / 2), y0 = Math.round(by - d / 2);
+      // Footprint, then a lit ridge along the top and a cast shadow below, so
+      // a block of houses reads as roofs rather than as coloured squares.
+      g.fillStyle = '#241d14';
+      g.fillRect(x0 - 1, y0 - 1, w + 2, d + 2);
+      g.fillStyle = b.shop ? '#9a7440' : '#7a6248';
+      g.fillRect(x0, y0, w, d);
+      g.fillStyle = b.shop ? '#c49a5c' : '#9c8262';
+      g.fillRect(x0, y0, w, 1);
+      g.fillStyle = '#181209';
+      g.fillRect(x0, y0 + d - 1, w, 1);
     }
   }
   for (const d of dungeons) {
     const [x, y] = toPx(d.x, d.z);
     // A cave mouth, not a dot: a dark square with a lit lintel reads at the
     // panel's zoom where a 2 px circle does not.
-    g.fillStyle = '#1a1410';
-    g.fillRect(Math.round(x) - 3, Math.round(y) - 3, 7, 7);
-    g.fillStyle = '#8a7a5c';
-    g.fillRect(Math.round(x) - 3, Math.round(y) - 3, 7, 1);
+    const X = Math.round(x) - 4, Y = Math.round(y) - 4;
+    g.fillStyle = '#6a5c46';
+    g.fillRect(X - 1, Y - 1, 11, 11);
+    g.fillStyle = '#0e0b08';
+    g.fillRect(X, Y, 9, 9);
+    g.fillStyle = '#a89474';
+    g.fillRect(X, Y, 9, 2);
   }
   return c;
 }

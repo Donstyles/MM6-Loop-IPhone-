@@ -22,6 +22,7 @@ import {
 } from './screenbase.js';
 import * as M from './mm6art.js';
 import { CLASSES } from '../../game/stats.js';
+import { itemDef } from '../../game/items.js';
 
 // --- item model -------------------------------------------------------------
 
@@ -62,8 +63,58 @@ const TYPES = {
 };
 
 function typeOf(item) { return TYPES[item && item.type] || TYPES.misc; }
-export function itemW(item) { return (item && item.w) || typeOf(item).w; }
-export function itemH(item) { return (item && item.h) || typeOf(item).h; }
+export function itemW(item) { return (item && (item.w || item.gw)) || typeOf(item).w; }
+export function itemH(item) { return (item && (item.h || item.gh)) || typeOf(item).h; }
+
+// --- what a thing is made of ------------------------------------------------
+//
+// An item *instance* is `{ uid, def, type, bonus, ... }` and carries none of
+// the art's vocabulary; the definition holds the name, the armour skill and the
+// class. This resolves one into the terms the painters speak: which family of
+// object it is, what it is made of, and any colour it carries.
+
+const WEAPON_KIND = {
+  dagger: 'dagger', sword: 'sword', axe: 'axe', spear: 'spear',
+  mace: 'mace', staff: 'staff', bow: 'bow',
+};
+/** Body armour takes its material from the skill it trains. */
+const ARMOR_MAT = { plate: 'steel', chain: 'iron', leather: 'leather' };
+
+export function gearInfo(item) {
+  const def = (item && item.def && itemDef(item.def)) || null;
+  const type = (item && item.type) || (def && def.type) || 'misc';
+  const skill = (def && def.skill) || (item && item.skill) || null;
+  const name = (def && def.name) || (item && item.name) || '';
+  const heavy = /plate|gothic|tower/i.test(name);
+  const soft = /leather|cloth|coif|fur/i.test(name);
+  let kind = type, mat = 'steel', cloth = null;
+  switch (type) {
+    case 'weapon': kind = WEAPON_KIND[skill] || 'sword'; mat = skill === 'staff' ? 'wood' : 'steel'; break;
+    case 'bow': kind = 'bow'; mat = 'wood'; break;
+    case 'shield': kind = 'shield'; mat = heavy ? 'steel' : 'wood'; break;
+    case 'armor': kind = 'armor'; mat = ARMOR_MAT[skill] || 'steel'; break;
+    case 'helm': kind = 'helm';
+      mat = /crown/i.test(name) ? 'gold' : /coif/i.test(name) ? 'iron'
+        : soft ? 'leather' : heavy ? 'steel' : 'iron';
+      break;
+    case 'boots': case 'gauntlets': kind = type; mat = heavy ? 'steel' : 'leather'; break;
+    case 'belt': kind = 'belt'; mat = heavy ? 'steel' : 'leather'; break;
+    // A cloak is dyed wool, tanned fur or velvet, none of which is a MAT entry.
+    case 'cloak': kind = 'cloak'; mat = null;
+      cloth = /fur/i.test(name) ? [132, 116, 90] : /velvet/i.test(name) ? [70, 96, 140] : [140, 52, 42];
+      break;
+    case 'amulet': case 'ring': kind = type; mat = 'gold'; break;
+    case 'wand': kind = 'wand'; mat = 'wood'; break;
+    default: break;
+  }
+  return {
+    name, icon: kind, material: mat, skill, cloth,
+    armor: (def && def.ac) | 0,
+    // Only an artifact carries a colour of its own; everything else would turn
+    // the doll into a paintbox.
+    tint: item && item.artifactId ? '#b8962a' : null,
+  };
+}
 
 /** Which body slot (if any) this item may be dropped on. */
 export function slotFor(item, target) {
@@ -91,14 +142,16 @@ const CELL = 32;
  */
 export function itemIcon(item, cell = CELL) {
   const t = typeOf(item);
-  const kind = item.icon || t.icon;
+  const g = gearInfo(item);
+  const kind = item.icon || (t === TYPES.misc ? g.icon : t.icon);
+  const mat = item.material || g.material || 'steel';
   const w = itemW(item) * cell - 8;
   const h = itemH(item) * cell - 8;
-  const key = `${kind}|${item.material || 'steel'}|${item.tint || ''}|${w}x${h}`;
+  const key = `${kind}|${mat}|${item.tint || ''}|${w}x${h}`;
   let c = ICON_CACHE.get(key);
   if (c) return c;
   c = M.itemArt(kind === 'blade' ? 'sword' : kind, Math.max(6, w), Math.max(8, h), {
-    mat: item.material || 'steel', accent: item.tint || null,
+    mat, accent: item.tint || null,
   });
   ICON_CACHE.set(key, c);
   return c;
@@ -152,14 +205,20 @@ function slotPlacement(a) {
   };
 }
 
+/** What the painters need to know about the loadout, and nothing else. */
+function wornSet(eq) {
+  const out = {};
+  for (const slot of SLOTS) if (eq[slot]) out[slot] = gearInfo(eq[slot]);
+  return out;
+}
+
 /** What the cached doll bitmap is keyed on: everything that changes its pixels. */
-function dollKey(look, eq) {
+function dollKey(look, worn) {
   let k = `${look.buildIdx}|${look.skin}|${look.hair}|${look.tunic}|${look.trews}|`
     + `${look.boots}|${look.beard ? 1 : 0}|${look.longHair ? 1 : 0}`;
   for (const slot of SLOTS) {
-    const it = eq[slot];
-    k += it ? `|${slot}:${it.type || ''}:${it.icon || ''}:${it.material || ''}:${it.skill || ''}`
-      + `:${it.tint || ''}:${it.armor | 0}:${it.name || ''}` : '';
+    const w = worn[slot];
+    if (w) k += `|${slot}:${w.icon}:${w.material}:${w.skill}:${w.tint}:${w.armor}:${w.cloth}:${w.name}`;
   }
   return k;
 }
@@ -176,9 +235,10 @@ export function drawPaperdoll(ctx, screen, ch) {
 
   const eq = equipOf(ch);
   const look = lookOf(ch);
+  const worn = wornSet(eq);
   // The board, then the doll, painted once and blitted from then on.
   M.paperdollField(ctx, r.x, r.y, r.w, r.h);
-  M.blit(ctx, M.paperdollArt(r.w, r.h, look, eq, dollKey(look, eq)), r.x, r.y);
+  M.blit(ctx, M.paperdollArt(r.w, r.h, look, worn, dollKey(look, worn)), r.x, r.y);
 
   // Hit rectangles only: nothing is drawn for them, per MM6.
   const place = slotPlacement(M.paperdollAnchors(r, look.buildIdx));
@@ -203,12 +263,12 @@ export function drawPaperdoll(ctx, screen, ch) {
 
 /** Build by class line: a Knight is not shaped like a Sorcerer. */
 const LINE_LOOK = {
-  knight: { build: 4, tunic: [96, 60, 52] },
-  paladin: { build: 3, tunic: [66, 74, 96] },
-  archer: { build: 1, tunic: [64, 84, 58] },
-  cleric: { build: 2, tunic: [112, 100, 74] },
-  sorcerer: { build: 0, tunic: [58, 56, 88] },
-  druid: { build: 2, tunic: [78, 84, 56] },
+  knight: { build: 4, tunic: [132, 66, 52] },
+  paladin: { build: 3, tunic: [78, 92, 132] },
+  archer: { build: 1, tunic: [78, 112, 66] },
+  cleric: { build: 2, tunic: [156, 142, 104] },
+  sorcerer: { build: 0, tunic: [78, 72, 128] },
+  druid: { build: 2, tunic: [104, 116, 62] },
 };
 
 /**
@@ -231,8 +291,8 @@ function lookOf(ch) {
     skin: skins[seed % skins.length],
     hair: hairs[(seed * 3) % hairs.length],
     tunic: L.tunic,
-    trews: [58, 48, 34],
-    boots: [62, 44, 28],
+    trews: [82, 70, 50],
+    boots: [74, 52, 32],
     beard: !female && (seed % 3) === 0,
     longHair: female || (seed % 5) === 0,
   };
@@ -276,7 +336,10 @@ export class InventoryScreen extends Screen {
     if (!ch) return;
     const bag = this.bagOf(ch);
     for (const it of bag) {
-      if (Number.isInteger(it.x) && Number.isInteger(it.y)) continue;
+      // `makeItem` stamps -1/-1 for "not placed yet", so a negative coordinate
+      // is unplaced, not a position - otherwise the whole bag piles up off the
+      // top-left corner of the grid.
+      if (Number.isInteger(it.x) && Number.isInteger(it.y) && it.x >= 0 && it.y >= 0) continue;
       const spot = this.findSpot(bag, it, it);
       if (spot) { it.x = spot.x; it.y = spot.y; } else { it.x = 0; it.y = 0; }
     }
@@ -285,7 +348,7 @@ export class InventoryScreen extends Screen {
   occupied(bag, skip) {
     const grid = new Array(COLS * ROWS).fill(null);
     for (const it of bag) {
-      if (it === skip || !Number.isInteger(it.x)) continue;
+      if (it === skip || !Number.isInteger(it.x) || it.x < 0) continue;
       for (let y = 0; y < itemH(it); y++) {
         for (let x = 0; x < itemW(it); x++) {
           const gx = it.x + x, gy = it.y + y;
@@ -383,7 +446,7 @@ export class InventoryScreen extends Screen {
     }
 
     for (const it of bag) {
-      if (!Number.isInteger(it.x)) continue;
+      if (!Number.isInteger(it.x) || it.x < 0) continue;
       const ix = gx + it.x * CELL, iy = gy + it.y * CELL;
       const iw = itemW(it) * CELL, ih = itemH(it) * CELL;
       const hit = this.ui.region(`${this.id}:it:${it.uid || it.id || it.name}:${it.x},${it.y}`,

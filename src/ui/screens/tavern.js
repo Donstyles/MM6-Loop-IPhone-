@@ -13,7 +13,8 @@ import { maxHP, maxSP, effectiveStat } from '../../game/stats.js';
 import {
   HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, hotText, rngFor, paintWall,
   paintFloor, paintShelf, paintCounter, paintClutter, vignette, members, activeMember,
-  charName, partyGold, spend, earn, addCondition, hasCondition, paintFire, contactShadow,
+  charName, partyGold, spend, earn, addCondition, hasCondition, paintFire, contactShadow, poseSeed,
+  paintMasonry,
   MM6, C_WHITE, C_CANARY, C_DIM, C_RED, C_GREEN,
 } from './dialogue.js';
 
@@ -141,21 +142,15 @@ export function paintTavernInterior(g, w, h) {
   // joints, which is what the wall textures in §12 of the spec actually are.
   const hx = w - 104;
   const hbx = hx - 18, hby = horizon - 106, hbw = 124, hbh = 106;
-  for (let y = 0; y < hbh; y++) {
-    const row = Math.floor(y / 15);
-    const off = (row & 1) * 17;
-    for (let x = 0; x < hbw; x++) {
-      const bx = (x + off) % 34;
-      const joint = bx < 2 || (y % 15) < 2;
-      const blk = hash2(Math.floor((x + off) / 34), row, 71);
-      const v = joint ? 0.16 : 0.44 + blk * 0.30 - (y / hbh) * 0.14;
-      MM6.rct(g, hbx + x, hby + y, 1, 1, MM6.mix([28, 27, 24], [174, 172, 160], MM6.band(v, 7)));
-    }
-  }
+  paintMasonry(g, hbx, hby, hbw, hbh, {
+    // Soot-darkened and warm: a chimney breast is the dirtiest stone in the
+    // room, and cold grey masonry next to a fire reads as a pasted-on plate.
+    block: 34, course: 15, seed: 71, lo: [17, 14, 11], hi: [92, 80, 64],
+  });
   // Mantel shelf.
-  MM6.rct(g, hbx - 4, hby, hbw + 8, 7, [122, 118, 106]);
-  MM6.rct(g, hbx - 4, hby, hbw + 8, 2, [186, 182, 168]);
-  MM6.rct(g, hbx - 4, hby + 7, hbw + 8, 2, [34, 32, 28]);
+  MM6.rct(g, hbx - 4, hby, hbw + 8, 7, [76, 68, 56]);
+  MM6.rct(g, hbx - 4, hby, hbw + 8, 2, [128, 118, 98]);
+  MM6.rct(g, hbx - 4, hby + 7, hbw + 8, 2, [24, 22, 19]);
   // A black socket behind the fire. Without it the tongues read as a saw-tooth
   // silhouette pasted on masonry rather than as a fire burning in a hole.
   g.fillStyle = '#0d0602'; g.fillRect(hx, horizon - 66, 78, 66);
@@ -197,12 +192,14 @@ export function paintTavernInterior(g, w, h) {
     MM6.rct(g, x + 1, top + 8, 1, Math.max(2, bh - 12), [200, 224, 220]);
     if (i < 10) { g.fillStyle = rampCss('wood', 6); g.fillRect(x + 2, 128 - 12, 4, 12); }
   }
-  paintCounter(g, 0, horizon - 6, 176, 26, { cloth: null });
-  // The landlord stands at the end of the bar, clear of the bottle shelf.
-  figure(g, 142, horizon - 4, 96, null, null, {
-    seed: 0x2c19, cloth: [116, 82, 52], skin: [212, 168, 130],
-    hood: false, robe: false, apron: [186, 176, 150],
+  // The landlord goes down before the bar, not after it: he stands behind the
+  // counter, so the counter has to cut him off at the waist. Drawn over the
+  // top he reads as standing on the bar.
+  figure(g, 146, horizon + 22, 104, null, null, {
+    seed: poseSeed('onehip', 2831), cloth: [116, 82, 52], skin: [186, 144, 106],
+    hood: false, robe: false, apron: [186, 176, 150], shadow: false,
   });
+  paintCounter(g, 0, horizon - 6, 176, 30, { cloth: null });
 
   // --- tables ---------------------------------------------------------------
   //
@@ -215,6 +212,15 @@ export function paintTavernInterior(g, w, h) {
     { x: 222, d: 0.52, seeds: [0xc48a, 0x1e65] },
     { x: 104, d: 1.00, seeds: [0x5f31, 0xa9d4] },
   ];
+  // A tavern at night is lit by fire, so the room is warm: russet, ochre, moss,
+  // wine, undyed wool. figureLook's default wardrobe carries two blue-greys
+  // that go stone-cold under the vignette and make seven different people read
+  // as seven of the same grey mannequin.
+  const COATS = [
+    [118, 76, 44], [96, 84, 48], [72, 84, 58], [110, 62, 52],
+    [132, 108, 72], [84, 66, 46], [104, 92, 66], [126, 90, 58],
+  ];
+  let patron = 0;
   for (const T of tables) {
     // Scale and station both come off the depth, so nothing has to be hand-placed.
     const s = 0.72 + T.d * 0.62;
@@ -227,7 +233,7 @@ export function paintTavernInterior(g, w, h) {
       if (i % 2) return;                       // odds sit in front, drawn later
       const side = i === 0 ? -1 : 1;
       figure(g, tx + side * 46 * s, ty - 6 * s, Math.round((60 + (seed & 7) * 2.5) * s),
-        null, null, { seed });
+        null, null, { seed, cloth: COATS[patron++ % COATS.length] });
     });
 
     paintTable(g, tx, ty, s, 1);
@@ -237,14 +243,24 @@ export function paintTavernInterior(g, w, h) {
     for (let i = 0; i < mugs; i++) {
       paintTankard(g, Math.round(tx - 20 * s + i * 17 * s), Math.round(ty - 5 * s), s);
     }
-    // A trencher of bread, because three mugs and nothing else is a prop shelf.
-    MM6.ellip(g, tx + 22 * s, ty - 6 * s, 8 * s, 3 * s, [126, 116, 92]);
-    MM6.ellip(g, tx + 22 * s, ty - 7 * s, 6 * s, 2 * s, [178, 148, 96]);
+    // A trencher with a loaf on it, because mugs and nothing else is a shelf of
+    // props rather than a table somebody is eating at.
+    const trx = Math.round(tx + 22 * s), trw = Math.max(5, Math.round(9 * s));
+    MM6.ellip(g, trx, ty - 5 * s, trw, Math.max(2, 3 * s), [78, 58, 32]);
+    MM6.ellip(g, trx, ty - 6 * s, trw - 1, Math.max(1, 2 * s), [136, 104, 60]);
+    const lh = Math.max(3, Math.round(5 * s));
+    for (let i = 0; i < lh; i++) {
+      const k = Math.max(1, Math.round((trw - 2) * (1 - (i / lh) * 0.25)));
+      MM6.rct(g, trx - k, ty - 6 * s - lh + i, k * 2, 1,
+        MM6.mix([96, 66, 32], [220, 182, 118], MM6.band(1 - i / lh, 4)));
+    }
+    MM6.rct(g, trx - trw + 2, Math.round(ty - 6 * s - lh), Math.max(2, trw), 1, [238, 210, 152]);
 
     T.seeds.forEach((seed, i) => {
       if (!(i % 2)) return;
       figure(g, tx + (i === 1 ? 1 : -1) * 40 * s, ty + 20 * s,
-        Math.round((64 + (seed & 7) * 2.5) * s), null, null, { seed });
+        Math.round((64 + (seed & 7) * 2.5) * s), null, null,
+        { seed, cloth: COATS[patron++ % COATS.length] });
     });
 
     // Hanging lamp: a brass lantern on a chain, and the light it paints on the

@@ -1175,7 +1175,8 @@ function gearPaint(item, slot) {
   const M2 = matOf(name);
   const soft = name === 'leather' || name === 'cloth' || name === 'wood' || name === 'bone';
   let base = M2.m;
-  if ((slot === 'cloak') && !item.material) base = CLOAK_WOOL;
+  if (Array.isArray(item.cloth)) base = item.cloth;
+  else if (slot === 'cloak') base = CLOAK_WOOL;
   return { base, spec: soft ? 0.22 : 1, mat: M2, name };
 }
 
@@ -1315,9 +1316,9 @@ function paintCuirass(ctx, A, it, P, accent) {
   plateRow(ctx, cx, topY - 2, bodyW * 0.58, mix(P.base, HILIT, 0.10), { steps: 4, spec: sp, lo: 0.6, hi: 1.4 });
   plateRow(ctx, cx, topY - 1, bodyW * 0.60, P.base, { steps: 4, spec: sp, lo: 0.44, hi: 1.10 });
 
-  // Pauldrons: a cap over the point of each shoulder, sitting on the upper arm
-  // and leaving the chest to the cuirass.
-  for (const s of [-1, 1]) {
+  // Mail has no pauldrons: it carries a mantle of the same rings over the
+  // shoulder and down the top of the arm.
+  for (const s of chain ? [] : [-1, 1]) {
     const px0 = cx + s * bodyW * 1.14;
     const rx = Math.max(2, bodyW * 0.46), ry = Math.max(2, bodyW * 0.44);
     for (let j = -Math.round(ry); j <= Math.round(ry * 0.55); j++) {
@@ -1333,7 +1334,43 @@ function paintCuirass(ctx, A, it, P, accent) {
     rct(ctx, Math.round(px0 - kk), ey - 1, kk * 2, 1, mix(P.base, HILIT, 0.30));
     rct(ctx, Math.round(px0 - kk * 0.3), Math.round(armTop - ry * 0.5), 2, 2, mix(P.base, HILIT, 0.5));
   }
+  if (chain) {
+    const mh = Math.round(torsoH * 0.30);
+    for (const s of [-1, 1]) {
+      const px0 = cx + s * bodyW * 1.06;
+      for (let i = 0; i < mh; i++) {
+        const w = bodyW * 0.44 * (1 - (i / mh) * 0.12);
+        plateRow(ctx, px0, armTop + i - 2, w, P.base,
+          { steps: 5, spec: sp, lit: s < 0 ? -0.46 : -0.14 });
+        if ((i & 1) === 0) {
+          for (let x = -Math.round(w) + 1; x < w; x += 2) {
+            rct(ctx, Math.round(px0 + x), armTop + i - 2, 1, 1, shade(P.base, 0.52));
+          }
+        }
+      }
+      // The mantle's edge falls in a hard scalloped line.
+      rct(ctx, Math.round(px0 - bodyW * 0.40), armTop + mh - 2, Math.round(bodyW * 0.80), 1,
+        shade(P.base, 0.40));
+    }
+  }
 
+  if (chain) {
+    // A mail shirt has no fauld; it hangs a little past the belt and its hem
+    // is a hard scalloped edge of rings, not a cut line.
+    const hemH = Math.max(3, Math.round(H * 0.030));
+    for (let i = 0; i < hemH; i++) {
+      const w = halfAt(botY) * (1 + i * 0.012);
+      plateRow(ctx, cx, botY + 1 + i, w, P.base, { steps: 5, spec: sp, lit: -0.44 });
+      if ((i & 1) === 0) {
+        for (let x = -Math.round(w) + 1; x < w; x += 2) rct(ctx, cx + x, botY + 1 + i, 1, 1, shade(P.base, 0.52));
+      }
+    }
+    const hw2 = Math.round(halfAt(botY) * 1.03);
+    for (let x = -hw2; x < hw2; x += 4) {
+      rct(ctx, cx + x, botY + 1 + hemH, 3, 1, shade(P.base, 0.44));
+      rct(ctx, cx + x, botY + hemH, 3, 1, mix(P.base, HILIT, 0.16));
+    }
+  }
   // Fauld: three lames hanging over the hips, each with a lit lip and a hard
   // shadow under its skirt.
   if (!chain) {
@@ -1359,21 +1396,32 @@ function paintCuirass(ctx, A, it, P, accent) {
   }
 }
 
-/** The drape, painted behind the body. */
+/**
+ * The drape, painted behind the body.
+ *
+ * A hundred-pixel-wide cylinder of cloth is not one ramp; it hangs in standing
+ * folds, so it is painted as seven vertical panels, each modelled in its own
+ * right and each a little darker as it turns away from the key. That is what
+ * makes a cloak read as cloth rather than as a slab.
+ */
 function paintCloak(ctx, A, it, P) {
   const { cx, bodyW, shoulderY, hipY, legH } = A;
   const topY = shoulderY - 4;
   const botY = hipY + Math.round(legH * 0.52);
   const span = Math.max(1, botY - topY);
+  const N = 7;
   for (let y = topY; y <= botY; y++) {
     const t = (y - topY) / span;
     const w = bodyW * (1.12 + t * 1.00);
-    plateRow(ctx, cx, y, w, P.base, { steps: 6, spec: 0.16, lit: -0.42, lo: 0.32, hi: 1.16 });
-    // Standing folds: a crease with a lit lip beside it, spreading with the hem.
-    for (const f of [-0.66, -0.24, 0.22, 0.64]) {
-      const fx = Math.round(cx + f * w);
-      rct(ctx, fx, y, 1, 1, shade(P.base, 0.60));
-      rct(ctx, fx - 1, y, 1, 1, mix(P.base, HILIT, 0.13));
+    const pw = (w * 2) / N;
+    for (let p = 0; p < N; p++) {
+      const c0 = cx - w + pw * (p + 0.5);
+      // Panels turn away from the key across the drape; the far ones bottom out.
+      const turn = 1 - Math.abs((p - 1.6) / (N - 1)) * 0.55;
+      plateRow(ctx, c0, y, pw * 0.5 + 0.5, shade(P.base, 0.72 + turn * 0.34),
+        { steps: 4, spec: 0.14, lit: -0.30, lo: 0.54, hi: 1.16 });
+      // The crease between two panels, with the lit lip of the near one on it.
+      rct(ctx, Math.round(c0 + pw * 0.5), y, 1, 1, shade(P.base, 0.44));
     }
   }
   // Hem: a hard shadow under a ragged edge, so the cloth ends rather than stops.
@@ -1440,17 +1488,28 @@ function paintBoots(ctx, A, it, P) {
           { steps: 4, spec: P.spec, lo: 0.62, hi: 1.40 });
       }
     }
-    // The foot comes toward you, so it widens and takes a hard shadow.
+    // The foot comes toward you, so it widens and takes a hard shadow. Its
+    // width is the leg's *untapered* width, because that is what the figure
+    // painter builds its own boot on and the equipped pair has to cover it.
     const L = A.leg(s, 1);
     const c = L.back ? shade(P.base, 0.84) : P.base;
+    const full = A.bodyW * (L.back ? 0.40 : 0.44);
     for (let i = 0; i < bootH; i++) {
       const t = i / Math.max(1, bootH - 1);
-      plateRow(ctx, L.x + s * (t > 0.62 ? 0.6 : 0), baseY - bootH + i,
-        L.w * (t > 0.62 ? 1.42 : 1.18) + 1, c, { steps: 5, spec: P.spec, lit: s < 0 ? -0.44 : -0.16 });
+      plateRow(ctx, L.x + s * (t > 0.62 ? 0.8 : 0), baseY - bootH + i,
+        full * (t > 0.62 ? 1.34 : 1.14), c, { steps: 5, spec: P.spec, lit: s < 0 ? -0.44 : -0.16 });
     }
-    rct(ctx, Math.round(L.x - L.w * 1.42), baseY - bootH, Math.round(L.w * 2.84), 1,
+    rct(ctx, Math.round(L.x - full * 1.16), baseY - bootH, Math.round(full * 2.32), 1,
       mix(P.base, HILIT, 0.26));
-    rct(ctx, Math.round(L.x - L.w * 1.42), baseY - 1, Math.round(L.w * 2.84), 1, shade(P.base, 0.34));
+    rct(ctx, Math.round(L.x - full * 1.34), baseY - 1, Math.round(full * 2.68), 1, shade(P.base, 0.34));
+    // Ankle and shin lames, so the shaft is not one bare cylinder.
+    for (const q of [0.30, 0.66]) {
+      const y = Math.round(baseY - bootH - (baseY - bootH - cuffY) * q);
+      const L2 = A.leg(s, (y - hipY) / legH);
+      const ww = Math.round(L2.w * 1.16 + 1);
+      rct(ctx, Math.round(L2.x - ww), y, ww * 2, 1, shade(P.base, 0.44));
+      rct(ctx, Math.round(L2.x - ww), y - 1, ww * 2, 1, mix(P.base, HILIT, 0.22));
+    }
   }
 }
 
@@ -1525,13 +1584,6 @@ function paintShield(ctx, A, it, P, accent) {
     ? Math.max(1, Math.round(W * Math.sqrt(Math.max(0, 1 - Math.pow(t * 2 - 1, 2)))))
     : t < 0.42 ? W : Math.max(1, Math.round(W * (1 - Math.pow((t - 0.42) / 0.58, 1.9)))));
 
-  // What sells "in front of the arm": the shadow the shield throws on to the
-  // body, following its own edge rather than sitting in a box.
-  for (let i = 0; i < Hs; i++) {
-    const k = halfAt(i / (Hs - 1));
-    if (k < 1) break;
-    stipple(ctx, sx + k, sy + i + 2, 4, 1, [10, 8, 6], 0.46);
-  }
   for (let i = 0; i < Hs; i++) {
     const t = i / (Hs - 1);
     const k = halfAt(t);
@@ -1605,31 +1657,42 @@ function paintWeapon(ctx, A, it, P, accent) {
 
   const gy = h.y + h.h;
   if (kind === 'mace' || kind === 'club') {
-    const hl = Math.max(4, Math.round(H * 0.075));
-    const top = gy + Math.round(H * 0.10);
+    const hl = Math.max(4, Math.round(H * 0.085));
+    const top = gy + Math.round(H * 0.045);
     for (let y = gy; y < top; y++) plateRow(ctx, h.x, y, 2.2, steel.m, { steps: 4, spec: P.spec, lit: -0.5 });
+    const core = bodyW * 0.30;
     for (let i = 0; i < hl; i++) {
-      const k = Math.max(2, bodyW * 0.30 * (0.55 + Math.sin((i / (hl - 1)) * Math.PI) * 0.55));
+      const t = i / (hl - 1);
+      // The head is a barrel: collars top and bottom, a swell between them.
+      const k = Math.max(2, core * (t < 0.12 || t > 0.88 ? 0.86 : 0.94 + Math.sin(t * Math.PI) * 0.24));
       plateRow(ctx, h.x, top + i, k, steel.m, { steps: 6, spec: P.spec, lit: -0.44 });
-    }
-    // Flanges: hard ribs down the head, lit on one side, dark on the other.
-    for (const f of [-0.62, 0, 0.62]) {
-      for (let i = 2; i < hl - 2; i++) {
-        const k = bodyW * 0.30 * (0.55 + Math.sin((i / (hl - 1)) * Math.PI) * 0.55);
-        const x = Math.round(h.x + f * k);
-        rct(ctx, x, top + i, 1, 1, mix(steel.m, HILIT, 0.45));
-        rct(ctx, x + 1, top + i, 1, 1, shade(steel.m, 0.5));
+      // Two flanges stand out either side, and one down the middle: hard
+      // wedges with a lit leading edge, not ribs drawn on a cylinder.
+      if (t > 0.14 && t < 0.86) {
+        const out = core * 0.85 * (1 - Math.abs(t - 0.5) / 0.36);
+        for (const s of [-1, 1]) {
+          const x0 = Math.round(h.x + s * k), x1 = Math.round(h.x + s * (k + out));
+          const lo2 = Math.min(x0, x1), w = Math.abs(x1 - x0) + 1;
+          rct(ctx, lo2, top + i, w, 1, s < 0 ? mix(steel.m, HILIT, 0.20) : shade(steel.m, 0.62));
+          rct(ctx, s < 0 ? lo2 : lo2 + w - 1, top + i, 1, 1,
+            s < 0 ? mix(steel.m, HILIT, 0.55) : shade(steel.m, 0.40));
+        }
+        rct(ctx, h.x - 1, top + i, 1, 1, mix(steel.m, HILIT, 0.40));
+        rct(ctx, h.x, top + i, 1, 1, shade(steel.m, 0.56));
       }
     }
+    // Collars: a lit lip at each end of the head.
+    rct(ctx, Math.round(h.x - core), top, Math.round(core * 2), 1, mix(steel.m, HILIT, 0.45));
+    rct(ctx, Math.round(h.x - core), top + hl - 1, Math.round(core * 2), 1, shade(steel.m, 0.42));
     plateRow(ctx, h.x, top + hl, 2.6, steel.m, { steps: 3, spec: P.spec, lo: 0.5, hi: 1.3 });
     return;
   }
 
   if (kind === 'axe') {
-    const shaft = Math.min(Math.round(H * 0.26), baseY - gy - 2);
+    const shaft = Math.min(Math.round(H * 0.21), baseY - gy - 2);
     for (let y = gy; y < gy + shaft; y++) plateRow(ctx, h.x, y, 2.4, wood.m, { steps: 4, spec: 0.25, lit: -0.5 });
-    const hd = Math.round(H * 0.10);
-    const hx = h.x + bodyW * 0.34;
+    const hd = Math.round(H * 0.11);
+    const hx = h.x + bodyW * 0.36;
     const y0 = gy + shaft - hd - 2;
     for (let i = 0; i < hd; i++) {
       const k = lensHalf(bodyW * 0.30, i / hd, 1.5);
@@ -1682,9 +1745,12 @@ function paintSlungBow(ctx, A, it, P) {
     let d = R * (1 - 4 * (t - 0.5) * (t - 0.5));
     if (t < 0.10) d -= R * 0.5 * (1 - t / 0.10);
     if (t > 0.90) d -= R * 0.5 * (1 - (1 - t) / 0.10);
-    plateRow(ctx, bx - d, y0 + i, 2.2, wood.m, { steps: 4, spec: 0.25, lit: -0.5 });
+    plateRow(ctx, bx - d, y0 + i, 3.0, wood.m, { steps: 4, spec: 0.25, lit: -0.5 });
   }
-  for (let i = 2; i < span - 1; i++) rct(ctx, bx, y0 + i, 1, 1, [214, 204, 176]);
+  for (let i = 2; i < span - 1; i++) {
+    rct(ctx, bx, y0 + i, 1, 1, [226, 216, 188]);
+    rct(ctx, bx + 1, y0 + i, 1, 1, [40, 34, 26]);
+  }
   for (let i = -4; i <= 4; i++) {
     plateRow(ctx, bx - R, y0 + Math.round(span / 2) + i, 2.8, matOf('leather').m, { steps: 3, spec: 0.2 });
   }
@@ -1755,14 +1821,15 @@ export function paperdollField(ctx, x, y, w, h) {
     // Tooled hide with the key light baked into its value rather than stippled
     // over the top of it: grain, a long fibre, and a fall from the panel's top
     // left to its bottom right in ten bands.
-    // Kept dark and a little cool: the doll has to stand off it.
-    const lo = [30, 24, 16], hi = [88, 72, 48];
+    // Kept dark and cool: the gear on the doll is warm leather and steel, and
+    // it has to stand off the board.
+    const lo = [28, 26, 21], hi = [86, 78, 60];
     const cv = paintCanvas(w, h, (ax, ay) => {
       const coarse = fbm2(ax * 0.042, ay * 0.052, 3, 4, 0.5, 43) * 0.5 + 0.5;
       const fibre = valueNoise2(ax * 0.9, ay * 6.0, 61) - 0.5;
       const pore = (hash2(ax, ay, 17) - 0.5) * 0.05;
       const key = 1 - (ax / w) * 0.26 - (ay / h) * 0.44;
-      let t = 0.50 + (coarse - 0.5) * 0.16 + fibre * 0.05 + pore + (key - 0.62) * 0.62;
+      let t = 0.50 + (coarse - 0.5) * 0.09 + fibre * 0.05 + pore + (key - 0.62) * 0.62;
       // Worn edge, on a noisy boundary rather than a clean inset.
       const wob = valueNoise2(ax * 0.08, ay * 0.08, 9) * 4;
       const e = Math.min(Math.min(ax, w - 1 - ax) + wob, Math.min(ay, h - 1 - ay) + wob);

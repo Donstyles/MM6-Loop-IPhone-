@@ -262,15 +262,15 @@ function snapMemo(r, g, b) {
   return v;
 }
 
-/** Ordered-dither and palettise an ImageData in place. */
-export function ditherRegion(img, amount = 8) {
+/** Palettise an ImageData in place, optionally with an ordered-dither offset. */
+export function ditherRegion(img, amount = 0) {
   const { data, width, height } = img;
   for (let y = 0; y < height; y++) {
     const row = BAYER4[y & 3];
     for (let x = 0; x < width; x++) {
       const i = (y * width + x) * 4;
       if (data[i + 3] === 0) continue;
-      const t = (row[x & 3] / 16 - 0.469) * amount;
+      const t = amount ? (row[x & 3] / 16 - 0.469) * amount : 0;
       const p = snapMemo(
         clamp(Math.round(data[i] + t), 0, 255),
         clamp(Math.round(data[i + 1] + t), 0, 255),
@@ -294,7 +294,7 @@ const _scratch = document.createElement('canvas');
  * compromise here - it is the look - and it makes a full 461x345 interior cost
  * a quarter of what it otherwise would. Only ever called while baking.
  */
-export function washPixels(ctx, x, y, w, h, f, seed = 5, step = 2) {
+export function washPixels(ctx, x, y, w, h, f, seed = 5, step = 2, dither = 0) {
   x |= 0; y |= 0; w |= 0; h |= 0;
   if (w <= 0 || h <= 0) return;
   const s = Math.max(1, step | 0);
@@ -310,7 +310,13 @@ export function washPixels(ctx, x, y, w, h, f, seed = 5, step = 2) {
       d[i] = c[0]; d[i + 1] = c[1]; d[i + 2] = c[2]; d[i + 3] = c[3] === undefined ? 255 : c[3];
     }
   }
-  ditherRegion(img, 8);
+  // No offset by default. The wall and floor painters return exact ramp
+  // entries, so an ordered dither on top of them cannot add a colour the
+  // palette did not already have - all it does is kick every other pixel to the
+  // neighbouring shade, and since the wash is painted at half scale and blown
+  // up, that lands on screen as a 2-pixel checkerboard over every flat surface
+  // in the room. MM6's software renderer does not dither at all.
+  ditherRegion(img, dither);
   if (s === 1) { ctx.putImageData(img, x, y); return; }
   _scratch.width = cw; _scratch.height = chh;
   const sg = _scratch.getContext('2d');
@@ -375,7 +381,7 @@ export function glow(ctx, cx, cy, r, css, strength = 0.5) {
   // Deliberately small. A hand painter lit the stone immediately around a
   // sconce and left the rest of the wall alone; anything wider than about a
   // fixture and a half is a bloom whatever it is made of.
-  const R = Math.max(4, Math.round(Math.min(r * 0.30, 26)));
+  const R = Math.max(4, Math.round(Math.min(r * 0.30, 34)));
   const X = Math.round(cx), Y = Math.round(cy);
   const cw = ctx.canvas.width, ch = ctx.canvas.height;
   const x0 = Math.max(0, X - R), y0 = Math.max(0, Y - R);
@@ -491,6 +497,25 @@ export function figure(ctx, x, y, h, bodyCss, rimCss, o = {}) {
 }
 
 /**
+ * A seed that lands a figure on a chosen pose.
+ *
+ * figures.js selects its pose with `seed % 11` against a fixed table, and two
+ * of those eleven fling both arms straight out from the shoulder. That is fine
+ * for a patron caught mid-argument in the middle distance; on a shopkeeper
+ * painted 110 pixels tall at the front of the room it puts two lit fists in
+ * mid-air that read as tankards. `salt` still varies build, wardrobe, hair and
+ * face, so two people given the same pose are not the same person.
+ */
+export const POSE = {
+  stand: 0, hipshot: 1, folded: 2, onehip: 3, raised: 4, lean: 5,
+  reach: 6, behind: 7, wide: 8, slouch: 9, point: 10,
+};
+
+export function poseSeed(pose, salt = 0) {
+  return (((POSE[pose] || 0) + 11 * (salt >>> 0)) >>> 0);
+}
+
+/**
  * A fire.
  *
  * MM6 draws fire as an overlapping cluster of small particle tongues tinted
@@ -529,6 +554,104 @@ export function paintFire(g, cx, baseY, w, h, seed = 3) {
   }
 }
 
+/**
+ * Coursed masonry: chimney breasts, forge hoods, vault jambs.
+ *
+ * §12 of the spec puts grey stone block at #5E5E58-#9A9A90 with #3C3C38 joints,
+ * 20-40 px ashlar and heavy chiselled bevels, so that is what this is: per-block
+ * value jitter on a running bond, a lit top arris and a shadowed underside on
+ * every block, and no flat fill anywhere. A flat grey rectangle behind a fire is
+ * the thing this replaces.
+ */
+export function paintMasonry(g, x, y, w, h, o = {}) {
+  const bw = o.block || 34, bh = o.course || 15;
+  const lo = o.lo || [24, 22, 19], hi = o.hi || [116, 110, 98];
+  const seed = o.seed || 71;
+  const X = Math.round(x), Y = Math.round(y), W = Math.round(w), H = Math.round(h);
+  for (let j = 0; j < H; j++) {
+    const row = Math.floor(j / bh);
+    const off = (row & 1) * Math.round(bw / 2);
+    const inCourse = j - row * bh;
+    for (let i = 0; i < W; i++) {
+      const bx = (i + off) % bw;
+      const joint = bx < 2 || inCourse < 2;
+      const blk = hash2(Math.floor((i + off) / bw), row, seed);
+      // Chisel: the top of each block catches, the bottom falls away.
+      const bevel = inCourse < 4 ? 0.10 : inCourse > bh - 5 ? -0.09 : 0;
+      const edge = bx < 4 ? 0.07 : bx > bw - 4 ? -0.07 : 0;
+      const v = joint ? 0.12 : 0.36 + blk * 0.28 + bevel + edge - (j / H) * 0.10;
+      MM6.rct(g, X + i, Y + j, 1, 1, MM6.mix(lo, hi, MM6.band(clamp(v, 0, 1), 7)));
+    }
+  }
+}
+
+/**
+ * A woven carpet lying on the boards, keystoned by the viewing angle.
+ *
+ * A flat ellipse with a ring of dots round it is a shape; a rug has a ground, a
+ * border band, a repeating figure in the field and a fringe of real threads
+ * along the near edge, and it is wider at the front than at the back.
+ */
+export function paintRug(g, cx, cy, halfDepth, farHalf, nearHalf, name = 'blood') {
+  const CX = Math.round(cx), CY = Math.round(cy), D = Math.max(3, Math.round(halfDepth));
+  for (let dy = -D; dy <= D; dy++) {
+    const t = (dy + D) / (2 * D);
+    const k = Math.round(farHalf + (nearHalf - farHalf) * t);
+    // Three zones, all inside the rug's own ramp bar one muted ochre band: a
+    // saturated field ringed in bright cream reads as a flag, not as wool.
+    const v = 1 + Math.round(t * 2);
+    MM6.rct(g, CX - k, CY + dy, k * 2, 1, rampCss(name, v));
+    const b1 = Math.round(k * 0.92), b2 = Math.round(k * 0.82);
+    if (b1 > 4) MM6.rct(g, CX - b1, CY + dy, b1 * 2, 1, rampCss('sand', 2 + Math.round(t * 2)));
+    if (b2 > 4 && Math.abs(dy) < D - 3) MM6.rct(g, CX - b2, CY + dy, b2 * 2, 1, rampCss(name, v + 3));
+    if (b2 > 24 && (dy + D) % 7 === 3) {
+      const step = Math.max(9, Math.round(14 * (0.7 + t * 0.5)));
+      for (let x = -b2 + 10; x < b2 - 10; x += step) {
+        MM6.rct(g, CX + x, CY + dy, Math.max(3, Math.round(step * 0.4)), 1, rampCss('sand', 6));
+      }
+    }
+    // The long edges catch where the pile turns up.
+    MM6.rct(g, CX - k, CY + dy, 1, 1, rampCss(name, v + 4));
+    MM6.rct(g, CX + k - 1, CY + dy, 1, 1, rampCss(name, Math.max(0, v - 1)));
+  }
+  MM6.rct(g, CX - Math.round(farHalf), CY - D, Math.round(farHalf) * 2, 1, rampCss(name, 6));
+  // Fringe: a continuous run of threads, not a dotted rule.
+  for (let x = -Math.round(nearHalf) + 4; x < nearHalf - 4; x += 2) {
+    MM6.rct(g, CX + x, CY + D + 1, 1, 2 + (((x >> 1) & 1) ? 1 : 0),
+      rampCss('sand', 5 + ((x >> 1) & 1)));
+  }
+}
+
+/**
+ * The shadow an object throws on the surface behind it.
+ *
+ * Read the plate back and multiply it down in three hard steps, so the masonry
+ * or the boards stay legible inside the shadow. The obvious alternative - a
+ * Bayer stipple - is what gave every shelf and counter in these rooms a
+ * period-2 black rule along its bottom edge that reads exactly like CSS
+ * `border-style: dotted`. A stipple is the right tool for a *boundary*; it is
+ * the wrong tool for an area, and a four-pixel band is all boundary.
+ */
+export function castShadow(ctx, x, y, w, h, strength = 0.5) {
+  const X = Math.max(0, Math.round(x)), Y = Math.max(0, Math.round(y));
+  const W = Math.min(ctx.canvas.width - X, Math.round(w));
+  const H = Math.min(ctx.canvas.height - Y, Math.round(h));
+  if (W <= 0 || H <= 0) return;
+  let img;
+  try { img = ctx.getImageData(X, Y, W, H); } catch { return; }
+  const d = img.data;
+  for (let j = 0; j < H; j++) {
+    // Three steps down the band, quantised: banding is the look, not a defect.
+    const k = 1 - clamp(strength, 0, 1) * (1 - MM6.band(j / Math.max(1, H - 1), 3));
+    for (let i = 0; i < W; i++) {
+      const p = (j * W + i) * 4;
+      if (d[p + 3] === 0) continue;
+      d[p] *= k; d[p + 1] *= k; d[p + 2] *= k;
+    }
+  }
+  ctx.putImageData(img, X, Y);
+}
+
 /** A contact shadow: the dark the object sits in, stippled, never a soft blob. */
 export function contactShadow(g, cx, y, halfW, halfH = 3) {
   const HW = Math.max(1, Math.round(halfW));
@@ -536,9 +659,12 @@ export function contactShadow(g, cx, y, halfW, halfH = 3) {
   for (let dy = -HH; dy <= HH; dy++) {
     const k = Math.round(HW * Math.sqrt(Math.max(0, 1 - (dy * dy) / (HH * HH))));
     if (k <= 0) continue;
+    // Umbra and penumbra: two hard steps multiplied into the boards, so the
+    // grain stays legible inside the shadow. Nothing here is stippled - a
+    // dither round the foot of every barrel reads as a dotted selection box.
+    castShadow(g, Math.round(cx) - k, Math.round(y) + dy, k * 2, 1, 0.34);
     const core = Math.round(k * 0.62);
-    MM6.rct(g, Math.round(cx) - core, Math.round(y) + dy, core * 2, 1, [16, 11, 6]);
-    MM6.stipple(g, Math.round(cx) - k, Math.round(y) + dy, k * 2, 1, [16, 11, 6], 0.55);
+    if (core > 0) castShadow(g, Math.round(cx) - core, Math.round(y) + dy, core * 2, 1, 0.52);
   }
 }
 
@@ -605,10 +731,7 @@ export function paintShelf(g, x, y, w, o = {}) {
     MM6.rct(g, X + i, Y + 1 + ((n * 2) | 0), Math.max(2, 3 + ((n * 5) | 0)), 1, ramp('wood', n > 0.5 ? 7 : 5));
   }
   MM6.rct(g, X, Y + th, W, 1, ramp('wood', 0));        // cast shadow, hard line
-  const sh = Math.max(1, o.shadow === undefined ? 4 : o.shadow);
-  for (let i = 0; i < sh; i++) {
-    MM6.stipple(g, X, Y + th + 1 + i, W, 1, [14, 10, 6], 0.60 - (i / sh) * 0.52);
-  }
+  castShadow(g, X, Y + th + 1, W, Math.max(1, o.shadow === undefined ? 6 : o.shadow), 0.55);
   // Brackets under the board, so it is fixed to something.
   if (o.brackets !== false) {
     for (let i = 12; i < W - 8; i += 64) {
@@ -1275,47 +1398,33 @@ export function paintRoom(g, w, h, kind = 'house') {
   // The patch the window throws on the boards. A painter of the period drew the
   // patch, keystoned by the viewing angle and stepped in a few flat bands; the
   // air between window and floor stays unpainted, because MM6 has no shafts.
-  MM6.litPatch(g, wx + ww / 2 + 14, horizon, ww * 0.5, h - 2, ww * 0.92, '#ffe8b0', 4);
+  MM6.litPatch(g, wx + ww / 2 + 14, horizon, ww * 0.44, h - 2, ww * 0.80, '#9c8250', 4);
 
   // Hearth on the right.
-  g.fillStyle = rampCss('stone', 4);
-  g.fillRect(w - 130, horizon - 96, 104, 96);
-  g.fillStyle = rampCss('stone', 7);
-  g.fillRect(w - 130, horizon - 96, 104, 6);
-  g.fillStyle = rampCss('stone', 2);
-  g.fillRect(w - 130, horizon - 90, 104, 2);
+  paintMasonry(g, w - 132, horizon - 98, 108, 98, { block: 30, course: 14, seed: 83 });
+  MM6.rct(g, w - 136, horizon - 98, 116, 6, MM6.pc([78, 70, 58]));
+  MM6.rct(g, w - 136, horizon - 98, 116, 2, MM6.pc([130, 120, 100]));
+  MM6.rct(g, w - 136, horizon - 92, 116, 2, MM6.pc([22, 20, 17]));
   // The firebox is a black socket; the fire sits inside it, not on top of it.
-  g.fillStyle = '#100702';
-  g.fillRect(w - 116, horizon - 62, 76, 62);
-  MM6.rct(g, w - 116, horizon - 62, 76, 2, [6, 4, 2]);
-  MM6.rct(g, w - 112, horizon - 12, 68, 5, [64, 40, 20]);
-  MM6.rct(g, w - 112, horizon - 12, 68, 1, [104, 70, 36]);
-  paintFire(g, w - 78, horizon - 8, 62, 40, 11);
-  glow(g, w - 78, horizon - 22, 108, '#ff8020', 0.85);
+  g.fillStyle = '#0d0602';
+  g.fillRect(w - 118, horizon - 62, 76, 62);
+  MM6.rct(g, w - 118, horizon - 62, 76, 3, [5, 3, 1]);
+  MM6.rct(g, w - 118, horizon - 62, 4, 62, [5, 3, 1]);
+  MM6.rct(g, w - 46, horizon - 62, 4, 62, [5, 3, 1]);
+  MM6.rct(g, w - 112, horizon - 13, 64, 5, [58, 36, 18]);
+  MM6.rct(g, w - 112, horizon - 13, 64, 1, [100, 68, 34]);
+  paintFire(g, w - 80, horizon - 9, 50, 34, 11);
+  glow(g, w - 80, horizon - 22, 180, '#ff8020', 1.0);
 
   // A rug in the middle distance so the floor is not empty. It goes down before
   // anything that stands on it, or the weave crosses the innkeeper's boots.
-  const rgx = Math.round(w * 0.40), rgy = horizon + 44, rgw = 104, rgh = 26;
-  for (let dy = -rgh; dy <= rgh; dy++) {
-    const k = Math.round(rgw * Math.sqrt(Math.max(0, 1 - (dy * dy) / (rgh * rgh))));
-    const t = (dy + rgh) / (rgh * 2);
-    MM6.rct(g, rgx - k, rgy + dy, k * 2, 1, rampCss('blood', 2 + Math.round(t * 2)));
-    if (k > 26) {
-      MM6.rct(g, rgx - k + 10, rgy + dy, k * 2 - 20, 1, rampCss('blood', 5 + Math.round(t * 2)));
-      MM6.rct(g, rgx - k + 24, rgy + dy, k * 2 - 48, 1, rampCss('sand', 3 + Math.round(t * 2)));
-    }
-    if (k > 34 && (dy + rgh) % 7 === 3) {
-      for (let x = -k + 30; x < k - 30; x += 16) MM6.rct(g, rgx + x, rgy + dy, 6, 1, rampCss('blood', 8));
-    }
-  }
-  // Fringe: a continuous run of threads, not a dotted rule.
-  for (let x = -rgw + 10; x < rgw - 10; x += 2) {
-    MM6.rct(g, rgx + x, rgy + rgh, 1, 2 + (((x >> 1) & 1) ? 1 : 0), rampCss('sand', 6 + ((x >> 1) & 1)));
-  }
+  paintRug(g, w * 0.38, horizon + 46, 26, 62, 96, 'blood');
 
   // Somebody lives here. An empty painted room with a portrait beside it reads
   // as a backdrop with the actor missing.
-  figure(g, w * 0.62, horizon + 60, 112, null, null, { seed: 0x51a7, apron: [104, 96, 74] });
+  figure(g, w * 0.62, horizon + 60, 112, null, null, {
+    seed: poseSeed('hipshot', 1907), apron: [104, 96, 74],
+  });
 
   paintClutter(g, 22, h - 10, 'barrel', 32);
   paintClutter(g, 62, h - 8, 'crate', 24);
@@ -1325,7 +1434,18 @@ export function paintRoom(g, w, h, kind = 'house') {
   vignette(g, w, h);
 }
 
-/** Darken the frame edges so painted panels sit inside their stone surround. */
+/**
+ * Darken the frame edges so painted panels sit inside their stone surround.
+ *
+ * The dither is confined to the band the vignette is actually attenuating.
+ * Running an ordered dither over the whole plate - which is what this used to
+ * do - lays a 2-pixel screen-door across every flat surface in the room, and a
+ * global checkerboard is precisely what the software renderer never did: MM6
+ * swaps between 32 pre-darkened palettes and lets gradients *band*. So the
+ * middle of the painting is left alone and only the darkening rim, where the
+ * ramp would otherwise step visibly, gets a Bayer offset - scaled by how much
+ * darkening is happening at that pixel.
+ */
 export function vignette(g, w, h, strength = 0.55) {
   const img = g.getImageData(0, 0, w, h);
   const d = img.data;
@@ -1334,12 +1454,19 @@ export function vignette(g, w, h, strength = 0.55) {
       const ex = Math.min(x, w - 1 - x) / (w * 0.5);
       const ey = Math.min(y, h - 1 - y) / (h * 0.5);
       const e = Math.min(1, Math.min(ex, ey) * 3.2);
-      const k = 1 - (1 - e) * strength;
+      if (e >= 1) continue;                       // untouched middle: no dither
+      const fall = 1 - e;
+      const k = 1 - fall * strength;
+      const t = bay8(x, y) * 7 * fall;
       const i = (y * w + x) * 4;
-      d[i] *= k; d[i + 1] *= k; d[i + 2] *= k;
+      const p = snap(
+        clamp(Math.round(d[i] * k + t), 0, 255),
+        clamp(Math.round(d[i + 1] * k + t), 0, 255),
+        clamp(Math.round(d[i + 2] * k + t), 0, 255),
+      );
+      d[i] = p[0]; d[i + 1] = p[1]; d[i + 2] = p[2];
     }
   }
-  ditherRegion(img, 6);
   g.putImageData(img, 0, 0);
 }
 

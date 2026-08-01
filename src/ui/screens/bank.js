@@ -8,11 +8,14 @@
 // ---------------------------------------------------------------------------
 
 import { rampCss } from '../../core/palette.js';
+import { hash2 } from '../../core/rng.js';
+
 
 import * as F from '../../art/font.js';
 import {
-  HouseScreen, PANEL, A, plate, baked, glow, figure, gold, hotText, paintWall, paintFloor,
-  paintShelf, paintCounter, paintClutter, vignette, partyGold, spend, earn, C_WHITE, C_GOLD,
+  HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, hotText, paintWall, paintFloor,
+  paintShelf, paintCounter, paintClutter, vignette, partyGold, spend, earn, poseSeed, paintMasonry,
+  C_WHITE, C_GOLD,
   C_CANARY, C_DIM, C_GREEN, MM6,
 } from './dialogue.js';
 
@@ -26,26 +29,41 @@ export function paintBankInterior(g, w, h) {
   paintWall(g, 0, 0, w, horizon, { ramp: 'stone', lo: 0.12, hi: 0.46, course: 24, seed: 121 });
   paintFloor(g, 0, horizon, w, h - horizon, { ramp: 'stone', seed: 133 });
 
-  // Chequered marble floor, drawn over the wash.
-  g.save();
-  g.globalAlpha = 0.35;
-  for (let y = horizon, row = 0; y < h; y += 16, row++) {
-    for (let x = -((row % 2) * 24); x < w; x += 48) {
-      g.fillStyle = rampCss('grey', row % 2 ? 3 : 8);
-      g.fillRect(x, y, 24, 16);
+  // Chequered marble floor. The courses compress with depth and each slab keeps
+  // its own value, so the pattern reads as a floor receding rather than as a
+  // half-opacity grid laid over a wash.
+  {
+    let y = horizon, step = 5, row = 0;
+    while (y < h) {
+      const sy = Math.round(y), sh = Math.max(3, Math.round(step));
+      const pitch = Math.max(14, Math.round(step * 2.4));
+      const off = (row & 1) ? Math.round(pitch / 2) : 0;
+      for (let x = 0; x < w; x++) {
+        const cell = Math.floor((x + off) / pitch);
+        const dark = ((cell + row) & 1) === 0;
+        const jit = hash2(cell, row, 63) * 0.05;
+        const joint = ((x + off) % pitch) < 1;
+        for (let dy = 0; dy < sh && sy + dy < h; dy++) {
+          const v = joint || dy >= sh - 1 ? 0.08
+            : (dark ? 0.17 : 0.44) + jit + (dy < 1 ? 0.05 : 0);
+          MM6.rct(g, x, sy + dy, 1, 1, MM6.mix([20, 20, 20], [188, 188, 184], MM6.band(v, 8)));
+        }
+      }
+      y += step; step *= 1.22; row++;
     }
   }
-  g.restore();
 
-  // The vault door dominates the back wall.
+  // The vault door dominates the back wall. Its jamb is coursed stone rather
+  // than a flat plate, or the door reads as a decal on wallpaper.
   const vx = w * 0.62, vy = 44, vr = 76;
-  g.fillStyle = rampCss('grey', 3);
-  g.fillRect(vx - vr - 10, vy - 6, vr * 2 + 20, vr * 2 + 12);
+  paintMasonry(g, vx - vr - 10, vy - 6, vr * 2 + 20, vr * 2 + 12, {
+    block: 38, course: 17, seed: 29, lo: [22, 22, 20], hi: [122, 122, 116],
+  });
   // A modelled steel door: each ring is lit at the upper left and falls into
   // shadow at the lower right, painted scanline by scanline.
   const cyv = vy + vr;
-  for (const [rad, lo, hi] of [[vr, [46, 46, 50], [148, 150, 156]],
-    [vr - 8, [70, 70, 76], [186, 190, 196]], [vr - 20, [40, 40, 44], [126, 128, 134]]]) {
+  for (const [rad, lo, hi] of [[vr, [26, 26, 30], [104, 106, 112]],
+    [vr - 8, [40, 40, 46], [138, 142, 150]], [vr - 20, [22, 22, 26], [86, 88, 96]]]) {
     for (let dy = -rad; dy <= rad; dy++) {
       const k = Math.round(Math.sqrt(Math.max(0, rad * rad - dy * dy)));
       for (let dx = -k; dx <= k; dx++) {
@@ -70,7 +88,7 @@ export function paintBankInterior(g, w, h) {
     g.fillStyle = rampCss('grey', 11);
     g.fillRect((vx + Math.cos(a) * (vr - 4)) | 0, (vy + vr + Math.sin(a) * (vr - 4)) | 0, 3, 3);
   }
-  glow(g, vx, vy + vr, 110, '#e1cd23', 0.28);
+  glow(g, vx - 22, vy + vr - 22, 96, '#e1cd23', 0.34);
 
   // Shelf of ledgers on the left.
   paintShelf(g, 20, 92, 150, { th: 5 });
@@ -90,34 +108,47 @@ export function paintBankInterior(g, w, h) {
 
   // Counter with a cage grille, scales and a coin stack.
   const cy = h - 78;
-  paintCounter(g, 0, cy, w, 30, { cloth: 'foliage' });
+  // The teller stands behind the counter, so he goes down first and the counter
+  // cuts him at the waist. Drawn afterwards he stands on top of it.
+  figure(g, w * 0.30, cy + 12, 110, null, null, {
+    seed: poseSeed('folded', 5507), cloth: [62, 60, 78], skin: [182, 140, 104],
+    robe: false, hood: false, shadow: false,
+  });
+  paintCounter(g, 0, cy, w, 34, { cloth: 'swamp' });
   // Brass bars: a lit face, a dark side and a shadow cast on the wall behind.
   for (let x = 12; x < w - 12; x += 22) {
-    MM6.rct(g, x + 3, cy - 54, 2, 54, [0, 0, 0]);
+    MM6.rct(g, x + 3, cy - 54, 2, 54, [16, 12, 6]);
     MM6.rct(g, x, cy - 54, 3, 54, [116, 88, 36]);
     MM6.rct(g, x, cy - 54, 1, 54, [188, 152, 72]);
   }
   MM6.rct(g, 0, cy - 56, w, 4, [116, 88, 36]);
   MM6.rct(g, 0, cy - 56, w, 1, [188, 152, 72]);
   MM6.rct(g, 0, cy - 53, w, 1, [58, 42, 16]);
-  // A teller behind the grille.
-  figure(g, w * 0.30, cy + 2, 88, null, null, { cloth: [62, 60, 78], skin: [206, 162, 124], robe: false, hood: false });
-  // Scales on the counter.
+  // Scales on the counter: a brass column with a lit face, a beam with a lit
+  // top arris, and two pans hung off it.
   const sx = w - 96;
-  g.fillStyle = rampCss('gold', 7);
-  g.fillRect(sx, cy - 26, 3, 26);
-  g.fillRect(sx - 20, cy - 26, 43, 2);
+  MM6.rct(g, sx, cy - 26, 3, 26, [124, 96, 34]);
+  MM6.rct(g, sx, cy - 26, 1, 26, [206, 168, 82]);
+  MM6.rct(g, sx - 20, cy - 26, 43, 2, [124, 96, 34]);
+  MM6.rct(g, sx - 20, cy - 26, 43, 1, [214, 178, 90]);
   for (const ox of [-20, 20]) {
-    g.beginPath();
-    g.moveTo(sx + ox - 8, cy - 18); g.lineTo(sx + ox + 8, cy - 18); g.lineTo(sx + ox, cy - 12);
-    g.closePath(); g.fill();
+    MM6.rct(g, sx + ox, cy - 24, 1, 6, [88, 68, 26]);
+    poly(g, [sx + ox - 8, cy - 18, sx + ox + 8, cy - 18, sx + ox, cy - 12], MM6.pc([168, 136, 60]));
+    MM6.rct(g, sx + ox - 8, cy - 18, 16, 1, [230, 198, 112]);
+    MM6.rct(g, sx + ox - 3, cy - 15, 6, 1, [96, 74, 28]);
   }
-  for (let i = 0; i < 4; i++) {
-    g.fillStyle = rampCss('gold', 10 - i);
-    g.beginPath(); g.ellipse(sx - 52, cy - 4 - i * 3, 9, 3, 0, 0, Math.PI * 2); g.fill();
+  // A stack of coin: each disc is a lit crescent over a shadowed one, so the
+  // pile reads as metal rather than as a yellow blob.
+  for (let i = 0; i < 5; i++) {
+    const yy = cy - 4 - i * 3;
+    MM6.ellip(g, sx - 52, yy, 9, 3, [96, 72, 20]);
+    MM6.ellip(g, sx - 52, yy - 1, 9, 3, [188, 152, 62]);
+    MM6.rct(g, sx - 59, yy - 2, 8, 1, [240, 212, 128]);
   }
+  MM6.ellip(g, sx - 52, cy - 4 - 5 * 3, 9, 3, [222, 190, 104]);
 
-  paintClutter(g, w - 44, h - 6, 'crate', 26);
+  paintClutter(g, w - 48, h - 6, 'crate', 28);
+  paintClutter(g, 22, h - 4, 'sack', 26);
   vignette(g, w, h);
 }
 

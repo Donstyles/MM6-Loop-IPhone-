@@ -47,7 +47,7 @@ export class MapScreen extends Screen {
   onOpen() {
     this.pan.x = 0; this.pan.z = 0;
     // The book opens at its closest zoom - 1536 outdoors, 3072 indoors.
-    this.zoom = this.session.map && this.session.map.indoor ? 3 : 2;
+    this.zoom = 0; // TEMPCHECK
     this.sound('page');
   }
 
@@ -79,6 +79,20 @@ export class MapScreen extends Screen {
   /** World units across the width of the chart at the current zoom. */
   span(w = VIEW.w) { return (w * WORLD) / ZOOMS[this.zoom]; }
 
+  /**
+   * Where the chart is centred: the party plus the pan, held inside the map so
+   * the page never runs off the edge of the plate and leaves a bare margin.
+   */
+  centre(rect) {
+    const p = this.player;
+    const sw = this.span(rect.w), sh = (sw * rect.h) / rect.w;
+    const lx = Math.max(0, WORLD / 2 - sw / 2), lz = Math.max(0, WORLD / 2 - sh / 2);
+    return {
+      x: Math.max(-lx, Math.min(lx, p.x + this.pan.x)),
+      z: Math.max(-lz, Math.min(lz, p.z + this.pan.z)),
+    };
+  }
+
   get player() {
     const p = this.session && this.session.player;
     if (p && p.pos) return { x: p.pos.x, z: p.pos.z, yaw: p.yaw || 0 };
@@ -89,8 +103,8 @@ export class MapScreen extends Screen {
   projector(rect) {
     const span = this.span(rect.w);
     const s = rect.w / span;
-    const p = this.player;
-    const cx = p.x + this.pan.x, cz = p.z + this.pan.z;
+    const c = this.centre(rect);
+    const cx = c.x, cz = c.z;
     return {
       s,
       x: (wx) => rect.x + rect.w / 2 + (wx - cx) * s,
@@ -109,7 +123,9 @@ export class MapScreen extends Screen {
     ctx.beginPath(); ctx.rect(rect.x, rect.y, rect.w, rect.h); ctx.clip();
 
     const indoor = !!(map && map.indoor);
-    ctx.fillStyle = indoor ? MAP_NAVY : '#0d1014';
+    // Outdoors, anything off the edge of the plate is open sea, painted the
+    // same colour as the deep water on it - never a black margin.
+    ctx.fillStyle = indoor ? MAP_NAVY : '#16202a';
     ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
 
     let drawn = false;
@@ -117,9 +133,7 @@ export class MapScreen extends Screen {
       try {
         // The automap plates centre themselves on the party and ignore a pan
         // argument, so the pan is handed to them as a moved party instead.
-        const p = this.player;
-        map.drawMinimap(ctx, rect, { x: p.x + this.pan.x, z: p.z + this.pan.z },
-          this.span(rect.w), this.pan);
+        map.drawMinimap(ctx, rect, this.centre(rect), this.span(rect.w), this.pan);
         drawn = true;
       } catch (e) { drawn = false; }
     }
@@ -157,26 +171,8 @@ export class MapScreen extends Screen {
     this.pollPartyBar();
   }
 
-  /** A painted compass rose in the top-right corner of the chart. */
-  drawRose(ctx, rect) {
-    const cx = rect.x + rect.w - 30, cy = rect.y + 30;
-    const R = 18;
-    for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]]) {
-      for (let i = 0; i < R; i++) {
-        const k = Math.max(1, Math.round((R - i) * 0.28));
-        M.rct(ctx, Math.round(cx + dx * i - (dx ? 0 : k)), Math.round(cy + dy * i - (dy ? 0 : k)),
-          dx ? 1 : k * 2, dy ? 1 : k * 2, (dx + dy) < 0 ? [246, 236, 206] : [70, 52, 26]);
-      }
-    }
-    for (const [dx, dy] of [[1, -1], [1, 1], [-1, 1], [-1, -1]]) {
-      for (let i = 0; i < R * 0.6; i++) {
-        M.rct(ctx, Math.round(cx + dx * i), Math.round(cy + dy * i), 1, 1, [124, 98, 54]);
-      }
-    }
-    M.disc(ctx, cx, cy, 3, '#3a2a10');
-    F.drawText(ctx, 'N', cx, cy - R - 11,
-      { face: 'small', align: 'center', color: '#3a2a10', shadow: '#ece0c2' });
-  }
+  // MM6's map book carries no compass rose - north is up on every page and the
+  // ribbon compass lives in the right panel - so nothing is drawn here.
 
   /** Outdoor maps are a pre-rendered picture, sampled nearest-neighbour. */
   drawMapImage(ctx, rect, img) {
@@ -283,9 +279,33 @@ export class MapScreen extends Screen {
   }
 
   /** Town / dungeon labels and the coloured dots MM6 puts on the automap. */
+  /**
+   * The places the region knows about, so the chart carries names. Built once
+   * per map: the automap plate draws the streets and the walls, but a map with
+   * nothing written on it is a picture, not a map.
+   */
+  markersFor(map) {
+    const key = (map && (map.id || map.name)) || '-';
+    if (this._marks && this._marksKey === key) return this._marks;
+    const given = (map && map.mapMarkers) || this.session.mapMarkers || null;
+    let marks = given;
+    if (!marks) {
+      marks = [];
+      const region = map && map.region;
+      for (const t of (region && region.towns) || []) {
+        if (t && isFinite(t.x)) marks.push({ x: t.x, z: t.z, name: t.name, kind: 'town' });
+      }
+      for (const d of (region && region.dungeons) || []) {
+        if (d && isFinite(d.x)) marks.push({ x: d.x, z: d.z, name: d.name, kind: 'dungeon' });
+      }
+    }
+    this._marks = marks; this._marksKey = key;
+    return marks;
+  }
+
   drawMarkers(ctx, rect, map) {
     const proj = this.projector(rect);
-    const marks = (map && map.mapMarkers) || this.session.mapMarkers || [];
+    const marks = this.markersFor(map);
     for (const m of marks) {
       const x = Math.round(proj.x(m.x)), y = Math.round(proj.y(m.z));
       if (x < rect.x - 20 || x > rect.x + rect.w + 20) continue;

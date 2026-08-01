@@ -55,6 +55,66 @@ const CHECKS = [
   ['touchControls', 'Thumb Controls'],
 ];
 
+/**
+ * The `options` panel's own painted ground.
+ *
+ * The Esc menu in MM6 is not the HUD chrome repeated at 461 x 345 - it is its
+ * own painted plate, and painting it in the same mottled grey as the frame
+ * around it is what made the buttons vanish into the background. This is
+ * oiled, tooled hide: warm, dark, coarse-grained, with a blind-tooled double
+ * rule and a stepped fleuron in each corner.
+ */
+function optionsBoard() {
+  return M.cached('opt:board', () => {
+    const w = PANEL.w, h = PANEL.h;
+    const lo = [30, 25, 18], hi = [92, 76, 50];
+    const cv = M.paintCanvas(w, h, (x, y) => {
+      const coarse = M.band(Math.max(0, Math.min(1,
+        0.5 + (Math.sin(x * 0.031 + Math.cos(y * 0.024) * 2.1) * 0.5
+          + Math.sin(y * 0.043 + 1.7) * 0.5) * 0.22)), 7);
+      const pore = ((x * 7 + y * 13) % 19) / 19 - 0.5;
+      const grain = ((x * 3 + y * 5) % 7) / 7 - 0.5;
+      let t = 0.30 + coarse * 0.34 + pore * 0.09 + grain * 0.05;
+      // The rim of a stretched hide is darker and a little dirtier.
+      const e = Math.min(Math.min(x, w - 1 - x) / 26, Math.min(y, h - 1 - y) / 22);
+      if (e < 1) t -= (1 - e) * 0.24;
+      return M.mix(lo, hi, Math.max(0, Math.min(1, t)));
+    }, 4);
+    const g = cv.getContext('2d');
+    // Blind-tooled double rule.
+    const ink = [18, 13, 8], gild = [150, 122, 70];
+    for (const [m, c] of [[10, ink], [14, gild], [16, ink]]) {
+      M.rct(g, m, m, w - m * 2, 1, c); M.rct(g, m, h - m - 1, w - m * 2, 1, c);
+      M.rct(g, m, m, 1, h - m * 2, c); M.rct(g, w - m - 1, m, 1, h - m * 2, c);
+    }
+    // A stepped fleuron tooled into each corner.
+    const fleur = (fx, fy, sx, sy) => {
+      // A stepped lozenge running in off the corner: four blocks getting
+      // smaller, then a pip. Hand-cut, so the steps are square.
+      for (let i = 0; i < 4; i++) {
+        const k = 4 - i;
+        M.rct(g, fx + sx * i * 3 - (sx < 0 ? k - 1 : 0), fy + sy * i * 3 - (sy < 0 ? k - 1 : 0),
+          k, k, i === 0 ? ink : gild);
+      }
+      M.rct(g, fx + sx * 13 - (sx < 0 ? 1 : 0), fy + sy * 13 - (sy < 0 ? 1 : 0), 2, 2, ink);
+    };
+    fleur(21, 21, 1, 1); fleur(w - 22, 21, -1, 1);
+    fleur(21, h - 22, 1, -1); fleur(w - 22, h - 22, -1, -1);
+    return cv;
+  });
+}
+
+/**
+ * One menu plaque: a carved slab standing off the board on a hard shadow,
+ * with the lettering cut into a recess in its face. 214 x 40, MM6's own size.
+ */
+function plaque(ctx, x, y, w, h, state, seed) {
+  M.rct(ctx, x + 3, y + 3, w, h, [16, 12, 8]);
+  const d = M.carvedPlate(ctx, x, y, w, h, { state, material: 'brass', seed });
+  M.carvedWell(ctx, x + 5 + d, y + 5 + d, w - 10, h - 10, { material: 'brass', seed: seed + 3 });
+  return d;
+}
+
 export class OptionsScreen extends Screen {
   constructor(session, ui, hud, opts) {
     super(session, ui, hud, opts);
@@ -94,7 +154,8 @@ export class OptionsScreen extends Screen {
   }
 
   draw(ctx) {
-    this.drawPage(ctx, 'stone');
+    M.blit(ctx, optionsBoard(), PANEL.x, PANEL.y);
+    A.bevel(ctx, PANEL.x, PANEL.y, PANEL.w, PANEL.h, { sunken: true, size: 2 });
 
     // A carved cartouche across the head of the panel, the way the painted
     // `options` background does it - no rule, no flat plate.
@@ -114,8 +175,8 @@ export class OptionsScreen extends Screen {
     for (const [id, label, bx, by] of BUTTONS) {
       const x = px(bx), y = py(by);
       const hit = this.ui.region(`${this.id}:b:${id}`, x, y, BTN_W, BTN_H, label);
-      const d = A.button(ctx, x, y, BTN_W, BTN_H, null,
-        hit.down ? 'down' : hit.hover ? 'hot' : 'up', { seed: 5 + bx });
+      const d = plaque(ctx, x, y, BTN_W, BTN_H,
+        hit.down ? 'down' : hit.hover ? 'hot' : 'up', 5 + (bx % 97));
       F.drawText(ctx, label, (x + BTN_W / 2 + d) | 0, (y + (BTN_H - 12) / 2 + d) | 0, {
         face: 'title', align: 'center',
         color: id === 'quit' && hit.hover ? RED : hit.hover ? HILITE : CANARY,

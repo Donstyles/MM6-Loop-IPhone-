@@ -27,9 +27,25 @@ const lerp = (a, b, t) => a + (b - a) * t;
 
 function P(size = 64) { return new Pix(size, size); }
 
+/**
+ * Number of fBm octaves that can be taken from a `per`-cell lattice before the
+ * finest one falls below two texels.
+ *
+ * Past that point the wrapping hash aliases against the pixel grid and the
+ * octave stops being noise: it lays down a hard checkerboard. That checkerboard
+ * is what reads as "1-2 px random speckle" at magnification, and it is the
+ * single clearest sign that a surface was generated rather than painted, so no
+ * builder here is allowed to ask for it.
+ */
+function safeOct(per, oct, size) {
+  let o = oct;
+  while (o > 1 && per * (1 << (o - 1)) > size / 2) o--;
+  return o;
+}
+
 /** Isotropic tiling fBm sampled in pixel space; `per` lattice cells across. */
 function nz(x, y, per, seed, oct = 3, gain = 0.5, size = 64) {
-  return tileFbm2((x / size) * per, (y / size) * per, per, oct, gain, seed);
+  return tileFbm2((x / size) * per, (y / size) * per, per, safeOct(per, oct, size), gain, seed);
 }
 /** Single octave of the same. */
 function nz1(x, y, per, seed, size = 64) {
@@ -52,8 +68,9 @@ function nzXY(x, y, perX, perY, seed, size = 64) {
   return lerp(lerp(a, b, tx), lerp(c, d, tx), ty);
 }
 function fbmXY(x, y, perX, perY, seed, oct = 3, gain = 0.5, size = 64) {
+  const o = safeOct(Math.max(perX, perY), oct, size);
   let amp = 1, f = 1, s = 0, n = 0;
-  for (let i = 0; i < oct; i++) {
+  for (let i = 0; i < o; i++) {
     s += amp * nzXY(x, y, perX * f, perY * f, seed + i * 6151, size);
     n += amp; amp *= gain; f *= 2;
   }
@@ -291,68 +308,116 @@ function cobbleFill(pix, o = {}) {
 }
 
 /**
- * Brick / block course with running bond, per-brick tone, bevelled edges and
- * bitten corners. Everything masonry in the game routes through here.
+ * Brick / block course with running bond, per-block tone, bevelled edges and
+ * deliberate chipping. Everything masonry in the game routes through here.
+ *
+ * The rule the hand-painted originals follow, and the one that separates them
+ * from a tinted noise field:
+ *
+ *  - Course heights are *exact*. Mortar beds are dead straight, one fixed
+ *    width, and a joint never wanders. Displacing the course lookup by a noise
+ *    field - which is what this used to do - smears the mortar into a brown
+ *    haze and makes the block edges wobble, and that is the first thing a
+ *    reader notices at magnification.
+ *  - What irregularity there is comes from whole-texel offsets chosen once per
+ *    block: a stone may sit a texel proud of its neighbour, but its own edges
+ *    stay straight.
+ *  - Mortar is recessed by rule: a lit texel along the top and left of every
+ *    block, a shadowed one along the bottom and right.
+ *  - Chipping is deliberate. Roughly one block in four loses a corner, in a
+ *    stepped notch with a lighter freshly-broken face, rather than every block
+ *    dissolving a little at random.
  */
 function courseWall(pix, o = {}) {
   const {
     rows = 5, cols = 2, seed = 13, mortarW = 1, off = 0.5,
     colA = [96, 52, 38], colB = [156, 84, 58], mortar = [176, 168, 150],
     bevel = 0.26, chip = 0.35, grain = 0.16, grainPerX = 20, grainPerY = 12,
-    faceFn = null, wobble = 0.6,
+    faceFn = null, chipRate = 0.74, jitter = 1,
   } = o;
   const size = pix.w;
   const bh = size / rows, bw = size / cols;
   paint(pix, (x, y) => {
-    // A little vertical wobble in the mortar keeps courses from looking CG.
-    const wob = (nz1(x, y, 16, seed + 5, size) - 0.5) * wobble;
-    const yy = y + wob;
-    let row = Math.floor(yy / bh); row = wrapI(row, rows);
-    const yIn = yy - Math.floor(yy / bh) * bh;
+    const row = wrapI(Math.floor(y / bh), rows);
+    const yIn = y - Math.floor(y / bh) * bh;
     const rowOff = ((row * off) % 1) * bw;
-    const bx = wrapI(x + rowOff + (nz1(x, y, 16, seed + 8, size) - 0.5) * wobble, size);
+    // Whole-texel jitter of the vertical joints, chosen once per course, so a
+    // course is offset but never crooked.
+    const jx = jitter ? Math.round((hash2(row, 5, seed + 71) - 0.5) * 2 * jitter) : 0;
+    const bx = wrapI(x + rowOff + jx, size);
     const col = Math.floor(bx / bw);
     const xIn = bx - col * bw;
 
     const tone = hash2(col, row, seed + 17);
-    const mortarPix = scaleC(mortar, 0.82 + nz1(x, y, 26, seed + 23, size) * 0.42);
-    if (yIn < mortarW || xIn < mortarW) return mortarPix;
+    const mortarPix = scaleC(mortar, 0.86 + nz1(x, y, 26, seed + 23, size) * 0.3);
+    // per-block whole-texel widening of its own bed, again constant per block
+    const mw = mortarW + (hash2(col, row, seed + 73) > 0.78 ? 1 : 0);
+    if (yIn < mortarW || xIn < mw) return mortarPix;
 
-    // Bitten corners: each brick loses one or two of them.
-    const u = (xIn - mortarW) / (bw - mortarW), v = (yIn - mortarW) / (bh - mortarW);
-    const cq = hash2(col, row, seed + 41);
-    const bite = chip * (0.5 + hash2(col, row, seed + 43));
-    const cu = cq < 0.25 ? u : cq < 0.5 ? 1 - u : cq < 0.75 ? u : 1 - u;
-    const cv = cq < 0.5 ? v : 1 - v;
-    if (cu * (bw - mortarW) + cv * (bh - mortarW) < bite * 3.4) return mortarPix;
+    const u = (xIn - mw) / (bw - mw), v = (yIn - mortarW) / (bh - mortarW);
+
+    // Deliberate chipping: one block in four, one corner, a stepped notch.
+    if (hash2(col, row, seed + 43) > chipRate) {
+      const q = hash2(col, row, seed + 41);
+      const cu = q < 0.5 ? u : 1 - u;
+      const cv = q < 0.25 || q >= 0.75 ? v : 1 - v;
+      const bite = 1.4 + chip * 3.2 * hash2(col, row, seed + 47);
+      const d = cu * (bw - mw) + cv * (bh - mortarW);
+      if (d < bite) return mortarPix;
+      // the stone under a fresh break is paler than the weathered face
+      if (d < bite + 1.1) {
+        const face = faceFn ? faceFn(x, y, u, v, col, row, tone) : mixC(colA, colB, 0.25 + tone * 0.7);
+        return scaleC(face, 1.12);
+      }
+    }
 
     let c = faceFn
       ? faceFn(x, y, u, v, col, row, tone)
       : mixC(colA, colB, 0.25 + tone * 0.7);
     c = scaleC(c, 1 - grain * 0.5 + fbmXY(x, y, grainPerX, grainPerY, seed + col * 7 + row * 31, 3, 0.55, size) * grain);
-    // bevel: lit top/left, shadowed bottom/right
-    const eIn = Math.min(u, v), eOut = Math.max(u, v);
-    const k = eIn < 0.09 ? 1 + bevel * (1 - eIn / 0.09)
-      : eOut > 0.91 ? 1 - bevel * 0.85 * ((eOut - 0.91) / 0.09) : 1;
-    return scaleC(c, k * (0.9 + tone * 0.2));
+    // bevel: one lit texel along the top and left, one shadowed along the
+    // bottom and right, so the mortar reads as recessed
+    const ux = u * (bw - mw), vy = v * (bh - mortarW);
+    const k = (ux < 1 || vy < 1) ? 1 + bevel
+      : (ux < 2 || vy < 2) ? 1 + bevel * 0.4
+        : (ux > bw - mw - 1 || vy > bh - mortarW - 1) ? 1 - bevel * 0.85 : 1;
+    return scaleC(c, k * (0.94 + tone * 0.12));
   });
   return pix;
 }
 
-/** Vertical dark streaks running down from the mortar lines - old masonry. */
+/**
+ * Damp staining bleeding down out of the mortar beds.
+ *
+ * Drawn as a small number of named streaks rather than as a threshold on a
+ * noise field: a noise threshold scatters dark blotches at random across the
+ * whole face, which is precisely what generated masonry looks like. Each
+ * streak starts at a joint, is one to three texels wide, and fades out as it
+ * runs down the block.
+ */
 function weatherStreaks(pix, o = {}) {
-  const { seed = 71, rows = 3, amount = 0.35, col = [40, 40, 38], perX = 26 } = o;
+  const { seed = 71, rows = 3, amount = 0.35, col = [40, 40, 38], count = 0 } = o;
   const size = pix.w;
   const bh = size / rows;
-  paint(pix, (x, y) => {
-    const n = fbmXY(x, y, perX, 2, seed, 3, 0.6, size);
-    const s = smoothstep(0.56, 0.86, n);
-    if (s <= 0) return null;
-    const down = (y % bh) / bh;
-    const t = s * amount * smoothstep(0, 0.5, down) * (1 - down * 0.35);
-    const cur = pix.get(x, y);
-    return mixC(cur, col, t);
-  });
+  const n = count || Math.max(4, Math.round(size / 7));
+  const rnd = new Rand(seed);
+  for (let i = 0; i < n; i++) {
+    const x0 = Math.round((i + rnd.float(0.1, 0.9)) * (size / n));
+    const row = rnd.int(rows);
+    const w = rnd.bool(0.4) ? 2 : rnd.bool(0.7) ? 1 : 3;
+    const len = Math.max(2, Math.round(bh * rnd.float(0.45, 1.15)));
+    const str = amount * rnd.float(0.55, 1.15);
+    for (let d = 0; d < len; d++) {
+      const y = Math.round(row * bh + d);
+      const fade = (1 - d / len) * smoothstep(0, 2.5, d);
+      for (let k = 0; k < w; k++) {
+        const wob = Math.round(nz1(x0 + k, y, 8, seed + 3, size) * 1.6) - 1;
+        const t = str * fade * (w > 1 && (k === 0 || k === w - 1) ? 0.55 : 1);
+        if (t <= 0.01) continue;
+        blend(pix, x0 + k + wob, y, col, t);
+      }
+    }
+  }
   return pix;
 }
 
@@ -373,90 +438,121 @@ function knot(pix, cx, cy, r, dark, light) {
 // TERRAIN
 // ===========================================================================
 
-/** Shared grass builder: base soil, bare patches, then drawn clumps + tufts. */
+/**
+ * Grass.
+ *
+ * The structure here is deliberately shallow. One gentle ~16 px mottle carries
+ * the whole tile and everything painted on top of it is 1-3 px blade speckle
+ * inside a narrow value band, half of it lighter than the sward and half of it
+ * darker so the tile's mean value never moves. MM6 grass reads *almost flat*
+ * from eye height - all the eye picks up is the texel grain - and the moment a
+ * tile carries 8-16 px patches of four distinct hues it turns into camouflage
+ * as it marches to the horizon. Bare earth is a handful of small scrapes at
+ * low opacity, never a low-frequency brown field.
+ */
 function grassTex(o) {
   const {
-    dk, md, lt, hi, soil, seed = 101, dirtLo = 0.56, dirtHi = 0.78, dirtAmt = 0.75,
-    clumps = 60, tufts = 60, blades = true, per = 8,
+    dk, md, lt, hi, soil, seed = 101,
+    mottle = 0.13, blades = 680, bare = 6, bareAmt = 0.34, gritN = 200,
+    lightBias = 0.5,
   } = o;
   const p = P();
-  // A calm mid-tone sward. Contrast lives in the drawn clumps, not the base,
-  // or the tile turns into camouflage when it repeats across the heightmap.
-  paint(p, (x, y) => {
-    const n = fbmXY(x, y, per, per, seed, 4, 0.5);
-    const patch = nz(x, y, 3, seed + 202, 3, 0.6);
-    const c = mixC(dk, md, clamp01((n - 0.4) * 1.5 + 0.35));
-    return mixC(c, lt, clamp01((patch - 0.55) * 1.1));
-  });
-  // bare earth showing through the sward
-  paint(p, (x, y) => {
-    const t = smoothstep(dirtLo, dirtHi, nz(x, y, 4, seed + 303, 4, 0.55));
-    if (t <= 0) return null;
-    const d = scaleC(soil, 0.85 + nz1(x, y, 20, seed + 404) * 0.35);
-    return mixC(p.get(x, y), d, t * dirtAmt);
-  });
   const rnd = new Rand(seed + 7);
-  for (const [cx, cy] of scatter(clumps, seed + 7)) {
-    const rx = rnd.float(2.2, 3.6), ry = rx * rnd.float(0.5, 0.8);
-    const c = scaleC(mixC(md, hi, rnd.float(0.45, 1)), rnd.float(0.92, 1.06));
-    // shadow pooled at the base of the clump, blades catching light on top
-    blob(p, cx, cy + 1, rx * 1.05, ry, (x, y, d) => {
-      if (d > 0.9) return null;
-      return scaleC(p.get(x, y), 0.9);
-    });
-    blob(p, cx, cy, rx, ry, (x, y, d, dx, dy) => {
-      const wob = nz1(x, y, 32, seed + 61) * 0.45;
-      if (d > 0.55 + wob) return null;
-      return mixC(p.get(x, y), scaleC(c, 1 - dy * 0.04), 0.6 - d * 0.2);
-    });
-    if (blades) {
-      const n = rnd.int(2, 4);
-      for (let b = 0; b < n; b++) {
-        vstroke(p, cx + rnd.int(-2, 2), cy - Math.round(ry * 0.6), rnd.int(2, 3),
-          scaleC(c, 1.16), rnd.bool(0.4) ? 0.5 : 0);
-      }
+
+  // 1. Base sward: one 16 px mottle plus a 4 px break-up, both low amplitude.
+  paint(p, (x, y) => {
+    const m = nz(x, y, 4, seed, 2, 0.55);        // 16 px cells
+    const f = nz(x, y, 16, seed + 21, 2, 0.5);   // 4 px cells
+    const t = clamp01(0.34 + (m - 0.5) * 0.95 + (f - 0.5) * 0.65);
+    return scaleC(mixC(dk, lt, t), 1 - mottle * 0.5 + m * mottle);
+  });
+
+  // 2. Blade speckle on a jittered ~2.5 px lattice. Short strokes, never blobs.
+  const N = Math.max(2, Math.round(Math.sqrt(blades)));
+  const step = 64 / N;
+  for (let gy = 0; gy < N; gy++) {
+    for (let gx = 0; gx < N; gx++) {
+      const bx = Math.round(gx * step + rnd.float(0, step));
+      const by = Math.round(gy * step + rnd.float(0, step));
+      const m = nz(bx, by, 4, seed, 2, 0.55);
+      const t = rnd.float(0.3, 1);
+      const c = rnd.bool(lightBias)
+        ? mixC(md, hi, t * (0.4 + m * 0.6))
+        : mixC(md, dk, t * 0.9);
+      const len = rnd.bool(0.32) ? 3 : 2;
+      vstroke(p, bx, by, len, c, rnd.bool(0.34) ? (rnd.bool() ? 0.5 : -0.5) : 0);
     }
   }
-  // the little 2-3px dark marks that sell hand painting
-  for (const [cx, cy] of scatter(tufts, seed + 11)) {
-    const c = mixC(p.get(cx, cy), dk, 0.6);
-    vstroke(p, cx, cy, rnd.int(2, 3), c, rnd.bool(0.5) ? 0.4 : -0.4);
+
+  // 3. A few thin scrapes where the soil shows through. Six of them, faint -
+  //    enough to give the tile an identity when it repeats, not enough to read
+  //    as a second terrain type.
+  for (const [cx, cy] of scatter(bare, seed + 33)) {
+    const rx = rnd.float(2.4, 4.2), ry = rx * rnd.float(0.55, 0.9);
+    blob(p, cx, cy, rx, ry, (x, y, d) => {
+      const wob = nz1(x, y, 26, seed + 37) * 0.45;
+      if (d > 0.62 + wob) return null;
+      const s = scaleC(soil, 0.88 + nz1(x, y, 30, seed + 41) * 0.28);
+      return mixC(p.get(x, y), s, bareAmt * (1 - d * 0.45));
+    });
   }
-  grit(p, 60, seed + 909);
+  grit(p, gritN, seed + 909, 0.90, 1.10);
   return p;
 }
 
 const tGrass = () => grassTex({
-  dk: [62, 90, 40], md: [90, 116, 52], lt: [110, 140, 60], hi: [135, 160, 80],
+  dk: [62, 90, 40], md: [88, 114, 50], lt: [110, 140, 60], hi: [135, 160, 80],
   soil: [106, 88, 60], seed: 101,
 });
 const tGrassDry = () => grassTex({
   dk: [96, 96, 56], md: [124, 118, 68], lt: [146, 136, 84], hi: [166, 156, 100],
-  soil: [138, 112, 80], seed: 131, dirtLo: 0.50, dirtHi: 0.74, dirtAmt: 0.8,
-  clumps: 34, tufts: 70,
+  soil: [138, 112, 80], seed: 131, bare: 9, bareAmt: 0.42, lightBias: 0.44,
 });
 const tGrassLush = () => grassTex({
   dk: [54, 82, 34], md: [78, 108, 44], lt: [98, 130, 54], hi: [124, 152, 72],
-  soil: [90, 76, 52], seed: 167, dirtLo: 0.76, dirtHi: 0.92, dirtAmt: 0.55,
-  clumps: 62, tufts: 50,
+  soil: [90, 76, 52], seed: 167, bare: 3, bareAmt: 0.26, blades: 760,
 });
+
+/**
+ * A pebble bedded into soil: a lit upper-left facet, a mid face, and a hard
+ * contact shadow on the ground below it. Drawn rather than noised, because a
+ * stone the light does not touch is just a darker rectangle.
+ */
+function pebble(p, cx, cy, r, base, seed) {
+  const ry = r * 0.72;
+  // contact shadow first, so the stone lands on top of it
+  blob(p, cx + 1, cy + 1, r * 1.05, ry * 1.05, (x, y, d) => (d > 1 ? null : scaleC(p.get(x, y), 0.82 + d * 0.14)));
+  blob(p, cx, cy, r, ry, (x, y, d, dx, dy) => {
+    const wob = nz1(x, y, 30, seed) * 0.28;
+    if (d > 0.82 + wob) return null;
+    // three flat facets, not a smooth dome - MM6 stones are chipped, not lit
+    const f = dx + dy * 1.4;
+    const k = f < -r * 0.35 ? 1.22 : f < r * 0.3 ? 1.0 : 0.78;
+    return scaleC(base, k);
+  });
+}
 
 function tDirt() {
   const p = P();
-  groundBase(p, [90, 74, 50], [138, 112, 80], { per: 8, seed: 211, contrast: 1.3, patchCol: [104, 86, 58], patchAmt: 0.4 });
-  // clods: little raised lumps of soil, lit upper-left
+  groundBase(p, [96, 78, 52], [132, 108, 78], { per: 10, seed: 211, contrast: 1.0, patchCol: [110, 90, 62], patchAmt: 0.22 });
+  // Clods: little raised lumps of soil with one lit facet and a shadow pooled
+  // on their lower-right, laid on a jittered grid so the spacing stays even.
   const rnd = new Rand(217);
-  for (const [cx, cy] of scatter(110, 217)) {
-    const r = rnd.float(1.6, 3.4);
-    const base = rnd.float(0.82, 1.2);
+  for (const [cx, cy] of scatter(120, 217)) {
+    const r = rnd.float(1.6, 3.2);
+    const base = rnd.float(0.88, 1.14);
     blob(p, cx, cy, r, r * rnd.float(0.6, 0.95), (x, y, d, dx, dy) => {
-      if (d > 0.85 + nz1(x, y, 32, 219) * 0.3) return null;
-      const k = base * (1 - (dx + dy) * 0.10);
-      return scaleC(p.get(x, y), clamp(k, 0.72, 1.28));
+      if (d > 0.85 + nz1(x, y, 32, 219) * 0.28) return null;
+      const k = base * (dx + dy < -r * 0.3 ? 1.16 : dx + dy > r * 0.35 ? 0.82 : 1);
+      return scaleC(p.get(x, y), clamp(k, 0.74, 1.26));
     });
   }
-  cracks(p, { period: 6, seed: 223, width: 0.05, darkness: 0.35 });
-  grit(p, 220, 227);
+  // stones turned up in the soil
+  for (const [cx, cy] of scatter(16, 2171)) {
+    pebble(p, cx, cy, rnd.float(1.4, 2.6), mixC([104, 96, 84], [166, 156, 138], rnd.float()), 2173);
+  }
+  cracks(p, { period: 6, seed: 223, width: 0.045, darkness: 0.30 });
+  grit(p, 260, 227, 0.90, 1.10);
   return p;
 }
 
@@ -488,26 +584,53 @@ function tMud() {
   return p;
 }
 
+/**
+ * Beaten earth road.
+ *
+ * Structure first: the road runs along X, so the whole tile is built out of
+ * grain stretched on that axis. Two wheel ruts sit at fixed heights with a
+ * lit lip on their upper edge and a crown of untrodden soil between them;
+ * stones are then bedded in deliberately, thickest in the rut bottoms where
+ * the wheels have scoured the soil off them.
+ */
 function tRoadDirt() {
   const p = P();
-  groundBase(p, [92, 68, 40], [162, 128, 84], { per: 9, seed: 251, contrast: 1.3, patchCol: [116, 92, 58], patchAmt: 0.4 });
-  // wheel scuffs running along the road axis
+  const soilDk = [92, 70, 44], soilLt = [158, 126, 84];
+  // rut centres in texels, and their half-width
+  const RUT = [15, 45], RUTW = 8;
+  // how far the rut centre wanders from dead straight, per column
+  const wander = (x) => (fbmXY(x, 0, 6, 1, 259, 2, 0.5) - 0.5) * 5;
+  const rutK = (x, y) => {
+    let k = 1;
+    for (const r of RUT) {
+      const d = Math.abs(wrapI(y - (r + wander(x)) + 32, 64) - 32) / RUTW;
+      if (d >= 1.18) continue;
+      // scoured floor in the middle, a thin lit lip thrown up at the edge
+      k *= d > 1 ? 1.07 : 0.87 + d * d * 0.14;
+    }
+    return k;
+  };
   paint(p, (x, y) => {
-    const s = fbmXY(x, y, 2, 22, 257, 3, 0.6);
-    const k = 0.86 + s * 0.3;
-    return scaleC(p.get(x, y), k);
+    // long grain along the road, plus a fine cross-break so it is not corduroy
+    const g = fbmXY(x, y, 3, 20, 251, 4, 0.55);
+    const f = fbmXY(x, y, 24, 24, 253, 2, 0.5);
+    const c = mixC(soilDk, soilLt, clamp01(0.28 + g * 0.62 + (f - 0.5) * 0.26));
+    return scaleC(c, rutK(x, y));
   });
-  // pressed-in pebbles
+  // scuff streaks dragged along the ruts
+  paint(p, (x, y) => {
+    const s = fbmXY(x, y, 2, 30, 257, 3, 0.6);
+    return scaleC(p.get(x, y), 0.94 + s * 0.13);
+  });
+  // stones: dense in the ruts where the wheels scoured the soil off them,
+  // sparse on the crown between the tracks
   const rnd = new Rand(263);
-  for (let i = 0; i < 70; i++) {
-    const cx = rnd.int(64), cy = rnd.int(64), r = rnd.float(1, 2.2);
-    const base = mixC([96, 90, 80], [172, 166, 152], rnd.float());
-    blob(p, cx, cy, r, r * 0.75, (x, y, d, dx, dy) => {
-      if (d > 1) return null;
-      return scaleC(base, clamp(1 - (dx + dy) * 0.14 - d * 0.2, 0.5, 1.4));
-    });
+  for (const [sx, sy] of scatter(36, 263)) {
+    const near = Math.min(...RUT.map((r) => Math.abs(wrapI(sy - (r + wander(sx)) + 32, 64) - 32)));
+    if (near > RUTW && rnd.bool(0.7)) continue;
+    pebble(p, sx, sy, rnd.float(1.1, 2.2), mixC([92, 84, 72], [142, 134, 118], rnd.float()), 265);
   }
-  grit(p, 200, 269);
+  grit(p, 260, 269, 0.92, 1.09);
   return p;
 }
 
@@ -940,18 +1063,77 @@ function plasterBase(p, o = {}) {
 }
 
 /**
- * Lime stucco: an even cream wash. Deliberately featureless - the spec range is
- * #C0B49A-#E0D8C0 and anything with a hero feature baked in turns into a
- * lattice the moment the wall is more than one tile wide.
+ * Lime stucco over stone.
+ *
+ * A structureless cream wash is the one thing MM6 never has: every exterior
+ * surface in the game carries a painted architectural pattern. So the render
+ * here is laid in five horizontal lifts with a hairline seam and a shadow
+ * under each, a projecting string course runs across the top of the tile (one
+ * banded line per storey once it repeats), dressed quoins step up the corner
+ * in alternating long and short blocks, and one patch of render has come away
+ * to show the brick behind it.
  */
 function tWallPlaster() {
   const p = P();
-  plasterBase(p, { seed: 701, colA: [184, 174, 152], colB: [214, 206, 186] });
-  // trowel sweeps, then hairline cracks with a little grime in them
+  plasterBase(p, { seed: 701, colA: [182, 172, 150], colB: [218, 210, 190] });
+
+  // 1. Trowel lifts. Consistent 12.8 px courses, a rule not a noise field:
+  //    shadow under the lift above, the fresh coat riding slightly proud.
+  const LIFT = 5, lh = 64 / LIFT;
   paint(p, (x, y) => {
-    const sweep = fbmXY(x, y, 4, 7, 705, 3, 0.5);
-    return scaleC(p.get(x, y), 0.97 + sweep * 0.07);
+    const li = Math.floor(y / lh);
+    const v = (y - li * lh) / lh;
+    const tone = 0.965 + hash2(li, 0, 707) * 0.055;
+    const sweep = fbmXY(x, y, 5, 2, 705 + li * 17, 3, 0.5);
+    let k = tone * (0.97 + sweep * 0.07);
+    if (v < 0.06) k *= 0.90;
+    else if (v < 0.14) k *= 1.05;
+    return scaleC(p.get(x, y), k);
   });
+
+  // 2. String course across the head of the tile: three texels of render
+  //    standing proud, lit on top and throwing a hard shadow underneath.
+  paint(p, (x, y) => {
+    const yy = wrapI(y, 64);
+    if (yy > 5) return null;
+    const g = 0.96 + nz1(x, y, 20, 709) * 0.09;
+    if (yy === 0) return scaleC(p.get(x, y), 1.20 * g);
+    if (yy <= 2) return scaleC(p.get(x, y), 1.10 * g);
+    if (yy === 3) return scaleC(p.get(x, y), 0.70 * g);
+    return scaleC(p.get(x, y), (yy === 4 ? 0.82 : 0.93) * g);
+  });
+
+  // 3. Quoins. Dressed stone, a shade greyer than the render, alternating long
+  //    and short so the corner reads as coursed masonry rather than a stripe.
+  const QW = 9, QH = 8;
+  const qDk = [150, 144, 128], qLt = [206, 200, 182], qJoint = [116, 110, 96];
+  paint(p, (x, y) => {
+    const r = Math.floor(y / QH);
+    const w = r % 2 === 0 ? QW : QW - 4;
+    if (x >= w) return null;
+    const v = (y - r * QH) / QH;
+    if (v < 1 / QH || x === w - 1) return scaleC(qJoint, 0.9 + nz1(x, y, 24, 711) * 0.3);
+    const tone = hash2(r, 0, 713);
+    let c = mixC(qDk, qLt, 0.3 + tone * 0.6);
+    c = scaleC(c, 0.94 + fbmXY(x, y, 14, 10, 715 + r * 7, 3, 0.55) * 0.13);
+    // chiselled arris: lit along the top and left, shaded at the foot
+    const k = (v < 0.14 || x < 1) ? 1.16 : v > 0.86 ? 0.84 : 1;
+    return scaleC(c, k);
+  });
+
+  // 4. Two small patches where the render has spalled off and the rubble core
+  //    shows through. Kept muted and tiny: a saturated hero feature turns into
+  //    a lattice the moment the wall is more than one tile wide.
+  for (const [bx0, by0, br] of [[36, 27, 4.5], [12, 51, 3]]) {
+    blob(p, bx0, by0, br, br * 0.62, (x, y, d) => {
+      const wob = nz1(x, y, 22, 717) * 0.45;
+      if (d > 0.78 + wob) return null;
+      if (d > 0.6 + wob) return scaleC(p.get(x, y), 0.80);   // broken lime lip
+      const t = nz(x, y, 12, 721, 3, 0.55);
+      return mixC(p.get(x, y), mixC([132, 116, 96], [172, 156, 132], t), 0.85);
+    });
+  }
+
   cracks(p, { period: 5, seed: 703, width: 0.022, darkness: 0.22 });
   grit(p, 70, 719, 0.96, 1.04);
   return p;
@@ -1022,13 +1204,17 @@ function tWallTimber() {
 
 function tWallBrick() {
   const p = P();
+  // Spec §12: running bond at roughly an 8 px course on a 128 px texture, i.e.
+  // eight courses across our 64 px tile. Five fat courses read as blockwork,
+  // not brick, and at 256 world units to the tile they would be half-metre
+  // bricks.
   courseWall(p, {
-    rows: 5, cols: 2, seed: 751, mortarW: 2, off: 0.5,
+    rows: 8, cols: 3, seed: 751, mortarW: 1, off: 0.5,
     colA: [110, 58, 46], colB: [160, 90, 68], mortar: [176, 168, 150],
-    bevel: 0.24, chip: 0.5, grain: 0.2,
+    bevel: 0.22, chip: 0.3, grain: 0.18, grainPerX: 16, grainPerY: 10,
   });
   // soot / weathering, warmer at the top of each brick
-  blotch(p, { period: 3, seed: 757, amount: 0.24, threshold: 0.5 });
+  blotch(p, { period: 3, seed: 757, amount: 0.2, threshold: 0.5 });
   grit(p, 130, 761);
   return p;
 }
@@ -1036,25 +1222,38 @@ function tWallBrick() {
 /**
  * Random rubble masonry: courses of unequal blocks bedded in thick mortar.
  * Rows alternate between two and four stones so the wall never reads as a grid.
+ *
+ * The variation is all whole-texel and chosen once per block: a course sits a
+ * texel or two higher than its neighbour and its stones are a texel wider, but
+ * within a course every bed is a straight line. Displacing the lookup by a
+ * noise field instead - which is what this used to do - turns the mortar into
+ * a brown smear and makes every arris wobble.
  */
 function tWallStoneBlock() {
   const p = P();
   const seed = 769;
   const rows = 4, bh = 64 / rows;
   const colDk = [80, 72, 58], colLt = [188, 178, 152], mortar = [100, 92, 74];
+  // per-course bed offset and per-course block count, both fixed
+  const bedOff = [], nbOf = [], shiftOf = [];
+  for (let r = 0; r < rows; r++) {
+    bedOff[r] = Math.round((hash2(r, 9, seed + 1) - 0.5) * 3);
+    nbOf[r] = hash2(r, 0, seed + 3) > 0.5 ? 2 : 4;
+    shiftOf[r] = Math.round(hash2(r, 1, seed + 5) * 64);
+  }
   paint(p, (x, y) => {
-    const yy = wrapI(y + (fbmXY(x, y, 6, 2, seed + 1, 3, 0.6) - 0.5) * 3, 64);
-    const row = Math.floor(yy / bh);
-    const v = (yy % bh) / bh;
-    const nb = hash2(row, 0, seed + 3) > 0.5 ? 2 : 4;
-    const bw = 64 / nb;
-    const xs = wrapI(x + hash2(row, 1, seed + 5) * 64 + (fbmXY(x, y, 2, 6, seed + 7, 3, 0.6) - 0.5) * 3, 64);
+    let row = Math.floor(y / bh);
+    let v = (y - row * bh + bedOff[wrapI(row, rows)]) / bh;
+    if (v < 0) { row -= 1; v += 1; }
+    row = wrapI(row, rows);
+    const nb = nbOf[row], bw = 64 / nb;
+    const xs = wrapI(x + shiftOf[row], 64);
     const col = Math.floor(xs / bw);
-    const u = (xs % bw) / bw;
+    const u = (xs - col * bw) / bw;
 
     const mw = 2 / bw, mh = 2 / bh;
     if (u < mw || v < mh) {
-      return scaleC(mortar, 0.78 + nz1(x, y, 26, seed + 11) * 0.4);
+      return scaleC(mortar, 0.84 + nz1(x, y, 26, seed + 11) * 0.28);
     }
     const tone = hash2(col, row, seed + 13);
     let c = mixC(colDk, colLt, 0.2 + tone * 0.72);
@@ -1085,7 +1284,7 @@ function ashlarWall(o) {
   const p = P();
   courseWall(p, {
     rows, cols, seed, mortarW: 2, off: 0.5, colA, colB, mortar,
-    bevel, chip: 0.35, grain: 0.14, grainPerX: 16, grainPerY: 10, wobble: 0.8,
+    bevel, chip: 0.35, grain: 0.14, grainPerX: 16, grainPerY: 10, jitter: 1,
   });
   // deep drafted margin: a second, softer bevel inside each block
   const bh = 64 / rows, bw = 64 / cols;
@@ -1125,11 +1324,20 @@ const tWallSandstone = () => ashlarWall({
   mortar: [166, 142, 104], streak: 0.22, bevel: 0.22,
 });
 
-/** Vertical boards with knots, nail heads and gaps. */
+/**
+ * Boards.
+ *
+ * The structure is the plank width - 10-14 texels, which at 64 px is five to
+ * six boards across - and it is dead regular: a dark shadow seam down one
+ * edge, a lit chamfer down the other, a per-board tone, and grain stretched
+ * along the length. On top of that go the three details that say "sawn timber"
+ * rather than "brown noise": a butt joint across some boards with pale end
+ * grain either side of it, knots, and nail heads on the fixing lines.
+ */
 function plankWall(o) {
   const {
     seed, count = 6, colDk, colLt, horizontal = false, nails = true,
-    gapDark = 0.45, knots = 5,
+    gapDark = 0.45, knots = 5, butts = 2,
   } = o;
   const p = P();
   const span = 64 / count;
@@ -1146,6 +1354,22 @@ function plankWall(o) {
     return scaleC(c, k);
   });
   const rnd = new Rand(seed + 5);
+  // butt joints: two boards are made up of two lengths, and the sawn ends show
+  // pale end grain against a hard shadow line
+  for (let i = 0; i < butts; i++) {
+    const pi = rnd.int(count);
+    const at = rnd.int(10, 54);
+    const a0 = Math.round(pi * span) + 1, a1 = Math.round((pi + 1) * span) - 1;
+    for (let a = a0; a <= a1; a++) {
+      const put = (b, c) => (horizontal ? p.setArr(b, a, c) : p.setArr(a, b, c));
+      const base = horizontal ? p.get(at, a) : p.get(a, at);
+      put(at - 2, scaleC(base, 1.20));
+      put(at - 1, scaleC(base, 1.30));
+      put(at, scaleC(base, 0.42));
+      put(at + 1, scaleC(base, 1.24));
+      put(at + 2, scaleC(base, 1.12));
+    }
+  }
   for (let i = 0; i < knots; i++) {
     const pi = rnd.int(count);
     const cx = horizontal ? rnd.int(64) : Math.round(pi * span + span * rnd.float(0.3, 0.7));
@@ -1336,7 +1560,7 @@ function tWallShopFront() {
 function shingleRoof(o) {
   const {
     rows = 6, cols = 5, seed, colDk, colMd, colLt, scallop = 3, square = false,
-    shadow = 0.42, overlap = 3, edgeDark = 0.45,
+    shadow = 0.42, overlap = 3, edgeDark = 0.45, barrel = 0,
   } = o;
   const p = P();
   p.fill(colDk[0] * 0.6, colDk[1] * 0.6, colDk[2] * 0.6);
@@ -1357,13 +1581,23 @@ function shingleRoof(o) {
             : rh + overlap - scallop * (2 * u - 1) * (2 * u - 1);
           if (yy > bot) continue;
           if (xx < 0.8) continue; // gap between neighbouring shingles
-          const e = clamp01((yy - overlap) / rh);
-          // shadow under the lapping course at the top, light down the face,
-          // then a dark line right at the exposed edge
-          let k = 0.66 + e * 0.5;
+          const ey = yy - overlap;          // texels down the exposed face
+          const e = clamp01(ey / rh);
+          // Per-row rule, in whole texels so it stays crisp at a 6 px course:
+          // the lapping course above throws a hard shadow line, the tile's own
+          // top edge catches the light right below it, then the face falls
+          // away to a dark nose at the bottom.
+          let k;
+          if (ey < 0) k = 0.55;
+          else if (ey < 1) k = 0.64;
+          else if (ey < 2) k = 1.26;
+          else k = 1.04 - (ey - 2) / Math.max(1, rh) * 0.42;
           if (e > 0.88) k *= 1 - edgeDark * ((e - 0.88) / 0.12);
           if (u > 0.86) k *= 0.86;
-          if (u < 0.14) k *= 1.1;
+          if (u < 0.14) k *= 1.08;
+          // pantile rib: a barrel across the width of each tile, so a tiled
+          // roof never reads as another course of brick
+          if (barrel) k *= 1 - barrel + Math.sin(u * Math.PI) * barrel * 2;
           const g = fbmXY(wrapI(x0 + xx, 64), wrapI(y0 + yy, 64), 26, 26, seed + 7, 3, 0.55);
           let col = mixC(base, colMd, g * 0.45);
           col = scaleC(col, k * (0.94 + warm * 0.12));
@@ -1384,34 +1618,38 @@ function shingleRoof(o) {
   return p;
 }
 
+// Roof courses run at ~6 px, which is what MM6's roof art does at texture
+// scale, and every family is either red tile or blue slate - a roof the same
+// grey as the wall below it is the single fastest way to fail the silhouette.
 const tRoofShingleRed = () => {
   const p = shingleRoof({
-    rows: 6, cols: 5, seed: 901, colDk: [96, 42, 24], colMd: [162, 74, 38], colLt: [206, 112, 58],
-    scallop: 3.2, shadow: 0.5,
+    rows: 10, cols: 8, seed: 901, colDk: [92, 40, 24], colMd: [158, 72, 38], colLt: [200, 108, 56],
+    scallop: 2.2, shadow: 0.5, overlap: 2, barrel: 0.15,
   });
-  blotch(p, { period: 3, seed: 903, amount: 0.2 });
+  blotch(p, { period: 3, seed: 903, amount: 0.18 });
   grit(p, 90, 907);
   return p;
 };
+/** Weathered blue slate: the grey roof, but grey-*blue*, never wall grey. */
 const tRoofShingleGrey = () => {
   const p = shingleRoof({
-    rows: 6, cols: 5, seed: 911, colDk: [52, 54, 56], colMd: [96, 98, 100], colLt: [148, 150, 152],
-    scallop: 3.2, shadow: 0.45,
+    rows: 10, cols: 5, seed: 911, colDk: [50, 62, 72], colMd: [86, 102, 114], colLt: [122, 142, 156],
+    square: true, shadow: 0.48, overlap: 2, edgeDark: 0.46,
   });
-  blotch(p, { period: 3, seed: 913, amount: 0.24, color: [70, 82, 56] });
+  blotch(p, { period: 3, seed: 913, amount: 0.22, color: [66, 80, 56] });
   grit(p, 90, 917);
   return p;
 };
 const tRoofSlate = () => {
   const p = shingleRoof({
-    rows: 8, cols: 4, seed: 919, colDk: [40, 46, 58], colMd: [68, 76, 92], colLt: [112, 122, 140],
+    rows: 10, cols: 4, seed: 919, colDk: [36, 44, 58], colMd: [64, 74, 94], colLt: [106, 118, 140],
     square: true, shadow: 0.5, overlap: 2, edgeDark: 0.5,
   });
   // slate cleaves in flat planes - add a faint sheen streak on some tiles
   paint(p, (x, y) => {
     const n = nzXY(x, y, 20, 8, 921);
-    if (n < 0.78) return null;
-    return scaleC(p.get(x, y), 1.14);
+    if (n < 0.86) return null;
+    return scaleC(p.get(x, y), 1.07);
   });
   grit(p, 80, 923);
   return p;
@@ -1906,11 +2144,14 @@ function dunBrickTex(o) {
   return p;
 }
 
+// Spec §12: dungeon masonry runs #4E4E48-#82827A over a #2E2E2A joint. The
+// per-block spread stays inside that band - a two-to-one value jump from one
+// stone to the next is what makes a wall read as blotchy noise.
 const tDunBrick = () => dunBrickTex({
-  seed: 1103, colA: [58, 70, 62], colB: [124, 138, 126], mortar: [70, 78, 72], damp: 0.4, moss: 0.25,
+  seed: 1103, colA: [76, 80, 74], colB: [128, 132, 122], mortar: [50, 52, 48], damp: 0.4, moss: 0.22,
 });
 const tDunBrickMossy = () => dunBrickTex({
-  seed: 1109, colA: [46, 58, 48], colB: [104, 118, 104], mortar: [58, 66, 58], damp: 0.5, moss: 0.75,
+  seed: 1109, colA: [62, 70, 60], colB: [110, 120, 106], mortar: [44, 48, 44], damp: 0.5, moss: 0.7,
 });
 
 function caveTex(o) {
@@ -2026,11 +2267,18 @@ function tDunSewer() {
     const slime = mixC([32, 52, 26], [78, 106, 38], nzXY(x, y, 16, 6, 1157));
     return mixC(p.get(x, y), slime, t * 0.75);
   });
-  // black grime pooling in the joints
+  // Black grime pooling in the joints - keyed off the distance to the nearest
+  // bed, so it collects where water actually runs instead of dropping dark
+  // blotches across the middle of the stones at random.
+  const sbh = 64 / 7, sbw = 64 / 3;
   paint(p, (x, y) => {
-    const t = smoothstep(0.5, 0.78, nz(x, y, 4, 1159, 3, 0.6));
+    const row = Math.floor(y / sbh);
+    const bx = wrapI(x + ((row * 0.5) % 1) * sbw, 64);
+    const dJoint = Math.min(wrapI(y, sbh), wrapI(bx, sbw));
+    const near = 1 - smoothstep(0.5, 3.5, dJoint);
+    const t = near * smoothstep(0.40, 0.70, nz(x, y, 5, 1159, 3, 0.6));
     if (t <= 0) return null;
-    return mixC(p.get(x, y), [24, 26, 22], t * 0.45);
+    return mixC(p.get(x, y), [24, 26, 22], t * 0.6);
   });
   // wet sheen highlights
   paint(p, (x, y) => {
@@ -2222,14 +2470,10 @@ function tDunFloorDirt() {
   const p = P();
   groundBase(p, [40, 33, 24], [94, 78, 56], { per: 9, seed: 1307, contrast: 1.35, patchCol: [58, 48, 34], patchAmt: 0.45 });
   const rnd = new Rand(1309);
-  // trodden pebbles and scuffs
-  for (let i = 0; i < 80; i++) {
-    const cx = rnd.int(64), cy = rnd.int(64), r = rnd.float(1.1, 2.6);
-    const base = mixC([76, 72, 66], [148, 142, 130], rnd.float());
-    blob(p, cx, cy, r, r * 0.8, (x, y, d, dx, dy) => {
-      if (d > 1) return null;
-      return scaleC(base, clamp(1 - (dx + dy) * 0.16 - d * 0.2, 0.5, 1.4));
-    });
+  // trodden pebbles, bedded into the floor with one lit facet each rather than
+  // dropped on as bright confetti
+  for (const [cx, cy] of scatter(46, 1309)) {
+    pebble(p, cx, cy, rnd.float(1.1, 2.4), mixC([70, 66, 60], [126, 120, 108], rnd.float()), 1311);
   }
   for (let i = 0; i < 22; i++) {
     const cx = rnd.int(64), cy = rnd.int(64);
@@ -2710,23 +2954,28 @@ const TONE = {
   cliff_snow: [96, 202, 0.04, -0.03],
   cliff_volcanic: [32, 102, 0.10, 0.05],
   // man-made: a little more range, still not punchy
-  wall_plaster: [166, 216, 0.14, 0.03],
+  wall_plaster: [158, 212, 0.14, 0.04],
   wall_timber: [58, 216, 0.06, 0.05],
   wall_brick: [72, 168, 0.06, 0.05],
   wall_stone_block: [78, 168, 0.08, 0.14],
   wall_castle: [98, 172, 0.12, 0.13],
   wall_castle_dark: [66, 132, 0.12, 0.13],
-  wall_wood_plank: [46, 138, 0.06, 0.05],
-  wall_log: [44, 148, 0.06, 0.05],
+  // spec §12 timber runs #5A4028-#8C6844; a brighter band turns the boards
+  // orange and pushes them out of the palette's wood ramp
+  wall_wood_plank: [44, 122, 0.10, 0.05],
+  wall_log: [42, 132, 0.08, 0.05],
   wall_marble: [190, 240, 0.10, 0.03],
   wall_sandstone: [110, 200, 0.08, 0.07],
   wall_temple: [120, 216, 0.08, 0.05],
   wall_shop_front: [66, 214, 0.08, 0.05],
-  roof_shingle_red: [56, 148, 0.06, 0.03],
-  roof_shingle_grey: [58, 148, 0.12, 0.06],
+  roof_shingle_red: [56, 130, 0.09, 0.03],
+  // Spec §12: slate roofs run #4A5A62-#76888E - a blue-*grey*, not a blue. The
+  // point of the family is that no roof is ever the same colour as the wall
+  // under it, which needs about a 12 % hue shift, not a saturated glaze.
+  roof_shingle_grey: [54, 138, 0.14, -0.04],
   roof_thatch: [66, 162, 0.18, 0.04],
-  roof_tile_blue: [50, 158, 0.10, -0.02],
-  roof_slate: [46, 130, 0.12, 0.0],
+  roof_tile_blue: [50, 142, 0.22, -0.03],
+  roof_slate: [42, 122, 0.12, -0.04],
   dun_brick: [62, 134, 0.12, 0.05],
   dun_brick_mossy: [52, 118, 0.12, 0.04],
   dun_cave: [46, 122, 0.10, 0.09],

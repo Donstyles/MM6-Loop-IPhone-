@@ -993,7 +993,7 @@ function emblemMask(id) {
   const box = (bx, by, bw, bh, v) => {
     for (let j = 0; j < bh; j++) for (let i = 0; i < bw; i++) put(bx + i, by + j, v);
   };
-  // Scanline disc / annulus: integer rows, hard silhouette, no arc().
+  // Scanline disc / annulus: integer rows, hard silhouette, never a canvas path.
   const dsc = (cx, cy, r, v) => {
     const R = Math.ceil(r);
     for (let dy = -R; dy <= R; dy++) {
@@ -1013,14 +1013,15 @@ function emblemMask(id) {
 
   switch (id) {
     case 'castspell': {
-      // A hand cupped round a spell orb - the gesture the button performs.
-      dsc(12, 5, 4, 3);                                   // the orb, in bone
-      put(11, 3, 0); put(12, 3, 0);                        // catch-light bitten out
-      for (let k = 0; k < 4; k++) box(5 + k * 4, 9, 3, 4, 1);   // four fingers
-      box(3, 12, 3, 3, 1);                                 // thumb
-      box(4, 13, 15, 5, 1);                                // palm
-      box(5, 18, 13, 1, 1);                                // heel of the hand
-      box(7, 15, 9, 1, 2);                                 // the crease across it
+      // An open hand with a spell orb standing off the fingertips - the
+      // gesture the button performs, not a sparkle.
+      const FING = [7, 9, 9, 7];                           // four fingers, uneven
+      for (let k = 0; k < 4; k++) box(5 + k * 3, 13 - FING[k], 2, FING[k], 1);
+      box(2, 9, 2, 4, 1); box(3, 8, 2, 2, 1);              // thumb, cocked out
+      box(3, 13, 12, 4, 1);                                // palm
+      box(4, 13, 10, 1, 2);                                // the crease at its base
+      box(6, 17, 7, 3, 1);                                 // wrist, narrower than the palm
+      dsc(17, 4, 3, 3);                                    // the orb, standing off the fingertips
       break;
     }
     case 'rest': {
@@ -1029,8 +1030,8 @@ function emblemMask(id) {
         const inset = j === 0 || j === 10 ? 2 : (j === 1 || j === 9 ? 1 : 0);
         box(3 + inset, 5 + j, 17 - inset, 1, 1);
       }
-      ann(18, 10, 5, 0, 1);                                // the rolled end
-      ann(18, 10, 3, 1.6, 2);                              // its spiral
+      dsc(18, 10, 5, 1);                                   // the rolled end
+      ann(18, 10, 3.2, 2.4, 2); put(18, 10, 2);            // wound once round
       box(6, 5, 2, 11, 2); box(11, 5, 2, 11, 2);           // two straps
       box(3, 17, 18, 2, 1);                                // the ground mat under it
       break;
@@ -1051,11 +1052,12 @@ function emblemMask(id) {
     }
     default: {
       // A key on its ring - what a steward hands you, not a cogwheel.
-      ann(4, 6, 4, 2, 1);                                  // the ring
-      ann(8, 12, 4, 2, 1);                                 // the bow of the key
-      box(11, 11, 10, 3, 1);                               // the shaft
+      ann(4, 4, 3.4, 1.8, 1);                              // the ring
+      box(5, 6, 2, 3, 1);                                  // the link down to it
+      ann(6, 12, 4.2, 2.2, 1);                             // the bow of the key
+      box(10, 11, 11, 3, 1);                               // the shaft
       box(16, 14, 2, 3, 1); box(19, 14, 2, 4, 1);          // two wards
-      box(12, 12, 8, 1, 2);                                // the groove down it
+      box(11, 12, 9, 1, 2);                                // the groove down it
       break;
     }
   }
