@@ -19,3 +19,5 @@ vite.*.config.js
 tools/_*.mjs
 tools/mycap.sh
 .mkshot.sh
+dist-single/
+build/
