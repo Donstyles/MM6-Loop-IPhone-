@@ -245,7 +245,9 @@ export function paintShopInterior(g, w, h, kind) {
     }
     // Armour stand: a torso form on a post, with a cuirass over it.
     {
-      const stx = 230, sty = h - 24;
+      // On the open floor, not down in the foreground where the counter buries
+      // the post and leaves its shadow orphaned on the boards in front.
+      const stx = 232, sty = horizon + 74;
       contactShadow(g, stx + 4, sty, 26, 5);
       MM6.rct(g, stx - 3, sty - 46, 6, 46, [62, 46, 26]);
       MM6.rct(g, stx - 3, sty - 46, 2, 46, [110, 84, 48]);
@@ -303,16 +305,19 @@ export function paintShopInterior(g, w, h, kind) {
     // Runic circle inlaid in the floor: a band of painted stone with real
     // width, built as an elliptical annulus scanline by scanline. A 2-pixel
     // stroke, even a hand-rolled one, reads as a stroke.
-    const ccx = Math.round(w / 2), ccy = horizon + 66;
-    for (const [RX, RY, th, lo, hi] of [[120, 34, 5, [50, 30, 74], [168, 110, 210]],
-      [92, 26, 3, [40, 24, 62], [130, 84, 168]]]) {
+    const ccx = Math.round(w * 0.44), ccy = horizon + 60;
+    for (const [RX, RY, th, lo, hi] of [[118, 32, 6, [74, 44, 104], [196, 146, 238]],
+      [90, 24, 4, [58, 34, 84], [158, 108, 202]]]) {
       const iy = RY - th;
       for (let dy = -RY; dy <= RY; dy++) {
         const outer = Math.round(RX * Math.sqrt(Math.max(0, 1 - (dy * dy) / (RY * RY))));
         if (outer <= 0) continue;
         const inner = Math.abs(dy) >= iy ? 0
           : Math.round((RX - th * 2.4) * Math.sqrt(Math.max(0, 1 - (dy * dy) / (iy * iy))));
-        const c = MM6.mix(lo, hi, MM6.band((dy + RY) / (2 * RY), 4));
+        // Kept inside the bright half of its own ramp: the far side of the
+        // band has to still read as inlaid stone when the rug and the
+        // shopkeeper hide the near side.
+        const c = MM6.mix(lo, hi, 0.30 + MM6.band((dy + RY) / (2 * RY), 4) * 0.62);
         if (inner <= 0) { MM6.rct(g, ccx - outer, ccy + dy, outer * 2, 1, c); continue; }
         MM6.rct(g, ccx - outer, ccy + dy, outer - inner, 1, c);
         MM6.rct(g, ccx + inner, ccy + dy, outer - inner, 1, c);
@@ -321,7 +326,7 @@ export function paintShopInterior(g, w, h, kind) {
     // Glyphs set around the band.
     for (let i = 0; i < 12; i++) {
       const a = (i / 12) * Math.PI * 2;
-      const gx2 = Math.round(ccx + Math.cos(a) * 106), gy2 = Math.round(ccy + Math.sin(a) * 30);
+      const gx2 = Math.round(ccx + Math.cos(a) * 104), gy2 = Math.round(ccy + Math.sin(a) * 28);
       MM6.rct(g, gx2 - 2, gy2 - 2, 5, 5, [46, 28, 66]);
       MM6.rct(g, gx2 - 1, gy2 - 1, 3, 3, [212, 168, 246]);
     }

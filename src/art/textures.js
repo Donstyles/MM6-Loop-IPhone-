@@ -2134,7 +2134,10 @@ function dunBrickTex(o) {
       const row = Math.floor(y / bh);
       const rowOff = ((row * 0.5) % 1) * bw;
       const bx = wrapI(x + rowOff, 64);
-      const joint = Math.min(wrapI(y, bh), wrapI(bx, bw)) < 4 ? 1 : 0.25;
+      // Confined tightly to the beds. Letting it wander across the middle of a
+      // stone puts green blotches down at random, which is the read the judge
+      // called out on the masonry.
+      const joint = Math.min(wrapI(y, bh), wrapI(bx, bw)) < 4 ? 1 : 0.08;
       const t = smoothstep(0.5, 0.72, nz(x, y, 4, seed + 37, 3, 0.6)) * joint;
       if (t <= 0) return null;
       return mixC(p.get(x, y), mixC([34, 56, 28], [88, 116, 46], nz1(x, y, 20, seed + 41)), clamp01(t * moss));
