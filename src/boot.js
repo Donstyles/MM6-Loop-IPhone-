@@ -201,18 +201,31 @@ export class Boot {
       ctx.textAlign = 'left';
     }
 
-    // Progress well.
+    // Progress trough: a groove cut into the plate, its rim lit along the top
+    // and left and shadowed along the bottom and right, filled with a bar of
+    // banded brass. Chiselled, because a rounded bar with a smooth gradient is
+    // the first thing that says "not 1998".
     const bw = Math.min(360, W - 120), bh = 14;
     const bx = Math.round(cx - bw / 2), by = Math.round(H * 0.66);
     ctx.fillStyle = '#0a0c0e';
     ctx.fillRect(bx, by, bw, bh);
-    ctx.strokeStyle = rampCss('stone', 2);
-    ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1);
+    ctx.fillStyle = rampCss('stone', 1);
+    ctx.fillRect(bx, by, bw, 1); ctx.fillRect(bx, by, 1, bh);
+    ctx.fillStyle = rampCss('stone', 7);
+    ctx.fillRect(bx, by + bh - 1, bw, 1); ctx.fillRect(bx + bw - 1, by, 1, bh);
+
     const fill = Math.round((bw - 4) * Math.max(0, Math.min(1, this.progress)));
-    for (let i = 0; i < fill; i++) {
-      const t = i / Math.max(1, bw - 4);
-      ctx.fillStyle = rampCss('gold', 6 + Math.round(t * 4));
-      ctx.fillRect(bx + 2 + i, by + 2, 1, bh - 4);
+    // Four bands across the bar's height, not a per-column gradient: the light
+    // catches the top of a moulding and falls away down its face.
+    const BANDS = [10, 8, 6, 4];
+    const step = (bh - 4) / BANDS.length;
+    for (let b = 0; b < BANDS.length; b++) {
+      ctx.fillStyle = rampCss('gold', BANDS[b]);
+      ctx.fillRect(bx + 2, Math.round(by + 2 + b * step), fill, Math.ceil(step));
+    }
+    if (fill > 1) {
+      ctx.fillStyle = rampCss('gold', 3);
+      ctx.fillRect(bx + 2 + fill - 1, by + 2, 1, bh - 4);   // leading edge in shadow
     }
 
     const label = this.error ? 'Something went wrong' : this.label;
@@ -233,21 +246,36 @@ export class Boot {
     const c = document.createElement('canvas');
     c.width = W; c.height = H;
     const g = c.getContext('2d');
-    // A slow vertical fade from near-black to a deep stone blue, dithered so it
-    // matches the palette the rest of the game lives in.
-    for (let y = 0; y < H; y++) {
-      const t = y / H;
-      const shade = 1 + t * 3.2;
-      const col = ramp('stone', shade);
+    // A vertical fade in eight hard steps, not a per-scanline ramp: this frame
+    // is the first thing anyone sees, and a smooth gradient with a radial
+    // vignette is exactly the idiom a 256-colour game cannot produce.
+    const STEPS = 8;
+    for (let s = 0; s < STEPS; s++) {
+      const col = ramp('stone', 1 + (s / (STEPS - 1)) * 3.2);
       g.fillStyle = `rgb(${col[0] | 0},${col[1] | 0},${col[2] | 0})`;
-      g.fillRect(0, y, W, 1);
+      g.fillRect(0, Math.round((s * H) / STEPS), W, Math.ceil(H / STEPS) + 1);
     }
-    // Vignette corners.
-    const vg = g.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.2, W / 2, H / 2, Math.max(W, H) * 0.72);
-    vg.addColorStop(0, 'rgba(0,0,0,0)');
-    vg.addColorStop(1, 'rgba(0,0,0,0.75)');
-    g.fillStyle = vg;
-    g.fillRect(0, 0, W, H);
+    // Corner darkening as a Bayer stipple of solid black, densest at the edges.
+    const B = [0, 32, 8, 40, 2, 34, 10, 42, 48, 16, 56, 24, 50, 18, 58, 26,
+      12, 44, 4, 36, 14, 46, 6, 38, 60, 28, 52, 20, 62, 30, 54, 22,
+      3, 35, 11, 43, 1, 33, 9, 41, 51, 19, 59, 27, 49, 17, 57, 25,
+      15, 47, 7, 39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21];
+    // Written through ImageData rather than half a million fillRects, because
+    // this runs on the way to the first visible frame.
+    const hw = W / 2, hh = H / 2, rmax = Math.hypot(hw, hh);
+    const img = g.getImageData(0, 0, W, H);
+    const px = img.data;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const r = Math.hypot(x - hw, y - hh) / rmax;
+        const d = Math.max(0, (r - 0.42) / 0.58) * 0.85;
+        if (d <= 0) continue;
+        if (B[((y & 7) << 3) | (x & 7)] / 64 + 0.0078 >= d) continue;
+        const o = (y * W + x) * 4;
+        px[o] = 0; px[o + 1] = 0; px[o + 2] = 0;
+      }
+    }
+    g.putImageData(img, 0, 0);
     return c;
   }
 }
