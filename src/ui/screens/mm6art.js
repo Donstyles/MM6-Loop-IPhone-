@@ -478,95 +478,210 @@ export function bookSpine(ctx, x, y, w, h, opts = {}) {
   if (hot && !open) stipple(ctx, x + 6, y + 4, w - 12, h - 8, [255, 232, 158], 0.16);
 }
 
-/**
- * A wordless hand-drawn school device, painted straight onto whatever it is
- * marking. Unlike `spellSigil` this carries no plaque - it is the emblem alone,
- * which is what MM6 brands into its spellbook bookmarks.
- */
-export function schoolMark(ctx, school, x, y, s, colorHex) {
-  const key = `mk:${school}:${s}:${colorHex || ''}`;
-  const c = cached(key, () => {
-    const P = SIGIL_INK[school] || SIGIL_INK.spirit;
-    const ink = colorHex ? shade(hexRGB(colorHex), 0.34) : hexRGB(P[0]);
-    const lit = colorHex ? mix(hexRGB(colorHex), [255, 255, 255], 0.55) : hexRGB(P[2]);
-    const cv = mkCanvas(s, s);
-    const g = cv.getContext('2d');
-    const cx = s / 2, cy = s / 2, R = s / 2 - 1;
-    // Every mark is painted twice: a shadow one pixel down-right, then the
-    // stroke over it. That is the whole of MM6's "hand-drawn" look.
-    const mark = (x0, y0, x1, y1, t) => {
-      lineH(g, x0 + 1, y0 + 1, x1 + 1, y1 + 1, pc(ink), t);
-      lineH(g, x0, y0, x1, y1, pc(lit), t);
-    };
-    const dot = (px0, py0, r) => { disc(g, px0 + 1, py0 + 1, r, pc(ink)); disc(g, px0, py0, r, pc(lit)); };
-    switch (school) {
-      case 'fire':
-        // A tongue of flame: three tapering strokes leaning off a common root.
-        for (const [dx, sc] of [[-0.42, 0.62], [0, 1], [0.42, 0.62]]) {
-          mark(cx + dx * R, cy + R * 0.82, cx + dx * R * 0.4, cy - R * sc, 2);
-        }
-        mark(cx - R * 0.5, cy + R * 0.84, cx + R * 0.5, cy + R * 0.84, 2);
-        break;
-      case 'air':
-        for (let i = 0; i < 3; i++) {
-          const yy = cy - R * 0.55 + i * R * 0.55;
-          mark(cx - R * 0.85, yy, cx + R * 0.35, yy, 2);
-          mark(cx + R * 0.35, yy, cx + R * 0.7, yy - R * 0.32, 2);
-        }
-        break;
-      case 'water':
-        for (let i = 0; i < 3; i++) {
-          const yy = cy - R * 0.5 + i * R * 0.5;
-          for (let k = 0; k < 4; k++) {
-            const x0 = cx - R * 0.85 + (k * R * 1.7) / 4;
-            mark(x0, yy + (k % 2 ? -2 : 2), x0 + (R * 1.7) / 4, yy + (k % 2 ? 2 : -2), 2);
-          }
-        }
-        break;
-      case 'earth':
-        // A cairn: three courses, narrowing upward.
-        for (let i = 0; i < 3; i++) {
-          const wdt = R * (0.9 - i * 0.24), yy = cy + R * 0.66 - i * R * 0.5;
-          rct(g, Math.round(cx - wdt) + 1, Math.round(yy) + 1, Math.round(wdt * 2), 5, pc(ink));
-          rct(g, Math.round(cx - wdt), Math.round(yy), Math.round(wdt * 2), 4, pc(lit));
-        }
-        break;
-      case 'spirit':
-        mark(cx, cy - R * 0.9, cx, cy + R * 0.9, 3);
-        mark(cx - R * 0.66, cy - R * 0.28, cx + R * 0.66, cy - R * 0.28, 3);
-        break;
-      case 'mind': {
-        let ax0 = cx, ay0 = cy;
-        for (let i = 1; i <= 26; i++) {
-          const t = i / 26, a = t * Math.PI * 2 * 1.9, rr = R * 0.92 * t;
-          const nx = cx + Math.cos(a) * rr, ny = cy + Math.sin(a) * rr;
-          mark(ax0, ay0, nx, ny, 2);
-          ax0 = nx; ay0 = ny;
-        }
+// --- painted school emblems -------------------------------------------------
+//
+// A school is not a sign, it is a small painted *object* - the way an
+// illuminated manuscript renders one: a filled silhouette, three to five bands
+// of modelling, a lit edge where the light lands, and a cast shadow thrown
+// down and right. Nothing is outlined. The emblem separates from whatever it is
+// branded into by value, never by a border, because MM6's art has no keylines.
+//
+// Each object is written as a field over normalised coordinates - u, v in
+// -1..1 with v running down - so one description serves the 16px bookmark mark,
+// the device on a 30px spell sigil and the emblem washed into a spellbook leaf.
+// `f(u, v)` returns the object's raw luminance there, or a negative number for
+// "the object is not here". Everything else - banding, the lit edge, the cast
+// shadow, the palette - is the driver's job, so all nine read as one hand.
+
+/** Is (u,v) inside the disc (cx,cy,r)? The emblems are built out of these. */
+function bl(u, v, cx, cy, r) { const a = u - cx, b = v - cy; return a * a + b * b <= r * r; }
+
+/** The crag's skyline: a main peak left of centre and a lower shoulder right. */
+const CRAG = [[-1.02, 0.80], [-0.62, 0.06], [-0.16, -0.88], [0.14, -0.20],
+  [0.42, -0.56], [1.02, 0.80]];
+
+const EMBLEM = {
+  // A flame: a fat root, a tongue licking up and curling to the right, one
+  // small secondary lick at the left. Bright core, root sunk in its own smoke.
+  fire(u, v) {
+    if (!(bl(u, v, 0.02, 0.36, 0.58) || bl(u, v, 0.10, -0.04, 0.40)
+      || bl(u, v, 0.24, -0.42, 0.24) || bl(u, v, 0.32, -0.68, 0.12)
+      || bl(u, v, -0.42, 0.22, 0.26) || bl(u, v, -0.50, -0.04, 0.14))) return -1;
+    const a = u - 0.02, b = v - 0.22;
+    let t = 1.12 - Math.sqrt(a * a + b * b) * 1.30;
+    if (v > 0.46) t -= (v - 0.46) * 1.6;
+    return t;
+  },
+
+  // A cloud with a flat underside and a gust curling out from beneath it.
+  air(u, v) {
+    if (v <= 0.02 && (bl(u, v, -0.44, -0.30, 0.34) || bl(u, v, -0.04, -0.52, 0.42)
+      || bl(u, v, 0.42, -0.28, 0.30) || (Math.abs(u) <= 0.72 && v >= -0.34))) {
+      return 0.62 - v * 0.52 - u * 0.14;
+    }
+    for (let i = 0; i <= 12; i++) {
+      const p = i / 12;
+      const ang = -2.5 + p * 4.5, rr = 0.52 - p * 0.34;
+      if (bl(u, v, 0.10 + Math.cos(ang) * rr, 0.46 + Math.sin(ang) * rr * 0.80,
+        0.18 - p * 0.10)) return 0.80 - p * 0.40;
+    }
+    return -1;
+  },
+
+  // A droplet: round belly, drawn point, one bead of light in the near shoulder.
+  water(u, v) {
+    const hw = 0.58 * Math.pow(clamp((v + 0.94) / 1.22, 0, 1), 1.6);
+    if (!(bl(u, v, 0, 0.30, 0.58) || (v <= 0.30 && Math.abs(u) <= hw))) return -1;
+    const a = u + 0.22, b = v - 0.06;
+    if (a * a + b * b < 0.030) return 1.30;
+    return 0.74 - u * 0.34 - v * 0.32;
+  },
+
+  // A crag: two peaks, a face in the light and a face in shadow either side of
+  // the fall line, standing on its own shadowed foot.
+  earth(u, v) {
+    if (Math.abs(u) > 0.96 || v > 0.76) return -1;
+    let top = 0.80;
+    for (let i = 1; i < CRAG.length; i++) {
+      if (u <= CRAG[i][0]) {
+        const a = CRAG[i - 1], b = CRAG[i];
+        top = a[1] + (b[1] - a[1]) * (u - a[0]) / (b[0] - a[0]);
         break;
       }
-      case 'body':
-        dot(cx, cy - R * 0.52, R * 0.24);
-        mark(cx, cy - R * 0.2, cx, cy + R * 0.72, 3);
-        mark(cx - R * 0.72, cy + R * 0.06, cx + R * 0.72, cy + R * 0.06, 3);
-        break;
-      case 'light':
-        for (let i = 0; i < 8; i++) {
-          const a = (i / 8) * Math.PI * 2;
-          mark(cx + Math.cos(a) * R * 0.42, cy + Math.sin(a) * R * 0.42,
-            cx + Math.cos(a) * R * 0.95, cy + Math.sin(a) * R * 0.95, 2);
-        }
-        dot(cx, cy, R * 0.28);
-        break;
-      default:                                              // dark: a crescent
-        disc(g, cx + 1, cy + 1, R * 0.85, pc(ink));
-        disc(g, cx, cy, R * 0.85, pc(lit));
-        disc(g, cx + R * 0.44, cy - R * 0.16, R * 0.78, pc(ink));
-        break;
     }
-    return cv;
+    if (v < top) return -1;
+    if (v > 0.60) return 0.22;
+    const fall = -0.16 + (v + 0.84) * 0.26;
+    return u < fall ? 0.92 - (v - top) * 0.34 : 0.38 - (v - top) * 0.12;
+  },
+
+  // An ankh: a rolled loop over a barred stem, each member bevelled.
+  spirit(u, v) {
+    const d = Math.sqrt(u * u + (v + 0.48) * (v + 0.48));
+    const loop = d <= 0.44 && d >= 0.20;
+    const stem = Math.abs(u) <= 0.15 && v >= -0.34 && v <= 0.88;
+    const arms = Math.abs(u) <= 0.68 && v >= 0.02 && v <= 0.28;
+    if (!(loop || stem || arms)) return -1;
+    if (loop) return 0.80 - Math.abs(d - 0.32) * 2.4 - u * 0.22 - v * 0.12;
+    let t = 0.58 - v * 0.18;
+    if (stem && u < -0.02) t += 0.26;
+    if (arms && v < 0.14) t += 0.24;
+    return t;
+  },
+
+  // An eye: a pointed lens, iris, pupil, catchlight, and the upper lid's
+  // shadow lying across the white.
+  mind(u, v) {
+    const lid = 0.60 * (1 - u * u);
+    if (Math.abs(u) > 0.97 || Math.abs(v) > lid) return -1;
+    const d = Math.sqrt(u * u + v * v);
+    if (d <= 0.17) return 0.02;
+    if (d <= 0.36) {
+      const a = u + 0.13, b = v + 0.13;
+      if (a * a + b * b < 0.016) return 1.35;
+      return 0.32 + (0.36 - d) * 0.7;
+    }
+    return 1.05 - clamp(1 - (v + lid) / 0.44, 0, 1) * 0.44;
+  },
+
+  // A heart: two lobes over a drawn point, notched at the top, sheen on the
+  // near lobe, the crease between them in shadow.
+  body(u, v) {
+    const lobes = bl(u, v, -0.36, -0.26, 0.44) || bl(u, v, 0.36, -0.26, 0.44);
+    const point = v >= -0.26 && v <= 0.88 && Math.abs(u) <= 0.80 * (1 - (v + 0.26) / 1.16);
+    if (!(lobes || point)) return -1;
+    const a = u + 0.36, b = v + 0.42;
+    if (a * a + b * b < 0.048) return 1.25;
+    let t = 0.68 - u * 0.28 - v * 0.30;
+    if (Math.abs(u) < 0.13 && v < -0.12) t -= 0.34;
+    return t;
+  },
+
+  // A sun: a domed boss and eight modelled spikes, long and short about the
+  // turn, each one lit on the side facing the light.
+  light(u, v) {
+    const r = Math.sqrt(u * u + v * v);
+    if (r <= 0.40) return 1.18 - r * 0.80 - u * 0.14 - v * 0.16;
+    const k = Math.atan2(v, u) / (Math.PI / 4);
+    const kk = Math.round(k);
+    const len = (((kk % 8) + 8) % 8) % 2 ? 0.70 : 0.99;
+    if (r > len) return -1;
+    const off = k - kk;
+    if (Math.abs(off) > 0.42 * (1 - (r - 0.34) / (len - 0.30))) return -1;
+    return (off < 0 ? 0.94 : 0.44) - (r - 0.40) * 0.36;
+  },
+
+  // A crescent moon: bright along the outer limb, falling into the terminator,
+  // with two maria so it reads as a moon and not as a fingernail.
+  dark(u, v) {
+    const d = Math.sqrt(u * u + v * v);
+    if (d > 0.92) return -1;
+    const a = u - 0.46, b = v - 0.20;
+    const e = Math.sqrt(a * a + b * b);
+    if (e <= 0.80) return -1;
+    let t = 0.28 + (e - 0.80) * 1.35 + (0.92 - d) * 0.45;
+    if (bl(u, v, -0.50, -0.30, 0.17) || bl(u, v, -0.38, 0.34, 0.13)) t -= 0.36;
+    return t;
+  },
+};
+
+/**
+ * Five steps of one pigment: [deep shadow, shadow, body, light, highlight].
+ * Given a tint the emblem is painted in that tint; given none it is painted in
+ * the school's own ink.
+ */
+function markRamp(school, colorHex) {
+  if (colorHex) {
+    const b = hexRGB(colorHex);
+    return [shade(b, 0.30), shade(b, 0.54), shade(b, 0.80),
+      mix(b, [255, 255, 255], 0.34), mix(b, [255, 255, 255], 0.72)];
+  }
+  const P = SIGIL_INK[school] || SIGIL_INK.spirit;
+  const ink = hexRGB(P[0]), mid = hexRGB(P[1]), lit = hexRGB(P[2]);
+  return [shade(ink, 0.66), ink, mix(ink, mid, 0.66), mid, mix(mid, lit, 0.70)];
+}
+
+/**
+ * Paint one emblem: quantise the field into the ramp, catch the light on the
+ * upper-left arris, sink the lower-right into the form's own shadow, and throw
+ * a stippled cast shadow down and right. Cached per (school, size, pigment).
+ */
+function emblemCanvas(school, s, cols, key) {
+  return cached(`em:${school}:${s}:${key}`, () => {
+    const f = EMBLEM[school] || EMBLEM.spirit;
+    const R = s / 2, inv = 1 / (R - 0.5);
+    const T = new Float32Array(s * s);
+    for (let y = 0; y < s; y++) {
+      for (let x = 0; x < s; x++) T[y * s + x] = f((x + 0.5 - R) * inv, (y + 0.5 - R) * inv);
+    }
+    const on = (x, y) => (x >= 0 && y >= 0 && x < s && y < s && T[y * s + x] >= 0);
+    const sh = Math.max(1, Math.round(s / 16));
+    const cast = shade(cols[0], 0.55);
+    return paintCanvas(s, s, (x, y) => {
+      const t = T[y * s + x];
+      if (t < 0) {
+        // The silhouette thrown down-right. A 256-colour frame has no partial
+        // coverage, so the shadow is half a Bayer tile, not an alpha.
+        if (on(x - sh, y - sh) && bay(x, y) < 0) return cast;
+        return null;
+      }
+      let col = cols[Math.round(band(clamp(t, 0, 1), 5) * 4)];
+      const up = !on(x, y - 1), lf = !on(x - 1, y);
+      if (up || lf) col = mix(col, cols[4], t > 0.2 ? 0.5 : 0.28);
+      else if (!on(x, y + 1) || !on(x + 1, y)) col = mix(col, cols[1], 0.45);
+      return col;
+    }, 3);
   });
-  blit(ctx, c, x, y);
+}
+
+/**
+ * A wordless painted school device, laid straight onto whatever it is marking.
+ * Unlike `spellSigil` it carries no plaque - it is the object alone, which is
+ * what MM6 brands into its spellbook bookmarks.
+ */
+export function schoolMark(ctx, school, x, y, s, colorHex) {
+  blit(ctx, emblemCanvas(school, Math.max(7, s | 0), markRamp(school, colorHex),
+    colorHex || 'ink'), x, y);
 }
 
 /**
@@ -1904,141 +2019,43 @@ function sigilCanvas(school, tier, s) {
   const shape = (tier + (school.length % 2)) % 4;
   const inside = plaqueMask(shape, R);
 
-  // Every sigil is painted on a scorched plaque so 99 of them read as one set.
-  // Painted pixel by pixel: no arcs, no strokes, no antialiasing.
+  // Every sigil is struck on the same cast plaque - one of four shapes, chosen
+  // by tier - so 99 of them read as one set, and a spell is told from its
+  // neighbour by the plaque before the device on it is even read. The metal is
+  // the school's colour run down into stone and held to the middle of the
+  // value range, so the device can be both darker and brighter than its ground.
+  const stone = mix(mid, [92, 82, 64], 0.60);
+  const lo = shade(stone, 0.46), hi = mix(stone, [255, 240, 208], 0.32);
   for (let dy = -Math.ceil(R); dy <= Math.ceil(R); dy++) {
     for (let dx = -Math.ceil(R); dx <= Math.ceil(R); dx++) {
       if (!inside(dx, dy)) continue;
       const inner = inside(dx + 1, dy) && inside(dx - 1, dy) && inside(dx, dy + 1) && inside(dx, dy - 1);
-      const t = band(1 - (dy + R) / (2 * R), 5);
-      let col = mix(shade(ink, 1.3), ink, 1 - t * 0.8);
-      if (!inner) col = (dx + dy < 0) ? mix(mid, [255, 255, 255], 0.3) : shade(ink, 0.45);
+      const t = band(clamp(0.76 - ((dy + R) / (2 * R)) * 0.86, 0, 1), 5);
+      let col = mix(lo, hi, t);
+      if (!inner) col = (dx + dy < 0) ? mix(hi, [255, 255, 255], 0.34) : shade(lo, 0.56);
       rct(g, Math.round(cx) + dx, Math.round(cy) + dy, 1, 1, col);
     }
   }
 
-  // Motif: one shape family per school, varied per tier so 11 read apart.
-  const v = tier % 11;
-  const rays = 3 + (v % 6);
-  const rot = (v * 0.37) % (Math.PI * 2);
-  const stroke = (x0, y0, x1, y1, w, col) => {
-    lineH(g, x0 + 1, y0 + 1, x1 + 1, y1 + 1, pc(ink), w);       // painted shadow
-    lineH(g, x0, y0, x1, y1, pc(col), w);
-  };
-  const r2 = R * 0.66;
+  // The device: the school's own painted object, struck into the plaque in the
+  // school's ink. It is the same object the bookmark tabs carry, so a player
+  // who has learned the tab has already learned every sigil under it.
+  const dv = Math.max(7, Math.round(s * 0.62));
+  const dram = [shade(ink, 0.70), ink, mix(ink, mid, 0.62),
+    mix(mid, lit, 0.24), mix(mid, lit, 0.86)];
+  blit(g, emblemCanvas(school, dv, dram, 'dev'),
+    Math.round(cx - dv / 2), Math.round(cy - dv / 2) - (s >= 20 ? 2 : 0));
 
-  switch (school) {
-    case 'fire': {
-      // One to three tongues over a fan of sparks; both counts move with tier.
-      for (let i = 0; i < rays; i++) {
-        const a = rot + (i / rays) * Math.PI * 2;
-        stroke(cx + Math.cos(a) * r2 * 0.5, cy + Math.sin(a) * r2 * 0.5,
-          cx + Math.cos(a) * r2, cy + Math.sin(a) * r2, 1, mid);
-      }
-      const n = 1 + (v % 3);
-      for (let i = 0; i < n; i++) {
-        const off = (i - (n - 1) / 2) * r2 * 0.62;
-        flame(g, cx + off, cy + r2 * 0.78, s * (0.34 - n * 0.04), s * (0.44 + (v % 4) * 0.07), v + i * 3);
-      }
-      break;
-    }
-    case 'air': {
-      for (let i = 0; i < 3; i++) {
-        const y = cy - r2 * 0.5 + i * r2 * 0.5;
-        const wgt = r2 * (0.55 + ((v + i) % 3) * 0.22);
-        stroke(cx - wgt, y, cx + wgt * 0.6, y, 2, i === 1 ? lit : mid);
-        stroke(cx + wgt * 0.6, y, cx + wgt * 0.85, y - 3, 2, mid);
-      }
-      break;
-    }
-    case 'water': {
-      for (let i = 0; i < 2 + (v % 3); i++) {
-        const y = cy - r2 * 0.6 + i * (r2 * 1.2) / (2 + (v % 3));
-        for (let x = -r2; x < r2; x += 2) {
-          const yy = y + Math.sin((x + v) * 0.5) * 2;
-          rct(g, Math.round(cx + x), Math.round(yy) + 1, 2, 2, pc(ink));
-          rct(g, Math.round(cx + x), Math.round(yy), 2, 2, pc(i % 2 ? mid : lit));
-        }
-      }
-      break;
-    }
-    case 'earth': {
-      // Stacked strata, one course per tier band.
-      const n = 2 + (v % 4);
-      for (let i = 0; i < n; i++) {
-        const hh = Math.round(r2 / n);
-        const y = Math.round(cy + r2 - (i + 1) * hh);
-        const wdt = Math.round(r2 * (1 - i * 0.16));
-        rct(g, Math.round(cx - wdt), y + 1, wdt * 2, hh, pc(ink));
-        rct(g, Math.round(cx - wdt), y, wdt * 2, hh - 1, pc(i % 2 ? mid : shade(mid, 0.78)));
-        rct(g, Math.round(cx - wdt), y, wdt * 2, 1, pc(lit));
-      }
-      break;
-    }
-    case 'spirit': {
-      stroke(cx, cy - r2, cx, cy + r2, 3, mid);
-      stroke(cx - r2 * 0.7, cy - r2 * 0.25, cx + r2 * 0.7, cy - r2 * 0.25, 3, lit);
-      for (let i = 0; i < (v % 4); i++) {
-        const yy = cy + r2 * 0.35 + i * 3;
-        stroke(cx - r2 * 0.35, yy, cx + r2 * 0.35, yy, 1, mid);
-      }
-      break;
-    }
-    case 'mind': {
-      // A spiral wound tier-many turns.
-      const turns = 1.4 + (v % 5) * 0.4;
-      let px0 = cx, py0 = cy;
-      for (let i = 1; i <= 40; i++) {
-        const t = i / 40;
-        const a = rot + t * Math.PI * 2 * turns;
-        const rr = r2 * t;
-        const x = cx + Math.cos(a) * rr, y = cy + Math.sin(a) * rr;
-        stroke(px0, py0, x, y, 2, t > 0.6 ? lit : mid);
-        px0 = x; py0 = y;
-      }
-      break;
-    }
-    case 'body': {
-      const arm = r2 * (0.65 + (v % 3) * 0.14);
-      stroke(cx, cy - r2 * 0.8, cx, cy + r2 * 0.85, 3, mid);
-      stroke(cx - arm, cy - r2 * 0.1, cx + arm, cy - r2 * 0.1, 3, lit);
-      for (let i = 0; i < (v % 3); i++) {
-        stroke(cx - arm * 0.6, cy + r2 * 0.4 + i * 3, cx + arm * 0.6, cy + r2 * 0.4 + i * 3, 1, mid);
-      }
-      break;
-    }
-    case 'light': {
-      for (let i = 0; i < 4 + (v % 5); i++) {
-        const a = rot + (i / (4 + (v % 5))) * Math.PI * 2;
-        stroke(cx, cy, cx + Math.cos(a) * r2, cy + Math.sin(a) * r2, 2, i % 2 ? lit : mid);
-      }
-      disc(g, cx + 1, cy + 1, r2 * 0.32, pc(ink));
-      disc(g, cx, cy, r2 * 0.32, pc(lit));
-      break;
-    }
-    default: {                                          // dark
-      disc(g, cx + 1, cy + 1, r2 * 0.8, pc(shade(ink, 0.6)));
-      disc(g, cx, cy, r2 * 0.8, pc(ink));
-      for (let i = 0; i < rays; i++) {
-        const a = rot + (i / rays) * Math.PI * 2;
-        stroke(cx + Math.cos(a) * r2 * 0.85, cy + Math.sin(a) * r2 * 0.85,
-          cx + Math.cos(a) * r2, cy + Math.sin(a) * r2, 2, mid);
-      }
-      // A crescent bitten out of the disc.
-      disc(g, cx + r2 * 0.34, cy - r2 * 0.2, r2 * 0.55, pc(mid));
-      disc(g, cx + r2 * 0.62, cy - r2 * 0.32, r2 * 0.5, pc(ink));
-      break;
-    }
-  }
-
-  // Pips punched round the rim: one more per tier, so the eleventh spell of a
-  // school is legibly not the first even where the motifs are close.
+  // Rank studs punched along the lower rim: one more per tier within the
+  // plaque's own run of five, so (plaque, studs) names all eleven spells of a
+  // school even where two devices sit close.
   const pips = 1 + (tier % 5);
   for (let i = 0; i < pips; i++) {
-    const a = -Math.PI / 2 + (i / pips) * Math.PI * 2 + tier * 0.2;
-    const x = Math.round(cx + Math.cos(a) * R * 0.82), y = Math.round(cy + Math.sin(a) * R * 0.82);
+    const a = Math.PI / 2 + (i - (pips - 1) / 2) * 0.42;
+    const x = Math.round(cx + Math.cos(a) * R * 0.80) - 1;
+    const y = Math.round(cy + Math.sin(a) * R * 0.80) - 1;
     rct(g, x, y + 1, 2, 2, pc(shade(ink, 0.5)));
-    rct(g, x, y, 2, 2, pc(lit));
+    rct(g, x, y, 2, 2, pc(mix(mid, lit, 0.62)));
   }
 
   // Cut the plaque back to its own silhouette - anything the motif pushed
