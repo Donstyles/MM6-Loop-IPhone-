@@ -149,7 +149,7 @@ export class Engine {
         // MM6's software renderer did not dither - it shaded by swapping to one
         // of 32 pre-darkened palettes, so gradients band. We keep only enough
         // dither to break up the lookup cube's own cells.
-        uDither: { value: 0.016 },
+        uDither: { value: 0.0 },
         uPalette: { value: 1.0 },
         uResolution: { value: new THREE.Vector2(this.width, this.height) },
         uTint: { value: new THREE.Color(1, 1, 1) },

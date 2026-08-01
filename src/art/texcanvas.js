@@ -85,7 +85,13 @@ export function scaleC(c, k) { return [c[0] * k, c[1] * k, c[2] * k]; }
  */
 export function toTexture(src, opts = {}) {
   const {
-    dither = 10,
+    // MM6's software renderer did not dither, and neither did its texture art:
+    // it shaded by swapping between 32 pre-darkened palettes, so its surfaces
+    // band in steps and their fine detail is painted noise, not a screen-space
+    // pattern. An ordered dither over every texture put a visible checkerboard
+    // across sky, foliage and masonry alike - the single most modern-looking
+    // thing in the frame. Quantise straight to the palette and let it band.
+    dither = 0,
     quantise = true,
     repeat = true,
     mips = true,
