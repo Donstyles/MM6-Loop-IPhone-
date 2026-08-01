@@ -23,7 +23,11 @@ const lay = await p.evaluate(async () => {
 console.log('layout:', lay);
 await p.screenshot({ path: 'shots/mobile/01-title.png' });
 await p.evaluate(() => window.__mm6.newGame());
-await p.waitForTimeout(1200);
+// Region generation takes several seconds; a 1.2s wait screenshotted the
+// loading plate and reported a perf line with nothing in the scene.
+await p.waitForFunction('window.__perf && window.__perf.entities > 0', { timeout: 300000 });
+await p.evaluate(() => window.__mm6.setTime(12, 0));
+await p.waitForTimeout(1500);
 await p.screenshot({ path: 'shots/mobile/02-world.png' });
 // Drag to look, then tap the HUD.
 await p.touchscreen.tap(600, 200);
