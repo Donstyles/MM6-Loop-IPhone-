@@ -26,7 +26,8 @@
 import * as THREE from 'three';
 import { generateRegion, REGIONS } from '/src/world/region.js';
 import { generateDungeon, DUNGEON_THEMES, INDOOR_HFOV_DEG, OUTDOOR_HFOV_DEG,
-         DUNGEON_FOG_NEAR, DUNGEON_FOG_FAR } from '/src/world/dungeon.js';
+         DUNGEON_FOG_NEAR, DUNGEON_FOG_FAR, DUNGEON_FOG_COLOR,
+         TORCHLIGHT_RADIUS } from '/src/world/dungeon.js';
 import { buildSky, FAR_CLIP, NEAR_CLIP } from '/src/world/sky.js';
 import { texturesReady, texturesAvailable, heightAt, missingTextureIds } from '/src/world/terrain.js';
 
@@ -86,6 +87,14 @@ addEventListener('pointermove', (e) => {
   lx = e.clientX; ly = e.clientY;
 });
 
+// The party torch is a live shader term, so the preview needs a way to drive
+// it: [ and ] step the power level the way Torch Light would.
+let torchPower = 1;
+addEventListener('keydown', (e) => {
+  if (e.code === 'BracketLeft') torchPower = Math.max(1, torchPower - 1);
+  if (e.code === 'BracketRight') torchPower = Math.min(6, torchPower + 1);
+});
+
 const fwd = new THREE.Vector3(), right = new THREE.Vector3();
 function fly(dt) {
   const sp = (keys.has('ShiftLeft') ? 6000 : 1600) * dt;
@@ -110,8 +119,10 @@ async function boot() {
     genMs = performance.now() - t0;
     scene.add(dungeon.group);
     window.__dungeon = dungeon;
-    scene.fog = new THREE.Fog(0x000000, DUNGEON_FOG_NEAR, DUNGEON_FOG_FAR);
-    scene.background = new THREE.Color(0x000000);
+    // Match the shipped values exactly - the preview is only useful if what it
+    // shows is what maps.js will put on screen.
+    scene.fog = new THREE.Fog(DUNGEON_FOG_COLOR, DUNGEON_FOG_NEAR, DUNGEON_FOG_FAR);
+    scene.background = new THREE.Color(DUNGEON_FOG_COLOR);
     // Spawn exactly where a host would: at `start`, facing `startYaw`. If the
     // level only looks right from a hand-picked camera it is not working.
     camera.position.copy(dungeon.start);
@@ -198,7 +209,7 @@ let last = performance.now(), fps = 0, acc = 0, frames = 0;
 
 function frame(dt) {
   if (world) world.update(dt, camera, tod, P.get('weather') || undefined);
-  if (dungeon) dungeon.update(dt, camera);
+  if (dungeon) dungeon.update(dt, camera, torchPower);
   renderer.render(scene, camera);
 }
 
@@ -215,6 +226,8 @@ function loop() {
   const i = renderer.info.render;
   hud.textContent =
     `${mode === 'dungeon' ? 'dungeon:' + theme : regionId}  seed ${seed}  tod ${tod}\n` +
+    (dungeon ? `ambient dim ${dungeon.ambientDim}  palette gain ${dungeon.paletteGain}  ` +
+      `torches ${dungeon.torches.length}  party torch r=${TORCHLIGHT_RADIUS * torchPower}\n` : '') +
     `draw calls ${i.calls}   tris ${(i.triangles / 1000).toFixed(1)}k   fps ${fps.toFixed(0)}\n` +
     `gen ${genMs.toFixed(0)}ms   textures.js ${texturesAvailable() ? 'live' : 'FALLBACK'}\n` +
     `pos ${camera.position.x.toFixed(0)} ${camera.position.y.toFixed(0)} ${camera.position.z.toFixed(0)}` +

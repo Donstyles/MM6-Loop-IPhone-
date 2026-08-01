@@ -9,11 +9,15 @@ import { quantiseShade } from './sky.js';
 // Dungeons.
 //
 // The signature MM6 dungeon image is a black corridor with a warm pool of
-// torchlight on the floor and the wall behind the torch blown out to orange,
-// everything beyond falling to nothing. That is all baked: MM6 stored a light
-// value per vertex and drew with no lights at all. We do exactly the same -
-// bake torch falloff into vertex colours over a 256-unit lattice, then merge
-// everything into a handful of draw calls.
+// torchlight on the floor and the wall behind the torch blown out, everything
+// beyond falling to nothing. Static lighting is baked: MM6 stored a 0..31
+// dimming level per vertex and drew with no lights at all. We do the same -
+// bake sector ambient plus every wall torch into vertex colours over a
+// ~170-unit lattice, then merge the level into a handful of draw calls.
+//
+// The one light that cannot be baked is the party's own torch, which follows
+// the camera; that rides in as a shader term (see TORCH_FRAG) so the walls the
+// party is standing next to are always legible.
 //
 // Layout is a cell grid rather than free-floating boxes, because a grid gives
 // correct doorway openings and wall/floor risers for free.
@@ -21,7 +25,7 @@ import { quantiseShade } from './sky.js';
 
 export const DUNGEON_THEMES = [
   'cave', 'crypt', 'sewer', 'temple', 'mine', 'castle',
-  'tower', 'lair', 'ruins', 'ice', 'volcano',
+  'tower', 'lair', 'ruins', 'ice', 'volcano', 'hive',
 ];
 
 /**
@@ -57,8 +61,9 @@ export const PARTY_TORCH_POWER = 1;
  * *tint*, multiplied onto a texture which is itself only ~40 % grey. Taken
  * literally it renders a corridor at luminance ~20, which is exactly the
  * black-screen bug this replaces. So we calibrate against the number that can
- * actually be measured off the frame and hold the unlit floor at the bottom of
- * MM6's quoted band; torches then take it up from there.
+ * actually be measured off the frame. The dimming levels this solves to still
+ * land at 19-22 across the themes, i.e. inside MM6's own band; it is the
+ * exposure underneath them that moves.
  */
 const AMBIENT_TARGET = 0.105;
 
@@ -120,6 +125,14 @@ const THEME = {
     wall: 'dun_lava_rock', floor: 'dun_lava_rock', ceil: 'dun_ceiling_cave',
     ambDim: 25, torch: [1.00, 0.48, 0.16], torchRange: 1188,
     roomH: [660, 1200], corrH: 620, organic: 0.4, liquid: 'lava', liquidChance: 0.6, pillars: 0.25,
+  },
+  // Riveted plate: MM6's Control Center / Hive family (spec §13). Without it
+  // `dun_metal` only ever appears as a torch bracket and a chest band, and the
+  // one texture family with no straight-edged stone in it goes unused.
+  hive: {
+    wall: 'dun_metal', floor: 'dun_metal', ceil: 'dun_metal',
+    ambDim: 26, torch: [0.86, 0.92, 1.00], torchRange: 1080,
+    roomH: [520, 820], corrH: 512, organic: 0, liquid: 'water', liquidChance: 0.2, pillars: 0.35,
   },
 };
 

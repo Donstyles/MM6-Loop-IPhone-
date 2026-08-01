@@ -32,4 +32,5 @@ export default [
   ['25-dungeon', '__mm6.close(); __mm6.dungeon({ id:"goblinwatch", name:"Goblinwatch", theme:"castle", rooms:12, levels:2 })', 4000],
   ['26-dungeon-walk', '__mm6.walk(1,0,1600)', 2000],
   ['27-dungeon-look', '__mm6.look(1.1,0)', 900],
+  ['28-guild', '__mm6.open("guild", { school: "fire", title: "Guild of Fire" })', 900],
 ];

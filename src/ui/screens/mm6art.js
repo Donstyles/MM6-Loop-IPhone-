@@ -39,6 +39,7 @@ function snapC(r, g, b) {
 }
 
 export function hexRGB(hex) {
+  if (Array.isArray(hex)) return [hex[0] | 0, hex[1] | 0, hex[2] | 0];
   const n = typeof hex === 'number' ? hex : parseInt(String(hex).replace('#', ''), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
@@ -896,6 +897,34 @@ export function spellSigil(ctx, school, tier, x, y, s = 24) {
   blit(ctx, cached(`sg:${school}:${tier}:${s}`, () => sigilCanvas(school, tier, s)), x, y);
 }
 
+/**
+ * The sigil recoloured into a single metal, for stamping into a tome's cover.
+ * Keeps the shape's own light-to-dark ordering and maps it onto a two-tone
+ * ramp of `rgb`, so gilding reads against any cover colour.
+ */
+export function spellSigilStamp(ctx, school, tier, x, y, s, rgb) {
+  const key = `sgs:${school}:${tier}:${s}:${rgb.join(',')}`;
+  const c = cached(key, () => {
+    const src = sigilCanvas(school, tier, s);
+    const out = mkCanvas(s, s);
+    const g = out.getContext('2d');
+    g.drawImage(src, 0, 0);
+    const img = g.getImageData(0, 0, s, s);
+    const d = img.data;
+    const dark = shade(rgb, 0.42), lite = mix(rgb, [255, 255, 255], 0.5);
+    for (let i = 0; i < d.length; i += 4) {
+      if (!d[i + 3]) continue;
+      const l = (d[i] * 0.35 + d[i + 1] * 0.5 + d[i + 2] * 0.15) / 255;
+      const t = band(l, 4);
+      const p = snapC(...mix(dark, lite, t));
+      d[i] = p[0]; d[i + 1] = p[1]; d[i + 2] = p[2]; d[i + 3] = 255;
+    }
+    g.putImageData(img, 0, 0);
+    return out;
+  });
+  blit(ctx, c, x, y);
+}
+
 /** The same sigil rendered flat grey, for a spell the character has not learned. */
 export function spellSigilGhost(ctx, school, tier, x, y, s = 24) {
   const c = cached(`sgh:${school}:${tier}:${s}`, () => {
@@ -1307,6 +1336,30 @@ export function paintItem(g, kind, w, h, opts = {}) {
       rct(g, w - 8, Math.round(h / 2) - 3, 5, 1, B.l);
       break;
     }
+    // A spell tome as a guild shelves it: closed, face on, cover in the
+    // school's colour with brass corner bosses and a clasp. The caller stamps
+    // the school's sigil into the middle of the cover afterwards.
+    case 'tome': {
+      const cov = accent;
+      const lo = shade(cov, 0.50), hi = mix(cov, [255, 255, 255], 0.34);
+      rct(g, 3, 1, w - 4, h - 2, lo);                            // page block edge
+      rct(g, 5, 2, w - 7, h - 4, [214, 200, 164]);               // leaves
+      for (let y = 3; y < h - 3; y += 2) rct(g, 5, y, w - 7, 1, [186, 172, 136]);
+      rct(g, 0, 0, w - 5, h, cov);                               // cover
+      rct(g, 0, 0, w - 5, 1, hi);                                // top arris
+      rct(g, 0, 0, 1, h, hi);
+      rct(g, 0, h - 1, w - 5, 1, lo);
+      rct(g, 0, 0, 3, h, shade(cov, 0.72));                      // spine
+      rct(g, 3, 0, 1, h, lo);
+      for (let y = 4; y < h - 4; y += 7) rct(g, 0, y, 3, 2, hi); // spine bands
+      for (const [bx, by] of [[4, 1], [w - 12, 1], [4, h - 4], [w - 12, h - 4]]) {
+        rct(g, bx, by, 6, 3, B.m); rct(g, bx, by, 6, 1, B.l);    // corner bosses
+      }
+      rct(g, w - 8, Math.round(h / 2) - 3, 6, 6, B.m);           // clasp
+      rct(g, w - 8, Math.round(h / 2) - 3, 6, 1, B.l);
+      rct(g, w - 8, Math.round(h / 2) + 2, 6, 1, B.d);
+      break;
+    }
     case 'gem': {
       const r = Math.min(w, h) / 2 - 1;
       // A cut stone: a table facet on top, pavilion below, hard facet edges.
@@ -1395,5 +1448,5 @@ export const ITEM_ASPECT = {
   spear: 0.26, staff: 0.30, bow: 0.72, shield: 0.82, helm: 0.88, armor: 0.82,
   chain: 0.82, plate: 0.82, boots: 0.9, gauntlets: 0.9, belt: 1.5, cloak: 0.78,
   amulet: 0.86, ring: 0.86, potion: 0.62, scroll: 1.5, wand: 0.36, book: 0.9,
-  spellbook: 0.9, gem: 0.86, gold: 1.2, reagent: 0.7,
+  spellbook: 0.9, tome: 0.76, gem: 0.86, gold: 1.2, reagent: 0.7,
 };

@@ -10,13 +10,14 @@
 import { rampCss } from '../../core/palette.js';
 
 import * as F from '../../art/font.js';
+import * as MM6 from './mm6art.js';
 import { SPELLS_BY_SCHOOL, spellPrice, schoolSkill } from '../../game/spells.js';
 import { SCHOOL_TIER_LIMIT, classSkillMax, MASTERY_NAMES, masteryCost, masteryRequirement } from '../../game/skills.js';
 import { CLASSES } from '../../game/stats.js';
 import {
-  HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, paintWall, paintFloor,
+  HouseScreen, PANEL, baked, poly, figure, gold, paintWall, paintFloor,
   paintShelf, paintClutter, vignette, members, activeMember, charName, partyGold, spend,
-  C_WHITE, C_GOLD, C_CANARY, C_DIM, C_RED, C_GREEN, C_LEARN,
+  C_WHITE, C_CANARY, C_DIM, C_RED, C_GREEN,
 } from './dialogue.js';
 
 const SCHOOL_TINT = {
@@ -29,6 +30,27 @@ const GUILD_NAME = {
   earth: 'Guild of Earth', spirit: 'Guild of the Spirit', mind: 'Guild of the Mind',
   body: 'Guild of the Body', light: 'Temple of Light', dark: 'Circle of the Dark',
 };
+
+/**
+ * A flat elliptical band, filled scanline by scanline: for each row of the
+ * outer ellipse, paint only the span that falls outside the inner one. Keeps
+ * the floor texture underneath instead of stamping a solid patch over it.
+ */
+function ringE(g, cx, cy, rx, ry, thick, color) {
+  g.fillStyle = color;
+  const irx = rx - thick, iry = Math.max(1, ry - Math.max(1, Math.round((ry * thick) / rx)));
+  for (let dy = -ry; dy <= ry; dy++) {
+    const o = Math.round(rx * Math.sqrt(Math.max(0, 1 - (dy * dy) / (ry * ry))));
+    if (o <= 0) continue;
+    const i = Math.abs(dy) <= iry
+      ? Math.round(irx * Math.sqrt(Math.max(0, 1 - (dy * dy) / (iry * iry))))
+      : 0;
+    const y = Math.round(cy) + dy;
+    if (i <= 0) { g.fillRect(Math.round(cx) - o, y, o * 2, 1); continue; }
+    g.fillRect(Math.round(cx) - o, y, o - i, 1);
+    g.fillRect(Math.round(cx) + i, y, o - i, 1);
+  }
+}
 
 /** Shelved tomes, a lectern, a floating focus in the school's colour. */
 export function paintGuildInterior(g, w, h, school) {
@@ -57,8 +79,9 @@ export function paintGuildInterior(g, w, h, school) {
     }
   }
 
-  // Lectern with an open tome, lit from the focus above it.
-  const lx = w / 2, ly = horizon + 34;
+  // Lectern with an open tome, off to the left so the circle in the middle of
+  // the floor stays clear.
+  const lx = Math.round(w * 0.24), ly = horizon + 30;
   g.fillStyle = rampCss('wood', 4);
   g.fillRect(lx - 5, ly - 44, 10, 44);
   g.fillRect(lx - 22, ly, 44, 5);
@@ -67,33 +90,33 @@ export function paintGuildInterior(g, w, h, school) {
   poly(g, [lx - 30, ly - 46, lx - 2, ly - 52, lx - 2, ly - 44, lx - 28, ly - 40], rampCss('sand', 12));
   poly(g, [lx + 30, ly - 46, lx + 2, ly - 52, lx + 2, ly - 44, lx + 28, ly - 40], rampCss('sand', 11));
 
-  // The focus: a slowly turning shard of the school's element.
-  const fx = lx, fy = horizon - 66;
-  glow(g, fx, fy, 110, tint, 0.9);
-  g.fillStyle = tint;
+  // The focus: a shard of the school's element hanging over the runic circle,
+  // clear of the shelved tomes so neither reads as clutter behind the other.
+  const cxr = Math.round(w / 2);
+  const fx = cxr, fy = horizon + 24;
+  MM6.lightPool(g, fx, fy, 34, tint, 0.55);
   poly(g, [fx, fy - 22, fx + 13, fy, fx, fy + 22, fx - 13, fy], tint);
-  g.fillStyle = '#ffffff';
-  g.globalAlpha = 0.5;
-  poly(g, [fx, fy - 18, fx + 6, fy - 2, fx, fy + 6, fx - 6, fy - 2], '#ffffff');
-  g.globalAlpha = 1;
+  // The shard's inner facet: a lighter mix of the same tint rather than a
+  // half-transparent white, which would blend to an off-palette colour.
+  poly(g, [fx, fy - 18, fx + 6, fy - 2, fx, fy + 6, fx - 6, fy - 2],
+    MM6.pc(MM6.mix(MM6.hexRGB(tint), [255, 255, 255], 0.55)));
 
-  // Runic ring on the floor under the focus.
-  g.save();
-  g.globalAlpha = 0.5;
-  g.strokeStyle = tint; g.lineWidth = 2;
-  g.beginPath(); g.ellipse(lx, horizon + 58, 128, 32, 0, 0, Math.PI * 2); g.stroke();
-  g.beginPath(); g.ellipse(lx, horizon + 58, 100, 24, 0, 0, Math.PI * 2); g.stroke();
+  // Runic ring inlaid in the floor under the focus. Scanline-filled so the band
+  // is a hard 1-bit edge; a stroked ellipse would be antialiased, and nothing
+  // in MM6 has a soft edge.
+  const ry0 = horizon + 62;
+  ringE(g, cxr, ry0, 128, 32, 3, tint);
+  ringE(g, cxr, ry0, 100, 24, 2, tint);
   for (let i = 0; i < 12; i++) {
     const a = (i / 12) * Math.PI * 2;
     g.fillStyle = tint;
-    g.fillRect((lx + Math.cos(a) * 114) | 0, (horizon + 58 + Math.sin(a) * 28) | 0, 3, 3);
+    g.fillRect((cxr + Math.cos(a) * 114) | 0, (ry0 + Math.sin(a) * 28) | 0, 3, 3);
   }
-  g.restore();
 
   // A robed guildmaster off to one side.
   figure(g, w * 0.78, horizon + 48, 96, 'rgba(20,18,26,0.9)', tint.replace(')', ')'), { hat: true });
 
-  paintClutter(g, w * 0.2, h - 8, 'crate', 22);
+  paintClutter(g, w * 0.90, h - 26, 'crate', 22);
   vignette(g, w, h);
 }
 
@@ -254,52 +277,92 @@ export class GuildScreen extends HouseScreen {
     return baked(`guild:${this.school}`, PANEL.w, PANEL.h, (g, w, h) => paintGuildInterior(g, w, h, this.school));
   }
 
+  /**
+   * MM6 sells spells the way it sells swords: the eleven tomes stand on the
+   * guild's shelves as painted objects. There is no table, no column headers
+   * and no price printed under each one - the name, cost and reason you cannot
+   * have it appear on the status line, and only for the book under the pointer.
+   */
   drawContent(ctx) {
     const ch = this.character || activeMember(this.session);
     const list = this.spells();
-    const x = PANEL.x + 12, y = PANEL.y + 12, w = PANEL.w - 24;
-    const h = 34 + list.length * 20;
-    plate(ctx, x, y, w, h, 0.72);
-
-    const tint = SCHOOL_TINT[this.school] || C_WHITE;
-    F.drawText(ctx, `${this.title} - spells for sale`, x + 10, y + 5, { color: tint });
-    F.drawText(ctx, this.isMember() ? 'Member' : 'Not a member', x + w - 10, y + 6,
-      { face: 'small', align: 'right', color: this.isMember() ? C_GREEN : C_RED });
-    A.rule(ctx, x + 8, y + 20, w - 16, '#7a6a4a');
-    F.drawText(ctx, 'Spell', x + 34, y + 24, { face: 'small', color: C_DIM });
-    F.drawText(ctx, 'SP', x + 250, y + 24, { face: 'small', color: C_DIM });
-    F.drawText(ctx, 'Price', x + 330, y + 24, { face: 'small', align: 'right', color: C_DIM });
-    F.drawText(ctx, 'Status', x + w - 12, y + 24, { face: 'small', align: 'right', color: C_DIM });
-
     const { mastery } = this.skillOf(ch);
     const cap = SCHOOL_TIER_LIMIT[mastery] || 0;
+    const tint = SCHOOL_TINT[this.school] || '#c078e8';
 
+    const cols = 6, cw = 58, chh = 74;
+    const gx = PANEL.x + Math.round((PANEL.w - cols * cw) / 2) + 4;
+    const gy = PANEL.y + 26;
+    const rows = Math.ceil(list.length / cols);
+
+    // A shelf plank under each row for the books to stand on.
+    for (let r = 0; r < rows; r++) {
+      const sy = gy + r * chh + chh - 20;
+      MM6.rct(ctx, gx - 8, sy, cols * cw + 12, 5, [96, 68, 38]);
+      MM6.rct(ctx, gx - 8, sy, cols * cw + 12, 1, [156, 120, 74]);
+      MM6.rct(ctx, gx - 8, sy + 5, cols * cw + 12, 2, [44, 30, 16]);
+      MM6.stipple(ctx, gx - 8, sy + 7, cols * cw + 12, 5, [0, 0, 0], 0.26);
+    }
+
+    let hover = null;
     list.forEach((sp, i) => {
-      const ry = y + 34 + i * 20;
+      const shelfY = gy + Math.floor(i / cols) * chh + chh - 20;
+      const cx = gx + (i % cols) * cw + cw / 2;
+      const size = 46;
+      const cy = shelfY - size / 2 - 2;
       const known = this.knows(ch, sp.id);
       const why = this.blockedReason(ch, sp);
-      const price = spellPrice(sp);
-      const can = !known && !why && price <= partyGold(this.session);
-      const hit = this.ui.region(`${this.id}:sp${i}`, x + 8, ry - 2, w - 16, 18, sp.text || sp.name);
-      if (hit.hover && !known && !why) {
-        ctx.save(); ctx.globalAlpha = 0.22; ctx.fillStyle = '#e1cd23';
-        ctx.fillRect(x + 8, ry - 2, w - 16, 18); ctx.restore();
+
+      const hit = this.ui.region(`${this.id}:sp${i}`, cx - 24, cy - size / 2 - 2, 48, size + 6,
+        sp.text || sp.name);
+      if (hit.hover) {
+        MM6.stipple(ctx, cx - 24, cy - size / 2 - 2, 48, size + 6, [255, 232, 150], 0.30);
+        hover = { sp, known, why };
       }
       if (hit.click) this.buy(sp);
 
-      // Tier gem: lit up to the character's mastery cap.
-      A.gem(ctx, x + 14, ry + 2, 8, sp.tier <= cap ? this.school === 'fire' ? 'fire' : 'arcane' : 'grey');
-      F.drawText(ctx, `${sp.tier}.`, x + 26, ry + 1, { face: 'small', color: C_DIM });
-      F.drawText(ctx, sp.name, x + 40, ry, {
-        color: known ? C_DIM : why ? C_RED : hit.hover ? C_GOLD : C_LEARN,
-        maxWidth: 200,
-      });
-      F.drawText(ctx, String(sp.sp), x + 254, ry + 1, { face: 'small', color: C_WHITE });
-      F.drawText(ctx, `${gold(price)}g`, x + 330, ry + 1,
-        { face: 'small', align: 'right', color: can ? C_CANARY : C_DIM });
-      F.drawText(ctx, known ? 'in book' : (why || 'available'), x + w - 12, ry + 1,
-        { face: 'small', align: 'right', color: known ? C_GREEN : why ? C_RED : C_LEARN });
+      // The tome itself. Cover in the school's colour, darkened by tier so the
+      // shelf reads as three bands - the four Normal spells bright at the
+      // front, the Master ones almost black - and the sigil gilded into it.
+      const open = sp.tier <= cap && !why;
+      const cover = MM6.shade(MM6.hexRGB(tint), 1 - Math.min(0.62, (sp.tier - 1) * 0.062));
+      MM6.drawItemArt(ctx, 'tome', cx, cy, size, { accent: cover });
+      const s = 20;
+      const sx = Math.round(cx - s / 2) + 1, sy2 = Math.round(cy - s / 2);
+      // Gilt for a spell this character could actually copy out, dead pewter
+      // for one their mastery does not reach.
+      MM6.spellSigilStamp(ctx, this.school, sp.tier, sx, sy2, s,
+        open ? [206, 168, 62] : [104, 100, 92]);
+
+      // A spell already copied out has a ribbon marker hanging from the tome.
+      if (known) {
+        const bw = Math.round(size * 0.76);
+        MM6.rct(ctx, cx + bw / 2 - 12, cy + size / 2 - 4, 3, 10, [140, 26, 22]);
+        MM6.rct(ctx, cx + bw / 2 - 12, cy + size / 2 - 4, 1, 10, [206, 78, 62]);
+      }
     });
+
+    // Status line: name on the left, cost or refusal on the right.
+    const sy = PANEL.y + PANEL.h - 24;
+    MM6.stipple(ctx, PANEL.x + 8, sy - 2, PANEL.w - 16, 18, [0, 0, 0], 0.62);
+    if (hover) {
+      const price = spellPrice(hover.sp);
+      const right = hover.known ? 'already in the book'
+        : hover.why ? hover.why
+          : `${gold(price)} gold`;
+      const col = hover.known ? C_GREEN
+        : hover.why ? C_RED
+          : price <= partyGold(this.session) ? C_CANARY : C_RED;
+      F.drawText(ctx, `${hover.sp.name}  (${hover.sp.sp} SP)`, PANEL.x + 16, sy + 2,
+        { color: C_WHITE, maxWidth: PANEL.w - 190 });
+      F.drawText(ctx, right, PANEL.x + PANEL.w - 16, sy + 2, { align: 'right', color: col });
+    } else {
+      F.drawText(ctx, this.title, PANEL.x + 16, sy + 2, { color: tint });
+      F.drawText(ctx, this.isMember() ? 'Member' : 'Not a member',
+        PANEL.x + PANEL.w - 16, sy + 2,
+        { align: 'right', color: this.isMember() ? C_GREEN : C_RED });
+    }
+    this.status = '';
   }
 }
 

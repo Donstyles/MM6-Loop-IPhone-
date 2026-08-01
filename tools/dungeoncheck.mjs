@@ -9,7 +9,7 @@ import { mkdirSync } from 'node:fs';
 const BAND = [40, 110];
 const THEMES = process.argv[2]
   ? process.argv[2].split(',')
-  : ['cave', 'crypt', 'sewer', 'temple', 'mine', 'castle', 'tower', 'lair', 'ruins', 'ice', 'volcano'];
+  : ['cave', 'crypt', 'sewer', 'temple', 'mine', 'castle', 'tower', 'lair', 'ruins', 'ice', 'volcano', 'hive'];
 const OUT = 'shots/dungeoncheck';
 mkdirSync(OUT, { recursive: true });
 
