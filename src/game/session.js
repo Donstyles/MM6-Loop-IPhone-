@@ -520,12 +520,44 @@ export class Session {
     return best;
   }
 
-  /** Space / tap: open a door, talk to an NPC, loot a chest, pick up an item. */
+  /**
+   * Space / tap: open a door, talk to an NPC, loot a chest, pick up an item.
+   *
+   * Whatever is under the cursor wins. Failing that, pick what the party is
+   * *looking at* rather than merely what is closest: a town street puts a dozen
+   * interactables inside any useful radius, so nearest-by-distance opened the
+   * neighbouring shop, or talked to a passer-by, about as often as it opened the
+   * door in front of you. Score by how far off the view axis a candidate sits
+   * and reject anything outside a 60 degree cone.
+   */
   activate() {
-    const e = this.hoverEntity || this.entities.nearest(
-      this.player.pos.x, this.player.pos.z, 700,
-      (x) => x.interact || x.category === CATEGORY.ITEM || x.category === CATEGORY.NPC,
-    );
+    let e = this.hoverEntity;
+    if (!e) {
+      const px = this.player.pos.x, pz = this.player.pos.z;
+      const fx = -Math.sin(this.player.yaw), fz = -Math.cos(this.player.yaw);
+      let best = null, bestScore = Infinity;
+      for (const c of this.entities.list) {
+        if (c.dead) continue;
+        if (!(c.interact || c.category === CATEGORY.ITEM || c.category === CATEGORY.NPC)) continue;
+        const dx = c.pos.x - px, dz = c.pos.z - pz;
+        const d = Math.hypot(dx, dz);
+        if (d > 900) continue;
+        // Right on top of it counts however you are facing - you cannot miss a
+        // thing you are standing in.
+        if (d > 1) {
+          const cos = (dx * fx + dz * fz) / d;
+          if (d > 160 && cos < 0.5) continue;         // outside a 60 degree cone
+          // Distance, penalised by how far off-axis it is, and biased toward
+          // the thing you actually came for: a shop entrance and the building's
+          // own door sit within a few units of each other, and swinging a door
+          // open instead of walking into the shop is never what was meant.
+          const want = c.interact && (c.interact.kind === 'shop' || c.interact.kind === 'transition') ? 0.45 : 1;
+          const score = d * want * (1 + (1 - Math.max(0, cos)) * 3);
+          if (score < bestScore) { bestScore = score; best = c; }
+        } else if (d < bestScore) { bestScore = d; best = c; }
+      }
+      e = best;
+    }
     if (!e) return null;
     const d = Math.hypot(e.pos.x - this.player.pos.x, e.pos.z - this.player.pos.z);
     if (d > 900) return null;

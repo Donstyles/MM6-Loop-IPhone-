@@ -148,16 +148,34 @@ export function installCombat(session) {
       openChest(session, e, rnd);
     } else if (kind === 'item') {
       pickUp(session, e);
-    } else if (kind === 'door') {
+    } else if (kind === 'door' || kind === 'house') {
       toggleDoor(session, e);
     } else if (kind === 'shop') {
       const s = e.interact;
+      const k = s.shopKind || 'weapon';
+      // The table used American spellings and singulars the town generator
+      // never produces - it makes `armour`, `alchemist`, `stable` and
+      // `guild_fire`, not `armor`, `alchemy`, `stables` and `guild` - so
+      // everything but the handful that happened to match fell through to the
+      // generic shop.
       const screenFor = {
-        weapon: 'shop', armor: 'shop', magic: 'shop', alchemy: 'shop', general: 'shop',
+        weapon: 'shop', armor: 'shop', armour: 'shop', magic: 'shop',
+        alchemy: 'shop', alchemist: 'shop', general: 'shop',
         temple: 'temple', training: 'training', tavern: 'tavern', bank: 'bank',
-        guild: 'guild', stables: 'transfer', docks: 'transfer',
-      }[s.shopKind] || 'shop';
-      window.__openScreen && window.__openScreen(screenFor, { shop: s, entity: e });
+        townhall: 'dialogue', stable: 'transfer', stables: 'transfer', docks: 'transfer',
+      };
+      const screen = k.startsWith('guild') ? 'guild' : (screenFor[k] || 'shop');
+      // Every house screen reads its own fields off the top of `opts` - the
+      // shop reads `opts.kind`, the guild `opts.school`. Passing only
+      // `{ shop: s }` left all of them undefined, so *every* shop in the game
+      // opened as the weapon shop and every guild as the fire guild.
+      window.__openScreen && window.__openScreen(screen, {
+        ...s,
+        kind: k,
+        school: k.startsWith('guild_') ? k.slice(6) : s.school,
+        shop: s.shop || s,
+        entity: e,
+      });
     } else if (kind === 'transition') {
       doTransition(session, e.interact);
     } else if (e.category === CATEGORY.MONSTER) {

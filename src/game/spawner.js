@@ -151,7 +151,11 @@ export class Spawner {
       S.entities.add(new Entity({
         category: CATEGORY.PROP, kind: 'door', sheet: null, static: true,
         x: p.x, y: p.y, z: p.z, radius: 110, solid: false,
-        interact: { kind: 'door', ...door.userData.door, mesh: door },
+        // `kind` last: the spread carries the building's own doorKind, which
+        // for a residence is 'house', and it was overwriting the 'door' kind
+        // the handler dispatches on - so activating a front door did nothing at
+        // all. The building kind rides along as `doorKind` instead.
+        interact: { ...door.userData.door, kind: 'door', mesh: door },
         label: 'Door',
       }));
     }
