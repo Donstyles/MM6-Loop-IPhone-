@@ -526,8 +526,8 @@ const EMBLEM = {
       || (v <= 0.72 && tongue(u, v, 0.80, -0.40, -0.40, -0.20, 0.28))
       || (v <= 0.72 && tongue(u, v, 0.80, -0.56, 0.44, 0.14, 0.24)))) return -1;
     const a = u - 0.02, b = v - 0.18;
-    let t = 1.14 - Math.sqrt(a * a + b * b) * 0.74;
-    if (v > 0.36) t -= (v - 0.36) * 1.1;
+    let t = 1.12 - Math.sqrt(a * a + b * b) * 1.02;
+    if (v > 0.36) t -= (v - 0.36) * 1.3;
     return t;
   },
 
@@ -535,7 +535,7 @@ const EMBLEM = {
   air(u, v) {
     if (v <= 0.02 && (bl(u, v, -0.44, -0.30, 0.34) || bl(u, v, -0.04, -0.52, 0.42)
       || bl(u, v, 0.42, -0.28, 0.30) || (Math.abs(u) <= 0.72 && v >= -0.34))) {
-      return 0.62 - v * 0.52 - u * 0.14;
+      return 0.58 - v * 0.58 - u * 0.22;
     }
     for (let i = 0; i <= 12; i++) {
       const p = i / 12;
@@ -552,7 +552,7 @@ const EMBLEM = {
     if (!(bl(u, v, 0, 0.30, 0.60) || (v <= 0.30 && Math.abs(u) <= hw))) return -1;
     const a = u + 0.24, b = v - 0.04;
     if (a * a + b * b < 0.034) return 1.30;
-    return 0.86 - u * 0.30 - v * 0.26;
+    return 0.88 - u * 0.48 - v * 0.42;
   },
 
   // A crag: two peaks, a face in the light and a face in shadow either side of
@@ -580,10 +580,10 @@ const EMBLEM = {
     const stem = Math.abs(u) <= 0.15 && v >= -0.34 && v <= 0.88;
     const arms = Math.abs(u) <= 0.68 && v >= 0.02 && v <= 0.28;
     if (!(loop || stem || arms)) return -1;
-    if (loop) return 0.80 - Math.abs(d - 0.32) * 2.4 - u * 0.22 - v * 0.12;
-    let t = 0.58 - v * 0.18;
-    if (stem && u < -0.02) t += 0.26;
-    if (arms && v < 0.14) t += 0.24;
+    if (loop) return 0.84 - Math.abs(d - 0.32) * 2.6 - u * 0.30 - v * 0.16;
+    let t = 0.46 - v * 0.24;
+    if (stem && u < -0.02) t += 0.36;
+    if (arms && v < 0.14) t += 0.34;
     return t;
   },
 
@@ -599,7 +599,7 @@ const EMBLEM = {
       if (a * a + b * b < 0.016) return 1.35;
       return 0.32 + (0.36 - d) * 0.7;
     }
-    return 1.05 - clamp(1 - (v + lid) / 0.44, 0, 1) * 0.44;
+    return 1.06 - clamp(1 - (v + lid) / 0.46, 0, 1) * 0.62;
   },
 
   // A heart: two lobes over a drawn point, notched at the top, sheen on the
@@ -690,9 +690,11 @@ function emblemCanvas(school, s, cols, key) {
         return null;
       }
       let col = t < 0.06 ? deep : cols[Math.round(band(clamp(t, 0, 1), 5) * 4)];
+      // The arris takes the light only where the light already falls; a rim
+      // that runs all the way round is a keyline in a lighter colour.
       const up = !on(x, y - 1), lf = !on(x - 1, y);
-      if (up || lf) col = mix(col, cols[4], t > 0.2 ? 0.5 : 0.28);
-      else if (!on(x, y + 1) || !on(x + 1, y)) col = mix(col, cols[1], 0.45);
+      if ((up || lf) && t > 0.34) col = mix(col, cols[4], 0.45);
+      else if ((!on(x, y + 1) || !on(x + 1, y)) && t < 0.86) col = mix(col, cols[1], 0.45);
       return col;
     }, 3);
   });
