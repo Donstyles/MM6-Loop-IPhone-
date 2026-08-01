@@ -154,10 +154,55 @@ export function polyH(ctx, pts, c) {
   ctx.fill();
 }
 
-/** Bayer-stippled rectangle: an 8-bit painter's only "partial" coverage. */
+/**
+ * Bayer-stippled rectangle: an 8-bit painter's only "partial" coverage.
+ *
+ * The pattern is periodic on 8 pixels, so anything larger than a tile is filled
+ * with a cached 8x8 pattern anchored to absolute coordinates rather than with a
+ * per-pixel loop - a full-frame scrim is half a million pixels and a loop that
+ * size cannot run every frame.
+ */
+const _stipTiles = new Map();
+
+function stippleTile(fill, density) {
+  const key = `${fill}|${density.toFixed(3)}`;
+  let t = _stipTiles.get(key);
+  if (t !== undefined) return t;
+  t = mkCanvas(8, 8);
+  const g = t.getContext('2d');
+  g.fillStyle = fill;
+  let any = false;
+  for (let j = 0; j < 8; j++) {
+    for (let i = 0; i < 8; i++) {
+      if (bay(i, j) + 0.5 >= density) continue;
+      g.fillRect(i, j, 1, 1);
+      any = true;
+    }
+  }
+  if (!any) t = null;
+  _stipTiles.set(key, t);
+  return t;
+}
+
 export function stipple(ctx, x, y, w, h, c, density = 0.5) {
-  ctx.fillStyle = typeof c === 'string' ? c : pc(c);
+  const fill = typeof c === 'string' ? c : pc(c);
   x |= 0; y |= 0; w |= 0; h |= 0;
+  if (w <= 0 || h <= 0) return;
+
+  if (w * h > 512) {
+    const t = stippleTile(fill, density);
+    if (!t) return;
+    // The pattern repeats from the transform origin, so anchor the origin to a
+    // multiple of 8 to keep the dither in phase across separate rectangles.
+    ctx.save();
+    ctx.translate(x & ~7, y & ~7);
+    ctx.fillStyle = ctx.createPattern(t, 'repeat');
+    ctx.fillRect(x - (x & ~7), y - (y & ~7), w, h);
+    ctx.restore();
+    return;
+  }
+
+  ctx.fillStyle = fill;
   for (let j = 0; j < h; j++) {
     for (let i = 0; i < w; i++) {
       if (bay(x + i, y + j) + 0.5 >= density) continue;

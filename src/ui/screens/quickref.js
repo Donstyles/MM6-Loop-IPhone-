@@ -8,6 +8,7 @@
 // ---------------------------------------------------------------------------
 
 import * as F from '../../art/font.js';
+import * as M from './mm6art.js';
 import {
   Screen, A, PANEL, px, py, TAB_Y, TAB_H, EXIT_X, EXIT_W,
   WHITE, CANARY, HILITE, DIM, GREEN, SCARLET, RED,
@@ -101,9 +102,8 @@ export class QuickRefScreen extends Screen {
         ch ? `${ch.name}` : 'Empty slot');
       if (hit.click && ch) { this.session.activeChar = i; this.sound('click'); }
       if (i === this.charIndex) {
-        ctx.globalAlpha = 0.14; ctx.fillStyle = '#ffe8a0';
-        ctx.fillRect(x, py(36), COL_W, TOP - 36 + this.rows(ch).length * ROW_H + 4);
-        ctx.globalAlpha = 1;
+        M.stipple(ctx, x, py(36), COL_W,
+          TOP - 36 + this.rows(ch).length * ROW_H + 4, [255, 232, 160], 0.14);
       }
       T(ctx, ch ? ch.name : '-', x + COL_W / 2, py(38), {
         align: 'center', color: !ch ? INK_DIM : i === this.charIndex ? HEAD : hit.hover ? LABEL : INK,
@@ -117,9 +117,8 @@ export class QuickRefScreen extends Screen {
     for (let r = 0; r < rowCount; r++) {
       const y = TOP + r * ROW_H;
       if (r % 2 === 1) {
-        ctx.globalAlpha = 0.10; ctx.fillStyle = '#000000';
-        ctx.fillRect(px(LABEL_X), py(y - 2), PANEL.w - LABEL_X * 2 - 8, ROW_H);
-        ctx.globalAlpha = 1;
+        M.stipple(ctx, px(LABEL_X), py(y - 2), PANEL.w - LABEL_X * 2 - 8, ROW_H,
+          [0, 0, 0], 0.10);
       }
       T(ctx, template[r][0], px(LABEL_X), py(y), { face: 'small', color: HEAD });
     }

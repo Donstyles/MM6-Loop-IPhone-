@@ -200,12 +200,17 @@ export const A = {
       ctx.fillStyle = rampCss('sand', 13); ctx.fillRect(x, y + 1, w, 1);
     });
   },
-  /** Thin ruled line for pages and sheets. */
+  /**
+   * Thin ruled line for pages and sheets. A half-transparent line would blend
+   * to a colour the palette has no index for, so a faint rule is a Bayer
+   * stipple of the solid ink instead - which is how an 8-bit painter would
+   * have drawn it anyway.
+   */
   rule(ctx, x, y, w, color, alpha) {
-    ctx.globalAlpha = alpha === undefined ? 0.45 : alpha;
-    ctx.fillStyle = color || '#6b5636';
-    ctx.fillRect(x | 0, y | 0, w | 0, 1);
-    ctx.globalAlpha = 1;
+    const a = alpha === undefined ? 0.45 : alpha;
+    const c = color || '#6b5636';
+    if (a >= 0.95) { ctx.fillStyle = c; ctx.fillRect(x | 0, y | 0, w | 0, 1); return; }
+    M.stipple(ctx, x | 0, y | 0, w | 0, 1, M.hexRGB(c), a);
   },
   /**
    * A carved plate. MM6 has no rounded rectangles and no flat fills: this is a
@@ -371,10 +376,11 @@ export function leaderRow(ctx, label, value, x, y, w, opts = {}) {
   const dotStart = x + lw + 3;
   const dotEnd = x + w - vw - 3;
   if (opts.dots !== false && dotEnd > dotStart) {
-    ctx.globalAlpha = 0.4;
-    ctx.fillStyle = color;
+    // The leader is already a dotted line; drawing those dots at 40% opacity
+    // on top of that just puts an off-palette colour on screen. Solid ink,
+    // dimmed by mixing toward the page, gives the same weight on-palette.
+    ctx.fillStyle = M.pc(M.mix(M.hexRGB(color), [168, 144, 104], 0.5));
     for (let dx = dotStart; dx < dotEnd; dx += 3) ctx.fillRect(dx | 0, (y + 6) | 0, 1, 1);
-    ctx.globalAlpha = 1;
   }
   F.drawText(ctx, value, (x + w) | 0, y, { face, color: vcolor, align: 'right' });
 }

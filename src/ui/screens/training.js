@@ -10,6 +10,7 @@
 import { rampCss } from '../../core/palette.js';
 import { clamp } from '../../core/rng.js';
 import * as F from '../../art/font.js';
+import * as M from './mm6art.js';
 import { xpForLevel, trainingCost, maxHP, maxSP, CLASSES } from '../../game/stats.js';
 import {
   HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, paintWall, paintFloor,
@@ -206,8 +207,7 @@ export class TrainingScreen extends HouseScreen {
       const hit = this.ui.region(`${this.id}:row${i}`, x + 6, ry - 3, w - 12, 22,
         `Train ${charName(ch)}`);
       if (hit.hover) {
-        ctx.save(); ctx.globalAlpha = 0.22; ctx.fillStyle = '#e1cd23';
-        ctx.fillRect(x + 6, ry - 3, w - 12, 22); ctx.restore();
+        M.stipple(ctx, x + 6, ry - 3, w - 12, 22, [225, 205, 35], 0.22);
       }
       if (hit.click) this.train(ch);
 

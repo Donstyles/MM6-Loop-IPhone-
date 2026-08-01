@@ -12,6 +12,7 @@ import { layout } from '../../core/layout.js';
 import { rampCss } from '../../core/palette.js';
 
 import * as F from '../../art/font.js';
+import * as M from './mm6art.js';
 import { PORTRAIT_W, PORTRAIT_H } from '../../art/portraits.js';
 import { maxHP, maxSP, xpForLevel } from '../../game/stats.js';
 import { Screen, A, portraitOf, gold, charName, glow, C_WHITE, C_GOLD, C_CANARY, C_DIM } from './dialogue.js';
@@ -64,11 +65,10 @@ export class LevelUpScreen extends Screen {
   draw(ctx) {
     const W = layout.w, H = layout.h;
     // Darken everything behind, the way MM6 dims the frame under a message box.
-    ctx.save();
-    ctx.globalAlpha = 0.62;
-    ctx.fillStyle = '#05050a';
-    ctx.fillRect(0, 0, W, H);
-    ctx.restore();
+    // A 62% black wash would blend every pixel behind it off-palette. MM6
+    // dims the frame under a message box with a dither, so this is a dense
+    // Bayer stipple of solid near-black instead.
+    M.stipple(ctx, 0, 0, W, H, [5, 5, 10], 0.62);
 
     const x = Math.round((W - BOX.w) / 2);
     const y = Math.round((H - BOX.h) / 2) - 20;
@@ -105,12 +105,10 @@ export class LevelUpScreen extends Screen {
       const ry = y + 84 + i * 15;
       F.drawText(ctx, label, tx, ry, { face: 'small', color: C_WHITE });
       F.drawText(ctx, value, tx + tw, ry, { face: 'small', align: 'right', color: col });
-      ctx.globalAlpha = 0.4;
-      ctx.fillStyle = '#8a7a58';
+      ctx.fillStyle = '#6a5c42';
       for (let dx = tx + F.measure(label, 'small').w + 4; dx < tx + tw - F.measure(value, 'small').w - 4; dx += 3) {
         ctx.fillRect(dx | 0, ry + 6, 1, 1);
       }
-      ctx.globalAlpha = 1;
     });
 
     // Totals along the bottom of the box.
