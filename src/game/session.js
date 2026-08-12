@@ -4,6 +4,7 @@ import { EntityManager, Entity, CATEGORY } from '../ents/entity.js';
 import { SpriteRenderer } from '../ents/billboard.js';
 import { MessageLog, Transition } from '../ui/uikit.js';
 import { Rand, hashStr } from '../core/rng.js';
+import { tickTimeEffects } from './party.js';
 
 // ---------------------------------------------------------------------------
 // The running game.
@@ -62,6 +63,33 @@ export class GameClock {
   }
   formatDate() {
     return `${this.weekday}  ${MONTHS[this.month]} ${this.day}, ${this.year}`;
+  }
+}
+
+/**
+ * THE one clock (systems #11, mobile #8): a GameClock-shaped view over
+ * party.minutes. Everything that advances time - realtime play, rest, wait,
+ * training, defeat - moves party.minutes, and every consumer (HUD calendar,
+ * bank interest, respawn timers, sky) reads the same number back through
+ * this object. There is no second timeline to drift.
+ */
+export class SessionClock extends GameClock {
+  constructor(session, startMinutes = 9 * 60) {
+    super(startMinutes);
+    this._session = session;
+    // super() already routed its write through the accessor below (which fell
+    // back to _fallback while _session was unset); re-anchor it explicitly.
+    this._fallback = startMinutes;
+    this.paused = false;
+  }
+  get minutes() {
+    const p = this._session && this._session.party;
+    return p && Number.isFinite(p.minutes) ? p.minutes : this._fallback;
+  }
+  set minutes(v) {
+    const p = this._session && this._session.party;
+    if (p) p.minutes = v;
+    this._fallback = v;
   }
 }
 
@@ -144,16 +172,20 @@ export class Session {
     this.player = new PlayerController();
     this.entities = new EntityManager();
     this.sprites = new SpriteRenderer(engine.scene);
-    this.clock = new GameClock(9 * 60);
+    this.clock = new SessionClock(this, 9 * 60);
     this.log = new MessageLog();
     this.transition = new Transition();
 
     // World bookkeeping the save system and the quest pipeline hang off.
-    this.worldSeed = null;        // captured when the spawner populates a region
+    this.worldSeed = null;        // captured ONCE, when the first region stands up
     this.mapMeta = null;          // {kind:'region'|'dungeon', id, spec, back}
     this.shops = this.shops || {};// shop.js keeps per-shop stock states here
     this.questPool = null;        // generated quests on offer, per region
     this.escort = null;           // {entity, quest} while an escort follows
+    this.worldState = { maps: {} };// per-map corpse/loot/chest persistence
+    this._rngs = {};              // persistent tagged RNG streams (rngFor)
+    this._tickAnchor = null;      // minutes up to which time effects have run
+    this._graceT = 0;             // post-respawn grace: monsters hold their swings
 
     this._accMin = 0;             // fractional game minutes not yet ticked
     this._combatLinger = 0;
@@ -201,6 +233,11 @@ export class Session {
 
   /** Swap the loaded map. `map` must satisfy the GameMap shape. */
   setMap(map, id, entry = null) {
+    // Remember what the outgoing map looked like - kills stay killed, opened
+    // chests stay opened - BEFORE the entity list is wiped (systems #7/#8).
+    if (this.map && this.mapId) {
+      try { this.snapshotMapState(); } catch (e) { /* persistence is best-effort */ }
+    }
     if (this.map && this.map.dispose) this.map.dispose();
     this.mapGroup.clear();
     this.entities.clear();
@@ -227,13 +264,46 @@ export class Session {
     this.escort = null;
     // Enough for a fresh save even if nothing enriches it: the transition glue
     // overwrites this with the full descriptor when it drives a map change.
+    // BOTH `kind` and `type` are written - the save loader historically read
+    // `type` while this side wrote `kind`, which corrupted every dungeon save
+    // (systems #1). Writers keep both in lockstep from here on.
+    const kind = map.indoor ? 'dungeon' : 'region';
     this.mapMeta = {
-      kind: map.indoor ? 'dungeon' : 'region',
+      kind,
+      type: kind,
       id,
       seed: this.worldSeed ?? null,
       spec: (map.dungeon && map.dungeon.spec) || null,
       back: map.indoor ? (this._dungeonBack || null) : null,
     };
+  }
+
+  // --- persistent tagged RNG streams (systems #3/#4/#12, playtest #7) -------
+
+  /**
+   * A PERSISTENT per-session Rand for `tag`, seeded from worldSeed^hash(tag)
+   * and created once: screens that re-open get the SAME stream, mid-sequence,
+   * so "close and reopen until the roll passes" is dead. The stream's cursor
+   * rides in saveState.
+   */
+  rngFor(tag) {
+    const key = String(tag);
+    let slot = this._rngs[key];
+    if (!slot) {
+      const seed = (((this.worldSeed ?? 1) >>> 0) ^ hashStr(key)) >>> 0;
+      slot = this._rngs[key] = { seed, cursor: 0, rand: null };
+    }
+    if (!slot.rand) slot.rand = this._countedRand(slot);
+    return slot.rand;
+  }
+
+  /** A Rand whose draw count is tracked (and replayed on restore). */
+  _countedRand(slot) {
+    const r = new Rand(slot.seed);
+    for (let i = 0; i < slot.cursor; i++) r.next();
+    const base = r.next;
+    r.next = () => { slot.cursor++; return base(); };
+    return r;
   }
 
   /**
@@ -353,6 +423,33 @@ export class Session {
     if (!this.map) return;
     const scene = this.engine.scene;
     const indoor = this.map.indoor;
+
+    // OUTDOORS THE SKY OWNS THE FOG (visuals #4). The sky module recomputes
+    // scene.fog's colour/near/far every frame from time-of-day and weather;
+    // overwriting it here is exactly the three-owners fight that painted the
+    // distant flora icy blue. Defer to whatever fog object the sky publishes
+    // (the map/region may hand it to us directly, or it is simply scene.fog)
+    // and pass the SAME values to the sprite fog so billboards match terrain.
+    if (!indoor) {
+      const skyFog = this.map.skyFog
+        || (this.map.region && (this.map.region.skyFog
+          || (this.map.region.sky && this.map.region.sky.state && this.map.region.sky.state.fog)))
+        || scene.fog;
+      if (skyFog && skyFog.color) {
+        if (scene.fog && scene.fog !== skyFog) {
+          scene.fog.color.copy(skyFog.color);
+          scene.fog.near = skyFog.near;
+          scene.fog.far = skyFog.far;
+        } else if (!scene.fog) {
+          scene.fog = new THREE.Fog(skyFog.color.getHex(), skyFog.near, skyFog.far);
+        }
+        this.sprites.setFog(skyFog.color, skyFog.near, skyFog.far);
+        if (this.map.setFogColor) this.map.setFogColor(skyFog.color, 1);
+        this.engine.setIndoor(false);
+        return;
+      }
+    }
+
     const k = indoor ? 1 : this.hazeTint();
 
     // Haze is the region's own horizon colour, dimmed by the hour - not a flat
@@ -405,10 +502,36 @@ export class Session {
 
   // --- frame ---------------------------------------------------------------
 
+  /**
+   * WORLD FREEZE (playtest #3/#6, audio #11): while a real screen is open the
+   * world does not simulate - no monster AI, no projectiles, no combat timers,
+   * no clock. MM6 stops the world under every house panel. Screens that WANT
+   * time to pass (the rest screen) advance the clock explicitly through
+   * clock.advanceMinutes + syncPartyClock, which works while frozen.
+   */
+  worldFrozen() {
+    const top = this.screens && this.screens.top;
+    if (!top) return false;
+    if (top.hudOnly || top.worldRunsBehind) return false;
+    return true;
+  }
+
   update(dt, input) {
     this.transition.update(dt);
     if (this.transition.busy && this.transition.phase === 'out') dt = 0;
 
+    if (this.worldFrozen()) {
+      // Keep presentation-only state moving so a rest screen's time jump is
+      // reflected the moment the panel lifts; everything else holds still.
+      this.log.update(dt);
+      this.syncTimeOfDay();
+      this.applyFog();
+      this.updateTint();
+      this._partyIdleT = 0;          // TB hesitation is paused under panels
+      return;
+    }
+
+    this._graceT = Math.max(0, this._graceT - dt);
     this.advanceGameTime(dt);
     this.log.update(dt);
 
@@ -425,6 +548,7 @@ export class Session {
     const wantJump = input.pressed('jump');
     const prevVy = this.player.vel.y;
     const wasGround = this.player.onGround;
+    const prevX = this.player.pos.x, prevZ = this.player.pos.z;
     const moving = this.player.update(dt, axes, this.collision, {
       run: input.down('run'),
       jump: wantJump,
@@ -432,6 +556,18 @@ export class Session {
     });
     this.clampToBounds(dt);
     this.player.applyTo(this.engine.camera);
+
+    // In turns, walking is not free: a couple of steps per round pass, then
+    // every stride spends action points, and running dry hands the round to
+    // the enemy (systems #2 - TB was a stealth cloak).
+    if (this.turnBased && this.turnActor === 'party' && this.countHostiles() > 0) {
+      this._tbMoved = (this._tbMoved || 0) + Math.hypot(this.player.pos.x - prevX, this.player.pos.z - prevZ);
+      const FREE = 520;              // ~two strides on the house
+      while (this._tbMoved > FREE + 260 && this.turnBased && this.turnActor === 'party') {
+        this._tbMoved -= 260;
+        this.spendTurnPoints(26);
+      }
+    }
 
     if (this.audio) {
       if (wantJump && wasGround && !this.player.onGround) this.audio.play('jump', { volume: 0.5 });
@@ -463,18 +599,18 @@ export class Session {
     this.applyFog();
     this.updateTint();
 
-    // Victory sting hands the deck back to the map's own track.
-    if (this._victoryT > 0) {
-      this._victoryT -= dt;
-      if (this._victoryT <= 0 && this.music && !this.inCombat) {
-        this.music.play(this.musicTrack || 'field');
-      }
-    }
+    // Victory sting runs out on its own; the shell's audio director notices
+    // combatMusicOverride() going null and picks the situational track. The
+    // session no longer force-plays 'field' - that stale memo was why field
+    // music played inside town after every scrap (audio #2).
+    if (this._victoryT > 0) this._victoryT -= dt;
+    if (this._defeatMusicT > 0) this._defeatMusicT -= dt;
 
-    // Dead outdoor packs come back with the new day, MM6's respawn rhythm.
-    const day = Math.floor(this.clock.minutes / DAY_MINUTES);
-    if (this._respawnDay === undefined) this._respawnDay = day;
-    if (day !== this._respawnDay) { this._respawnDay = day; this.respawnMonsters(); }
+    // Outdoor packs respawn on a ~2 week cycle, not daily (systems #7).
+    // Checked once a game hour; each group tracks when it was wiped.
+    const hourNow = Math.floor(this.clock.minutes / 60);
+    if (this._respawnHour === undefined) this._respawnHour = hourNow;
+    if (hourNow !== this._respawnHour) { this._respawnHour = hourNow; this.respawnMonsters(); }
 
     this.hoverEntity = this.pickEntity(input.pointer);
   }
@@ -482,15 +618,29 @@ export class Session {
   // --- time ------------------------------------------------------------------
 
   /**
-   * Real time becomes game time. The shell's clock bridge (bootstrap
-   * installClockBridge) is the ONE place clock minutes are pushed through
-   * party.advanceTime - poison, disease, buff expiry, wages, aging - so this
-   * only advances the clock and adds the single effect advanceTime does not
-   * cover: the Regeneration buff's steady healing.
+   * Real time becomes game time, on the ONE clock: session.clock is a view
+   * over party.minutes, so advancing it here IS advancing the party timeline.
+   * The elapsed-minute side effects (poison, buff expiry, wages, aging) run
+   * in-session through tickTime; the shell's clock bridge detects tickTime's
+   * presence and stands down to covering only manual jumps.
+   *
+   * `dt` is the frame's real elapsed seconds (the main loop clamps it to
+   * 0.25s); clamp again defensively so a stalled tab never fast-forwards.
    */
   advanceGameTime(dt) {
-    this.clock.advance(dt);
+    this.clock.advance(Math.max(0, Math.min(0.3, dt || 0)));
     const party = this.party;
+    if (party && Number.isFinite(party.minutes)) {
+      const now = this.clock.minutes;
+      if (this._tickAnchor === null || this._tickAnchor > now) this._tickAnchor = now;
+      // A rest/training jump that went through party.advanceTime already ran
+      // its own effects; skip past it instead of double-dosing the poison.
+      if (Number.isFinite(party._tickedTo) && party._tickedTo > this._tickAnchor) {
+        this._tickAnchor = Math.min(now, party._tickedTo);
+      }
+      const whole = Math.floor(now - this._tickAnchor);
+      if (whole >= 1) this.tickTime(whole, this._tickAnchor);
+    }
     if (!party || !party.members) return;
     const pm = party.minutes;
     if (pm === undefined) return;
@@ -506,6 +656,35 @@ export class Session {
       const cap = combat && combat.maxHPOf ? combat.maxHPOf(ch) : (ch.maxHP || ch.hp);
       ch.hp = Math.min(cap, ch.hp + Math.round((b.power || 1) * dm / 5));
     }
+  }
+
+  /**
+   * Run the party-side effects of `minutes` of game time that have ALREADY
+   * been added to the clock (buff expiry, poison drain, wages, aging) -
+   * without moving the clock again. Idempotent over the timeline: a span the
+   * anchor has passed is never re-applied, so the rest screen's manual pump
+   * (clock.advanceMinutes + syncPartyClock) and the realtime ticker cannot
+   * double-bill the same minutes.
+   */
+  tickTime(minutes, fromMinutes) {
+    const party = this.party;
+    if (!party || !party.members || !(minutes >= 1)) return [];
+    const now = this.clock.minutes;
+    const from = fromMinutes === undefined ? now - minutes : fromMinutes;
+    const to = Math.min(now, from + minutes);
+    if (this._tickAnchor === null) this._tickAnchor = from;
+    const start = Math.max(from, this._tickAnchor,
+      Number.isFinite(party._tickedTo) ? party._tickedTo : -Infinity);
+    const span = Math.floor(to - start);
+    this._tickAnchor = Math.max(this._tickAnchor, to);
+    if (span < 1) return [];
+    if (!this._tickRand) this._tickRand = new Rand(((this.worldSeed ?? 1) ^ 0x71c) >>> 0);
+    let events = [];
+    try { events = tickTimeEffects(party, span, this._tickRand, start) || []; }
+    catch (e) { /* a stub party without the full shape must not kill the frame */ }
+    party._tickedTo = Math.max(Number.isFinite(party._tickedTo) ? party._tickedTo : 0, to);
+    for (const ev of events) this.message(ev);
+    return events;
   }
 
   /** Keep the party inside the generated world, with a word instead of a wall. */
@@ -548,11 +727,33 @@ export class Session {
         onMonsterAttack: (e) => this.monsterAttack(e),
         onMonsterRanged: (e) => this.monsterRanged(e),
         onAggro: (e) => this.onAggro(e),
+        // Projectile collision filter (systems #9): spells and arrows only
+        // ever connect with live HOSTILE monsters - never townsfolk, props or
+        // corpses. Walls are the vfx layer's own terrain test.
+        hitEntity: (x, y, z, radius, source) => this.projectileHit(x, y, z, radius, source),
       };
     }
     this._ectx.dt = dt;
     this._ectx.drawDistance = this.map ? this.map.fog.far : 7000;
     return this._ectx;
+  }
+
+  /**
+   * What a flying projectile may detonate against: a live monster with real
+   * hit points that is actually hostile. A peasant strolling through the line
+   * of fire no longer eats (and voids) the party's fire bolt.
+   */
+  projectileHit(x, y, z, radius, source) {
+    for (const e of this.entities.list) {
+      if (e === source || e.dead || e.remove) continue;
+      if (e.category !== CATEGORY.MONSTER) continue;
+      if (e.data && e.data.hostile === false) continue;
+      if (!(e.hp > 0) && !(e.mon && e.mon.hp > 0)) continue;
+      const dx = e.pos.x - x, dy = (e.pos.y + (e.sizeH || 160) * 0.5) - y, dz = e.pos.z - z;
+      const r = Math.max(e.sizeW || 100, e.sizeH || 100) * 0.42 + (radius || 0);
+      if (dx * dx + dy * dy + dz * dz <= r * r) return e;
+    }
+    return null;
   }
 
   lightAt(x, y, z) {
@@ -723,9 +924,17 @@ export class Session {
       ? (this.map.dungeon && this.map.dungeon.theme) : this.mapId;
     const native = pool.filter((m) => m.spawnRegions.indexOf(regionId) >= 0);
     if (native.length) pool = native;
+    // A level-1 camp is jumped by something it can actually fight off: no
+    // caster trios in the firelight (audio #12 - ambush wiped an L1 party).
+    if (level <= 3) {
+      const soft = pool.filter((m) => !m.ranged && !m.caster && m.level <= level + 2);
+      if (soft.length) pool = soft;
+    }
     if (!pool.length) return [];
 
-    const rnd = new Rand((Math.floor(this.clock.minutes) ^ hashStr(String(this.mapId || 'x'))) >>> 0);
+    // The persistent 'ambush' stream: seeded from worldSeed, cursor carried in
+    // the save, so every ambush rolls fresh AND deterministically (systems #12).
+    const rnd = this.rngFor(`ambush:${this.mapId || 'x'}`);
     const kind = rnd.pick(pool);
     const out = [];
     for (let i = 0; i < count; i++) {
@@ -767,25 +976,31 @@ export class Session {
    */
   saveState() {
     const party = this.party || {};
-    const monsters = [];
-    for (const e of this.entities.list) {
-      if (e.category !== CATEGORY.MONSTER && e.category !== CATEGORY.CORPSE) continue;
-      if (!e.kind) continue;
-      monsters.push({
-        kind: e.kind,
-        x: Math.round(e.pos.x), y: Math.round(e.pos.y), z: Math.round(e.pos.z),
-        hp: e.mon ? e.mon.hp : e.hp,
-        dead: !!e.dead || e.category === CATEGORY.CORPSE,
-        group: e.spawnGroup !== undefined ? e.spawnGroup : null,
-      });
-    }
+    // Fold the live map into the world-state ledger so the blob below carries
+    // every visited map's kills, corpses, loot and chest flags.
+    try { this.snapshotMapState(); } catch (e) { /* best effort */ }
+    const monsters = this._snapshotMonsters();
     const poolState = (this.questPool || []).map((q) => ({
       id: q.id, state: q.state,
       objectives: (q.objectives || []).map((o) => ({ id: o.id, progress: o.progress, done: o.done })),
     }));
+    const rngs = {};
+    for (const [tag, slot] of Object.entries(this._rngs || {})) {
+      rngs[tag] = { seed: slot.seed, cursor: slot.cursor };
+    }
+    const es = this.escort;
+    // Whoever last wrote mapMeta (transition glue writes both keys, older
+    // shell paths only `type`), the SAVED blob always carries kind AND type
+    // in lockstep so any loader dispatches correctly (systems #1).
+    const meta = this.mapMeta ? JSON.parse(JSON.stringify(this.mapMeta))
+      : { kind: 'region', type: 'region', id: this.mapId, seed: this.worldSeed };
+    meta.kind = meta.kind || meta.type || (this.map && this.map.indoor ? 'dungeon' : 'region');
+    meta.type = meta.type || meta.kind;
+    if (meta.id === undefined || meta.id === null) meta.id = this.mapId;
     return {
-      v: 1,
-      mapMeta: this.mapMeta ? JSON.parse(JSON.stringify(this.mapMeta)) : { kind: 'region', id: this.mapId, seed: this.worldSeed },
+      v: 2,
+      worldSeed: this.worldSeed ?? null,
+      mapMeta: meta,
       player: {
         x: this.player.pos.x, y: this.player.pos.y, z: this.player.pos.z,
         yaw: this.player.yaw, pitch: this.player.pitch,
@@ -796,6 +1011,11 @@ export class Session {
       questPool: poolState,
       shops: JSON.parse(JSON.stringify(this.shops || {})),
       monsters,
+      worldState: JSON.parse(JSON.stringify(this.worldState || { maps: {} })),
+      rngs,
+      escort: es && es.entity && !es.entity.dead
+        ? { questId: es.quest ? es.quest.id : null, name: es.entity.label || null, hp: es.entity.hp }
+        : null,
       stats: {
         questsDone: party.questsDone | 0,
         killsByKind: Object.assign({}, party.killsByKind || {}),
@@ -804,10 +1024,46 @@ export class Session {
     };
   }
 
+  /** The current map's monsters (live AND dead - corpses persist). */
+  _snapshotMonsters() {
+    const monsters = [];
+    for (const e of this.entities.list) {
+      if (e.category !== CATEGORY.MONSTER && e.category !== CATEGORY.CORPSE) continue;
+      if (!e.kind) continue;
+      const conds = e.mon && e.mon.conditions && Object.keys(e.mon.conditions).length
+        ? Object.assign({}, e.mon.conditions) : null;
+      monsters.push({
+        kind: e.kind,
+        x: Math.round(e.pos.x), y: Math.round(e.pos.y), z: Math.round(e.pos.z),
+        hp: e.mon ? e.mon.hp : e.hp,
+        dead: !!e.dead || e.category === CATEGORY.CORPSE,
+        group: e.spawnGroup !== undefined ? e.spawnGroup : null,
+        state: e.state === 'flee' ? 'flee' : null,
+        conds,
+        label: e.label !== (e.data && e.data.name) ? e.label : null,
+      });
+    }
+    return monsters;
+  }
+
   /** Apply a `saveState` blob. The matching map must already be loaded. */
   restoreState(s) {
     if (!s) return false;
     const party = this.party;
+    // The seed everything reproducible hangs off. A cross-boot load must not
+    // keep this browser session's random boot seed (playtest #4: POIs reroll).
+    if (s.worldSeed !== undefined && s.worldSeed !== null) this.worldSeed = s.worldSeed;
+    else if (s.mapMeta && s.mapMeta.seed !== undefined && s.mapMeta.seed !== null) this.worldSeed = s.mapMeta.seed;
+    // Rebuild the persistent RNG streams at their saved cursors.
+    if (s.rngs && typeof s.rngs === 'object') {
+      this._rngs = {};
+      for (const [tag, st] of Object.entries(s.rngs)) {
+        this._rngs[tag] = { seed: st.seed >>> 0, cursor: st.cursor | 0, rand: null };
+      }
+    }
+    if (s.worldState && s.worldState.maps) {
+      this.worldState = JSON.parse(JSON.stringify(s.worldState));
+    }
     if (s.clock !== undefined) {
       this.clock.minutes = s.clock;
       if (party && s.partyMinutes !== undefined) party.minutes = s.partyMinutes;
@@ -850,46 +1106,200 @@ export class Session {
         }
       }
     }
-    // Replace the freshly-populated monster set with the saved snapshot.
+    // Replace the freshly-populated monster set with the saved snapshot -
+    // corpses included: killed monsters STAY DEAD on the field (playtest #4).
     if (Array.isArray(s.monsters) && this.spawner) {
-      for (const e of [...this.entities.list]) {
-        if (e.category === CATEGORY.MONSTER || e.category === CATEGORY.CORPSE) this.entities.removeEntity(e);
-      }
-      for (const m of s.monsters) {
-        if (m.dead) continue;
-        const e = this.spawner.spawnMonster(m.kind, m.x, m.y, m.z, {});
-        if (!e) continue;
-        if (e.mon) { e.mon.hp = m.hp; }
-        e.hp = m.hp;
-        if (m.group !== null && m.group !== undefined) e.spawnGroup = m.group;
+      this._applyMonsterSnapshot(s.monsters);
+    }
+    if (s.escort && s.escort.questId && party && party.quests && party.quests[s.escort.questId]
+      && this.spawnEscort) {
+      const q = party.quests[s.escort.questId];
+      if (q.state === 'active') {
+        const e = this.spawnEscort(q);
+        if (e && Number.isFinite(s.escort.hp)) e.hp = s.escort.hp;
       }
     }
     this.inCombat = false;
     this.turnBased = false;
     this._combatLinger = 0;
-    this._respawnDay = Math.floor(this.clock.minutes / DAY_MINUTES);
+    this._respawnHour = Math.floor(this.clock.minutes / 60);
     this._accMin = 0;
+    this._tickAnchor = this.clock.minutes;
+    if (party) party._tickedTo = this.clock.minutes;
+    return true;
+  }
+
+  /** Rebuild the monster/corpse population of the current map from a snapshot. */
+  _applyMonsterSnapshot(list) {
+    for (const e of [...this.entities.list]) {
+      if (e.category === CATEGORY.MONSTER || e.category === CATEGORY.CORPSE) this.entities.removeEntity(e);
+    }
+    for (const m of list) {
+      const e = this.spawner.spawnMonster(m.kind, m.x, m.y, m.z, {});
+      if (!e) continue;
+      if (e.mon) e.mon.hp = m.hp;
+      e.hp = m.hp;
+      if (m.group !== null && m.group !== undefined) e.spawnGroup = m.group;
+      if (m.label) e.label = m.label;
+      if (m.conds && e.mon) e.mon.conditions = Object.assign({}, m.conds);
+      if (m.dead) {
+        e.dead = true;
+        e.solid = false;
+        e.state = 'dead';
+        if (e.mon) { e.mon.hp = 0; e.mon.alive = false; }
+        e.hp = 0;
+        try { e.setAction('dead'); } catch (err) { /* sheet may lack the row */ }
+      } else if (m.state === 'flee') {
+        e.state = 'flee';
+      }
+    }
+  }
+
+  // --- per-map world persistence (systems #7/#8, playtest #4) ---------------
+
+  /** Stable key for the loaded map's ledger entry. */
+  mapStateKey() {
+    if (!this.map || !this.mapId) return null;
+    return `${this.map.indoor ? 'd' : 'r'}:${this.mapId}`;
+  }
+
+  /** MM6 pacing: dungeons refill after ~6 months, outdoor packs after ~2 weeks. */
+  static get DUNGEON_RESPAWN_MINUTES() { return 6 * 28 * DAY_MINUTES; }
+  static get OUTDOOR_RESPAWN_MINUTES() { return 14 * DAY_MINUTES; }
+
+  /** Record the live map's dynamic state into the world ledger. */
+  snapshotMapState() {
+    const key = this.mapStateKey();
+    if (!key) return;
+    const items = [];
+    const chests = {};
+    for (const e of this.entities.list) {
+      if (e.category === CATEGORY.ITEM && e.data) {
+        items.push({
+          item: JSON.parse(JSON.stringify(e.data)),
+          x: Math.round(e.pos.x), y: Math.round(e.pos.y), z: Math.round(e.pos.z),
+        });
+      } else if (e.interact && e.interact.kind === 'chest' && e.interact.opened) {
+        chests[`${Math.round(e.pos.x)},${Math.round(e.pos.z)}`] = true;
+      }
+    }
+    this.worldState.maps[key] = {
+      at: this.clock.minutes,
+      indoor: !!(this.map && this.map.indoor),
+      monsters: this._snapshotMonsters(),
+      items,
+      chests,
+      groups: (this._spawnGroups || []).map((g) => ({ id: g.id, clearedAt: g.clearedAt ?? null })),
+    };
+  }
+
+  /**
+   * Re-impose the ledger on a freshly populated map: dead stay dead, opened
+   * chests stay empty, dropped loot is still on the floor - unless enough
+   * game time has passed that the map honestly restocks.
+   */
+  applyMapState() {
+    const key = this.mapStateKey();
+    if (!key) return false;
+    const st = this.worldState.maps[key];
+    if (!st) return false;
+    const age = this.clock.minutes - (st.at || 0);
+    if (st.indoor && age >= Session.DUNGEON_RESPAWN_MINUTES) {
+      delete this.worldState.maps[key];      // months later: a full refill
+      return false;
+    }
+    if (Array.isArray(st.monsters) && this.spawner) this._applyMonsterSnapshot(st.monsters);
+    for (const rec of st.items || []) {
+      if (this.spawner) this.spawner.dropItem(rec.item, rec.x, rec.y, rec.z);
+    }
+    if (st.chests) {
+      for (const e of this.entities.list) {
+        if (!e.interact || e.interact.kind !== 'chest') continue;
+        if (st.chests[`${Math.round(e.pos.x)},${Math.round(e.pos.z)}`]) e.interact.opened = true;
+      }
+    }
+    if (Array.isArray(st.groups) && this._spawnGroups) {
+      const by = new Map(st.groups.map((g) => [g.id, g]));
+      for (const g of this._spawnGroups) {
+        const saved = by.get(g.id);
+        if (saved && saved.clearedAt !== null && saved.clearedAt !== undefined) g.clearedAt = saved.clearedAt;
+      }
+    }
     return true;
   }
 
   /**
-   * Outdoor packs whose members are all dead come back once the party is far
-   * enough away - called on day change.
+   * Outdoor packs whose members are all dead come back after ~two weeks of
+   * game time, and never on top of the party - checked hourly. (They used to
+   * come back DAILY, which cheapened every cleared meadow; systems #7.)
    */
   respawnMonsters() {
     if (!this.map || this.map.indoor || !this.spawner) return;
+    const now = this.clock.minutes;
     const groups = this._spawnGroups || [];
     for (const g of groups) {
       const alive = this.entities.list.some(
         (e) => e.spawnGroup === g.id && e.category === CATEGORY.MONSTER && !e.dead,
       );
-      if (alive) continue;
+      if (alive) { g.clearedAt = null; continue; }
+      if (g.clearedAt === null || g.clearedAt === undefined) { g.clearedAt = now; continue; }
+      if (now - g.clearedAt < Session.OUTDOOR_RESPAWN_MINUTES) continue;
       const d = Math.hypot(g.desc.x - this.player.pos.x, g.desc.z - this.player.pos.z);
       if (d < 5000) continue;   // never respawn on top of the party
+      // Clear the pack's old corpses before the new pack walks in.
+      for (const e of [...this.entities.list]) {
+        if (e.spawnGroup === g.id && (e.category === CATEGORY.MONSTER || e.category === CATEGORY.CORPSE)) {
+          this.entities.removeEntity(e);
+        }
+      }
+      g.clearedAt = null;
       this.spawner.spawnGroup(g.desc, new Rand((g.id * 2654435761) >>> 0),
         (x, z) => this.collision.groundAt(x, z, 0), g.id);
     }
   }
+
+  // --- defeat support (playtest #2/#5, systems #10) --------------------------
+
+  /**
+   * Where a beaten party wakes up: the town's own fountain/well, resolved from
+   * the loaded town layout - never map.start (which was the world origin, in
+   * the monster woods, 7000 units from anything).
+   */
+  townRespawnPoint() {
+    // The well/fountain prop entity is the literal MM6 respawn spot.
+    for (const e of this.entities.list) {
+      if (e.category === CATEGORY.PROP && (e.kind === 'well' || e.kind === 'fountain')) {
+        return { x: e.pos.x + 220, y: e.pos.y, z: e.pos.z + 220, yaw: 0 };
+      }
+    }
+    const region = this.map && this.map.region;
+    const town = region && region.towns && region.towns[0];
+    if (town && town.plaza && Number.isFinite(town.plaza.x)) {
+      return { x: town.plaza.x + 220, y: town.y || 0, z: town.plaza.z + 220, yaw: 0 };
+    }
+    if (town && Number.isFinite(town.x)) return { x: town.x, y: town.y || 0, z: town.z, yaw: 0 };
+    const rt = this.regionTowns && this.regionTowns[0];
+    if (rt && Number.isFinite(rt.x)) return { x: rt.x, y: 0, z: rt.z, yaw: 0 };
+    return (this.map && this.map.start) || { x: 0, y: 0, z: 0, yaw: 0 };
+  }
+
+  /**
+   * Despawn hostiles around a point so the party does not wake into the jaws
+   * that beat it (the same rat killed the party twice in a row).
+   */
+  clearHostilesNear(x, z, radius = 1500) {
+    let n = 0;
+    for (const e of [...this.entities.list]) {
+      if (e.category !== CATEGORY.MONSTER || e.dead) continue;
+      if (e.data && e.data.hostile === false) continue;
+      const d = Math.hypot(e.pos.x - x, e.pos.z - z);
+      if (d <= radius) { this.entities.removeEntity(e); n++; }
+    }
+    return n;
+  }
+
+  /** Monsters hold their swings for a beat after the party wakes. */
+  beginGrace(seconds = 2) { this._graceT = Math.max(this._graceT || 0, seconds); }
 
   /** An escorted NPC trails the party; if it dies, the quest fails. */
   updateEscort(dt) {
@@ -916,6 +1326,7 @@ export class Session {
   // --- combat hooks (wired to game/combat.js by the shell) ------------------
 
   onAggro(e) {
+    if (this._graceT > 0) return;        // post-respawn beat: nothing engages
     this.inCombat = true;
     this._combatLinger = 1.5;
     this.onCombatChange(true);
@@ -951,6 +1362,15 @@ export class Session {
     const was = this.inCombat;
     this.inCombat = n > 0 || this._combatLinger > 0;
     if (was !== this.inCombat) this.onCombatChange(this.inCombat);
+    // How long this engagement has actually run, and whether the party bled:
+    // the victory sting is EARNED, not handed out for one idle pot-shot.
+    if (this.inCombat) {
+      if (!was) { this._combatT = 0; this._partyHurt = false; }
+      this._combatT = (this._combatT || 0) + dt;
+    } else if (was) {
+      this._combatT = 0;
+      this._partyHurt = false;
+    }
     return this.inCombat;
   }
 
@@ -964,30 +1384,59 @@ export class Session {
    * null to play the situational ambient track. (The session also drives
    * music.play directly, so combat music works without a director.)
    */
+  /**
+   * For the shell's audio director: truthy exactly while combat, the victory
+   * sting or the defeat dirge OWNS the music; the director defers whenever
+   * this is non-null and re-evaluates the situation when it clears.
+   */
   combatMusicOverride() {
+    if (this._defeatMusicT > 0) return 'defeat';
     if (this.inCombat) return 'combat';
     if (this._victoryT > 0) return 'victory';
     return null;
   }
 
-  /** Swords out: the music follows the fight in and back out again. */
+  /** Swords out: combat music in; on the way out the DIRECTOR picks the track. */
   onCombatChange(on) {
     if (!this.music) return;
     this.music.setIntensity(on ? 1 : 0);
     if (on) { this._victoryT = 0; this.music.play('combat'); }
-    else if (this._victoryT <= 0) this.music.play(this.musicTrack || 'field');
+    // Post-combat the session deliberately plays NOTHING: combatMusicOverride
+    // goes null (or 'victory' briefly) and the audio director chooses the
+    // situational track. session.musicTrack was a stale memo (audio #2).
   }
 
-  /** The last engaged enemy just died: a sting, then back to the map's track. */
+  /**
+   * The last engaged enemy just died. A sting only after a REAL fight -
+   * engaged over two seconds, or the party actually took damage; a one-shot
+   * pot-kill just lets the field music carry on (audio #4).
+   */
   notifyVictory() {
     if (!this.music) return;
+    const earned = (this._combatT || 0) > 2 || this._partyHurt;
+    if (!earned) { this._victoryT = 0; this.music.setIntensity(0); return; }
     this._victoryT = 5;
     this.music.setIntensity(0);
     this.music.play('victory', { fadeMs: 250 });
   }
 
-  monsterAttack(e) { if (this.onMonsterAttackCb) this.onMonsterAttackCb(e); }
-  monsterRanged(e) { if (this.onMonsterRangedCb) this.onMonsterRangedCb(e); }
+  /** The defeat dirge holds the deck for ~8s; the director defers to it. */
+  beginDefeatMusic(seconds = 8) {
+    this._defeatMusicT = seconds;
+    if (this.music) { this.music.setIntensity(0); this.music.play('defeat'); }
+  }
+
+  monsterAttack(e) {
+    if (this._graceT > 0) return;
+    this._partyHurt = true;
+    if (this.onMonsterAttackCb) this.onMonsterAttackCb(e);
+  }
+
+  monsterRanged(e) {
+    if (this._graceT > 0) return;
+    this._partyHurt = true;
+    if (this.onMonsterRangedCb) this.onMonsterRangedCb(e);
+  }
 
   // --- turn-based mode -----------------------------------------------------
   //
@@ -1008,6 +1457,7 @@ export class Session {
     this.turnActor = 'party';
     this.turnPoints = 130;
     this._partyIdleT = 0;
+    this._tbMoved = 0;
     this.rebuildTurnQueue();
     this.message('Turn-based mode.');
     if (this.audio) this.audio.play('click');
@@ -1045,22 +1495,59 @@ export class Session {
     else this.activeChar = this.turnQueue[0];
   }
 
+  /**
+   * Spend action points on something that is not one character's swing -
+   * moving, opening, levering. Draining the pool hands the round over.
+   */
+  spendTurnPoints(cost = 26) {
+    if (!this.turnBased || this.turnActor !== 'party') return;
+    this._partyIdleT = 0;
+    this.turnPoints = Math.max(0, this.turnPoints - cost);
+    if (this.turnPoints <= 0 && this.countHostiles() > 0) this.beginMonsterTurn();
+  }
+
   beginMonsterTurn() {
     this.turnActor = 'monsters';
     this._monsterTurnT = 0;
     this._monsterActed = new Set();
   }
 
+  /**
+   * Entity AI is frozen in turns, so aggro checks run here - and they run in
+   * EVERY phase, party's included: walking within a monster's notice range
+   * engages it exactly as it would in real time. Turn-based mode is a pacing
+   * tool, not a cloak of invisibility (systems #2).
+   */
+  scanAggro() {
+    if (this._graceT > 0) return;
+    for (const e of this.entities.list) {
+      if (e.category !== CATEGORY.MONSTER || e.dead || e.state !== 'idle') continue;
+      if (e.data && e.data.hostile === false) continue;
+      const d = Math.hypot(e.pos.x - this.player.pos.x, e.pos.z - this.player.pos.z);
+      if (d < e.aggroRange && this.canSee(e.pos, this.player.pos)) {
+        e.state = 'chase';
+        this.onAggro(e);
+      }
+    }
+  }
+
+  /**
+   * How patient the enemy is while the party dithers. MM6's turns wait
+   * forever; ours wait twelve seconds of UNPAUSED time - the timer never runs
+   * while a screen is open (update() returns before reaching here), so
+   * reading the spellbook costs nothing (playtest #3).
+   */
+  static get TB_HESITATION() { return 12; }
+
   updateTurns(dt) {
     if (!this.turnBased) return;
 
+    this.scanAggro();
+
     if (this.turnActor === 'party') {
-      // Turn-based is not an invulnerability toggle: if the party stands idle
-      // past a grace window while enemies are engaged, the enemies act anyway.
-      // (Recovery, in exchange, only ticks per round in turns - see combatglue.)
       if (this.countHostiles() > 0) {
         this._partyIdleT += dt;
-        if (this._partyIdleT > 4) {
+        if (this._partyIdleT > Session.TB_HESITATION) {
           this._partyIdleT = 0;
           this.message('You hesitate - the enemy does not.');
           this.beginMonsterTurn();
@@ -1072,18 +1559,6 @@ export class Session {
     }
     if (this.turnActor !== 'monsters') return;
     this._monsterTurnT += dt;
-
-    // Entity AI is frozen in turns, so aggro checks run here: anything that
-    // would have noticed the party in real time joins the round.
-    for (const e of this.entities.list) {
-      if (e.category !== CATEGORY.MONSTER || e.dead || e.state !== 'idle') continue;
-      if (e.data && e.data.hostile === false) continue;
-      const d = Math.hypot(e.pos.x - this.player.pos.x, e.pos.z - this.player.pos.z);
-      if (d < e.aggroRange && this.canSee(e.pos, this.player.pos)) {
-        e.state = 'chase';
-        this.onAggro(e);
-      }
-    }
 
     // Monsters act in sequence with a short beat between them so you can see
     // what hit you, then control returns to the party.
@@ -1108,6 +1583,7 @@ export class Session {
       this.turnActor = 'party';
       this.turnPoints = 130;
       this._partyIdleT = 0;
+      this._tbMoved = 0;
       this.rebuildTurnQueue();
       if (!this.turnQueue.length) this.beginMonsterTurn();
     }

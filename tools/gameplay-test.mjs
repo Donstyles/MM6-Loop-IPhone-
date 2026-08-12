@@ -124,6 +124,19 @@ const clock = await S(async () => {
 // Elapsed minutes are a float, so compare with a tolerance rather than exactly.
 check('clock advances', clock.moved > 479.9, `+${clock.moved.toFixed(1)}min -> ${clock.date} ${clock.time}`);
 
+// ONE clock: session.clock is a view over party.minutes - rest, training and
+// defeat all move the same timeline the HUD calendar and bank read.
+const oneClock = await S(() => {
+  const s = window.__session;
+  const drift = Math.abs(s.clock.minutes - s.party.minutes);
+  const before = s.clock.minutes;
+  s.party.minutes += 60;   // a training-hall style jump
+  const seen = s.clock.minutes - before;
+  return { drift, seen };
+});
+check('one clock: session.clock reads party.minutes', oneClock.drift < 0.001 && Math.abs(oneClock.seen - 60) < 0.001,
+  `drift ${oneClock.drift}, party jump seen as +${oneClock.seen}min`);
+
 // --- every panel opens ------------------------------------------------------
 const screens = ['charsheet', 'inventory', 'spellbook', 'questlog', 'mapscreen',
   'quickref', 'rest', 'options', 'title', 'chargen'];

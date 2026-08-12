@@ -712,12 +712,17 @@ export function learningMultiplier(character) {
 /** Merchant skill's effect on shop prices: returns {buy, sell} multipliers. */
 export function priceMultipliers(character, townFactor = 1) {
   const lv = skillLevelOf(character, 'merchant');
-  const eff = lv > 0 ? skillEffect('merchant', lv, skillMasteryOf(character, 'merchant')) : { value: 0 };
+  const eff = lv > 0 ? skillEffect('merchant', lv, skillMasteryOf(character, 'merchant')) : { value: 0, special: null };
   const pct = Math.min(90, eff.value);
-  return {
-    buy: Math.max(0.1, townFactor * (1 - pct / 200)),
-    sell: Math.min(1, (0.25 + pct / 200) / townFactor),
-  };
+  let buy = Math.max(0.1, townFactor * (1 - pct / 200));
+  // Merchant Master's perk is buying AT COST - never below it, and never a
+  // resale profit. The shop still keeps its margin on the way back.
+  if (eff.special && eff.special.atCost) buy = Math.min(buy, 1);
+  let sell = Math.min(1, (0.25 + pct / 200) / townFactor);
+  // HARD INVARIANT: whatever the skill, the sell price sits strictly below the
+  // effective buy price, or a sell/re-buy loop mints gold (systems #6).
+  sell = Math.min(sell, buy * 0.9, 0.95);
+  return { buy, sell };
 }
 
 /** Total of all seven stats: used for "best character" heuristics and awards. */

@@ -56,13 +56,17 @@ function acForLevel(level, mul) {
 }
 
 /**
- * Damage dice. Aims for an average swing of (5 + level) * mul, spread
+ * Damage dice. Aims for an average swing of roughly (5 + level) * mul, spread
  * across bigger dice as the monster grows so the numbers still feel rolled.
- * The flat +5 keeps the first few levels from being completely toothless: a
- * pack of goblins has to be a threat to a starting party or nothing is.
+ *
+ * The flat +5 fades in over the first twelve levels rather than arriving all
+ * at once: MM6's tier-1 trash (goblins, rats) hits for 2-4, and a flat +5 on
+ * a level-2 rat turned the starter ring into a meat grinder (cycle-2 playtest
+ * finding #1). By level 12 the curve rejoins the old one exactly.
  */
 function attackForLevel(level, mul, element) {
-  const target = (5 + level * 1.0) * (mul === undefined ? 1 : mul);
+  const ramp = Math.min(1, level / 12);
+  const target = (5 * ramp + level * 1.0) * (mul === undefined ? 1 : mul);
   const n = Math.max(1, Math.min(8, 1 + Math.floor(level / 10)));
   const s = Math.max(4, Math.min(12, 4 + Math.floor(level / 12)));
   const avg = (n * (s + 1)) / 2;
@@ -173,8 +177,12 @@ function family(internal, names, levels, t) {
 function buildRanged(t, i, level) {
   const r = at(t.ranged, i);
   if (!r) return null;
-  // Ranged damage tracks the melee curve but hits a little harder.
-  const a = attackForLevel(level, (at(t.rangedMul, i) || 1.15));
+  // Ranged damage tracks the melee curve but hits a little harder - except at
+  // the bottom of the table, where MM6's caster trash plinks rather than
+  // deletes: a starter-area shaman bolt at 8-13 vs an 11-29 HP party was the
+  // whole death spiral (cycle-2 playtest #1). Tier-1 ranged is cut to ~70%.
+  const tierCut = level <= 8 ? 0.7 : level <= 14 ? 0.85 : 1;
+  const a = attackForLevel(level, (at(t.rangedMul, i) || 1.15) * tierCut);
   return {
     spell: r.spell || null,
     projectile: r.projectile || null,
@@ -182,6 +190,10 @@ function buildRanged(t, i, level) {
     bonus: a.bonus,
     element: r.element || 'physical',
     range: r.range || 3000,
+    // Seconds between shots for the AI: low-level casters fire on MM6's lazy
+    // cadence, not a metronome. entity.js may use its own default; the combat
+    // glue enforces this as a floor after each shot.
+    cooldown: level <= 8 ? 4.5 : level <= 14 ? 3.5 : 2.5,
   };
 }
 
@@ -282,7 +294,7 @@ family('Beholder', ['Flying Eye', 'Terrible Eye', 'Maddening Eye'], [30, 40, 50]
 
 family('Bloodsucker', ['Blood Sucker', 'Brain Sucker', 'Soul Sucker'], [2, 4, 8], {
   kind: 'beast', size: [70, 85, 105], speed: 170, moveType: 'short', aiType: 'aggress',
-  groupSize: [2, 5], goldMul: 0, element: [null, 'mind', 'mind'], acMul: 0.9,
+  recovery: 130, groupSize: [2, 4], goldMul: 0, element: [null, 'mind', 'mind'], acMul: 0.9,
   inflict: [null, { condition: 'weak', chance: 12 }, { condition: 'insane', chance: 8 }],
   spawnRegions: ['new_sorpigal', 'cave', 'sewer', 'bootleg_bay'],
   desc: 'The first thing that ever tries to kill you. It attaches and it drinks.',
@@ -486,10 +498,11 @@ family('Ghost', ['Ghost', 'Evil Spirit', 'Specter'], [9, 13, 19], {
 
 family('Goblin', ['Goblin', 'Goblin Shaman', 'Goblin King'], [4, 6, 10], {
   kind: 'humanoid', size: [150, 155, 180], speed: 160, moveType: 'med', aiType: 'aggress',
-  // The base tier hits softer than the level curve suggests: three GoblinA are
+  // The base tier hits softer than the level curve suggests: two GoblinA are
   // the game's opening fight and must be dangerous to a fresh party, not fatal.
-  recovery: [105, 100, 90], groupSize: [2, 5], aggroRange: 1300, sound: 'goblin_yelp',
-  dmgMul: [0.8, 0.85, 1],
+  // MM6 cadence: a goblin winds up for over two seconds between club swings.
+  recovery: [140, 125, 105], groupSize: [2, 5], aggroRange: 1300, sound: 'goblin_yelp',
+  dmgMul: [0.65, 0.8, 1],
   caster: [false, true, false],
   ranged: [null, { spell: 'fire_bolt', element: 'fire', range: 2400 }, null],
   spells: [null, ['fire_bolt'], null],
@@ -657,7 +670,9 @@ family('PeasantM1', ['Peasant', 'Peasant', 'Peasant'], [1, 2, 3], {
   spawnRegions: ['town', 'new_sorpigal', 'free_haven', 'castle_ironfist'],
   desc: 'A man in a tunic and trousers, going about his day.',
 });
-family('PeasantM2', ['Apprentice', 'Journeyman Mage', 'Mage'], [2, 6, 10], {
+// Renamed from bare 'Apprentice': a hostile spellslinger must never read as a
+// townsperson on the nameplate (playtest #15 / systems #13).
+family('PeasantM2', ['Renegade Apprentice', 'Journeyman Mage', 'Rogue Mage'], [2, 6, 10], {
   kind: 'human', size: 185, speed: 150, moveType: 'med', aiType: 'wary',
   groupSize: [1, 3], caster: true, dmgMul: 0.6, goldMul: 1.3,
   ranged: [{ spell: 'fire_bolt', element: 'fire', range: 2400 },
@@ -686,7 +701,7 @@ family('PeasantM4', ['Cannibal', 'Head Hunter', 'Witch Doctor'], [6, 8, 10], {
 
 family('Rat', ['Common Rat', 'Large Rat', 'Giant Rat'], [2, 4, 6], {
   kind: 'beast', size: [55, 75, 95], speed: 200, moveType: 'med', aiType: 'normal',
-  recovery: 80, groupSize: [3, 6], goldMul: 0, aggroRange: 1000, acMul: 0.9,
+  recovery: 115, groupSize: [2, 5], goldMul: 0, aggroRange: 1000, acMul: 0.9,
   spawnRegions: ['sewer', 'cave', 'crypt', 'mine', 'new_sorpigal'],
   desc: 'Brown, long-tailed, low to the ground, and there are always more.',
 });
@@ -853,6 +868,75 @@ export function rollSpawn(rand, regionId, difficulty) {
   const pick = rand.weighted(table);
   const [lo, hi] = pick.groupSize;
   return { id: pick.id, count: rand.int(lo, hi) };
+}
+
+// ---------------------------------------------------------------------------
+// Town-ring spawn shaping (MM6's opening-area contract)
+// ---------------------------------------------------------------------------
+
+/** Does this monster attack from range (bow, spell or thrown)? */
+export function isRangedThreat(def) {
+  return !!(def && (def.ranged || def.caster));
+}
+
+/**
+ * The pool a spawn within `dist` units of a town may draw from. MM6's rule of
+ * thumb, restated: inside ~4000 units of a town only weak MELEE trash walks
+ * (singles and pairs of goblins and rats); ranged/caster packs live in the
+ * outer rings and the dungeons. Returns null when the distance imposes no
+ * restriction.
+ */
+export function townRingPool(regionId, dist) {
+  if (!(dist < 4000)) return null;
+  const pool = M.filter((m) => m.spawnRegions.indexOf(regionId) >= 0
+    && m.hostile && !m.unique && !isRangedThreat(m) && m.level <= 5);
+  if (pool.length) return pool;
+  // A region with no weak melee natives at all falls back to the classics.
+  return M.filter((m) => ['GoblinA', 'RatA', 'BloodsuckerA'].indexOf(m.id) >= 0);
+}
+
+/** Group-size cap by distance from town: singles/pairs close in. */
+export function townRingMaxCount(dist) {
+  if (dist < 2500) return 2;
+  if (dist < 4000) return 2;
+  if (dist < 6000) return 3;
+  return 99;
+}
+
+/**
+ * Apply the town-ring contract to one spawn descriptor. `defOf` resolves an
+ * id to its bestiary entry. Returns { ids, count } - possibly the originals.
+ */
+export function shapeSpawnForTown(regionId, dist, ids, count, rand) {
+  const cap = townRingMaxCount(dist);
+  let outIds = ids;
+  const pool = townRingPool(regionId, dist);
+  if (pool) {
+    const bad = ids.some((id) => {
+      const d = BY_ID.get(id);
+      return !d || isRangedThreat(d) || d.level > 5 || !d.hostile;
+    });
+    if (bad) outIds = [rand.pick(pool).id];
+  }
+  return { ids: outIds, count: Math.min(count, cap) };
+}
+
+/**
+ * Pluralise a monster display name: 'Follower of Baa' -> 'Followers of Baa',
+ * 'Harpy' -> 'Harpies', 'Cutpurse' -> 'Cutpurses'. Kills the 'Kill 5 Follower
+ * of Baas' bug (playtest #9).
+ */
+export function monsterPlural(name) {
+  const s = String(name || '');
+  const at = s.search(/\s+of\s+/i);
+  const head = at >= 0 ? s.slice(0, at) : s;
+  const tail = at >= 0 ? s.slice(at) : '';
+  let p;
+  if (/(s|x|z|ch|sh)$/i.test(head)) p = head + 'es';
+  else if (/[^aeiou]y$/i.test(head)) p = head.slice(0, -1) + 'ies';
+  else if (/man$/i.test(head)) p = head.slice(0, -3) + 'men';
+  else p = head + 's';
+  return p + tail;
 }
 
 // ---------------------------------------------------------------------------

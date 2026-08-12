@@ -715,9 +715,27 @@ export function bestPrices(party, townFactor) {
  * at the turn of each day. Returns a list of things the log should mention.
  */
 export function advanceTime(party, minutes, rand) {
+  const m = Math.max(0, Math.round(minutes));
+  const from = party.minutes;
+  party.minutes += m;
+  const events = tickTimeEffects(party, m, rand, from);
+  // Mark how far the timeline's side effects have been applied, so the
+  // session's realtime ticker (which watches party.minutes move) does not
+  // apply the same span twice.
+  party._tickedTo = party.minutes;
+  return events;
+}
+
+/**
+ * The side effects of `minutes` of game time passing, WITHOUT moving
+ * party.minutes - for callers (the session clock is backed by party.minutes)
+ * where the minutes have already been added. `fromMinutes` is the timeline
+ * position the span started at, used for day/year boundaries.
+ */
+export function tickTimeEffects(party, minutes, rand, fromMinutes) {
   const events = [];
-  const before = clockOf(party);
-  party.minutes += Math.max(0, Math.round(minutes));
+  const from = fromMinutes === undefined ? party.minutes - minutes : fromMinutes;
+  const before = clockOf({ minutes: from });
   const after = clockOf(party);
 
   for (const k of Object.keys(party.buffs)) {

@@ -9,7 +9,9 @@
 // and reads `state` back.
 
 import { Rand } from '../core/rng.js';
-import { MONSTERS, monsterById, MONSTER_FAMILIES, monstersInLevelRange } from './monsters.js';
+import {
+  MONSTERS, monsterById, MONSTER_FAMILIES, monstersInLevelRange, monsterPlural,
+} from './monsters.js';
 import { ARTIFACTS, generateItem, itemName } from './items.js';
 import { npcName, townName, dungeonName, profession, uniqueMonsterName } from './npcnames.js';
 
@@ -180,9 +182,17 @@ function rewardFor(level, rand, mul) {
   };
 }
 
+/**
+ * Families that are hostile on paper but read as civic fixtures in a town -
+ * a "Cull the Guards" board notice reads as a bug, so they never become quest
+ * targets.
+ */
+const QUEST_TARGET_EXCLUDE = new Set(['Guard', 'Merchant', 'PeasantF1', 'PeasantF2', 'PeasantM1']);
+
 function pickMonsterFor(rand, region, level) {
-  let pool = MONSTERS.filter((m) => m.spawnRegions.indexOf(region) >= 0 && m.hostile && !m.unique);
-  if (!pool.length) pool = monstersInLevelRange(Math.max(1, level - 4), level + 6).filter((m) => !m.unique);
+  const eligible = (m) => m.hostile && !m.unique && !QUEST_TARGET_EXCLUDE.has(m.family);
+  let pool = MONSTERS.filter((m) => m.spawnRegions.indexOf(region) >= 0 && eligible(m));
+  if (!pool.length) pool = monstersInLevelRange(Math.max(1, level - 4), level + 6).filter(eligible);
   const band = pool.filter((m) => m.level >= level * 0.6 && m.level <= level * 1.5);
   return rand.pick(band.length ? band : pool);
 }
@@ -272,22 +282,25 @@ export function generateQuest(rand, type, regionId, level, town) {
   switch (type) {
     case 'kill': {
       const m = pickMonsterFor(rand, regionId, level);
-      const cnt = rand.int(4, 12);
-      const fam = MONSTER_FAMILIES[m.family];
+      // Starter regions post small culls: the targets spawn within a short
+      // walk of town, and asking a fresh party for twelve of anything sends
+      // them past three camps that will kill them (playtest #1).
+      const cnt = level <= 6 ? rand.int(3, 6) : rand.int(4, 12);
+      const plural = monsterPlural(m.name);
       return makeQuest({
         type, region: regionId, giver, giverRole: role,
-        title: `Cull the ${m.name}s`,
+        title: `Cull the ${plural}`,
         text: rand.pick(KILL_TEMPLATES)
           .replace('{giver}', giver).replace('{role}', role).replace('{pronoun}', pronoun)
-          .replace(/{monster}/g, `${m.name}s`).replace('{count}', String(cnt))
+          .replace(/{monster}/g, plural).replace('{count}', String(cnt))
           .replace('{place}', place).replace('{town}', townName_)
           .replace('{thing}', rand.pick(THINGS)),
         objectives: [objective('kill', {
           target: m.id, family: rand.bool(0.4) ? m.family : null, count: cnt,
-          text: `Kill ${cnt} ${m.name}${cnt > 1 ? 's' : ''}`,
+          text: `Kill ${cnt} ${cnt > 1 ? plural : m.name}`,
         })],
         reward: Object.assign(reward, { gold: Math.round(reward.gold * (cnt / 8)) }),
-        autonote: `${giver} of ${townName_} asked you to kill ${cnt} ${m.name}s.`,
+        autonote: `${giver} of ${townName_} asked you to kill ${cnt} ${plural}.`,
       });
     }
     case 'fetch': {

@@ -58,10 +58,17 @@ export class Spawner {
     const ground = (x, z) => S.map.groundAt(x, z, 0);
 
     // The world seed is the key to everything reproducible: saves, quest
-    // pools, respawns. Capture it the moment a region is stood up.
-    S.worldSeed = seed;
+    // pools, respawns. Captured ONCE - later region loads (doors, defeat
+    // reloads) must never overwrite it, or POI layouts reroll (playtest #4).
+    // A restored save re-asserts its own seed through restoreState.
+    if (S.worldSeed === null || S.worldSeed === undefined) S.worldSeed = seed;
     this._npcSeq = 0;
     if (S.ensureQuestPool) S.ensureQuestPool(region.id || S.mapId, seed);
+
+    // Town centres, for the opening-ring spawn contract below.
+    this._townCenters = (region.towns || [])
+      .filter((t) => Number.isFinite(t.x) && Number.isFinite(t.z))
+      .map((t) => ({ x: t.x, z: t.z }));
 
     // Flora is the region's own batched billboard field - see loadRegion. Only
     // place trees here if it did not, so the two can never both plant a wood.
@@ -98,12 +105,12 @@ export class Spawner {
     }
 
     // Roaming packs. Each keeps its descriptor so a dead pack can respawn
-    // with the new day once the party has moved on.
+    // (on a ~2-week cycle) once the party has moved on.
     S._spawnGroups = S._spawnGroups || [];
     let gid = 0;
     for (const s of region.spawns || []) {
       const id = gid++;
-      S._spawnGroups.push({ id, desc: s });
+      S._spawnGroups.push({ id, desc: s, clearedAt: null });
       this.spawnGroup(s, rnd, ground, id);
     }
 
@@ -131,6 +138,12 @@ export class Spawner {
         label: `Enter ${d.name || 'the dungeon'}`,
       }));
     }
+
+    // Re-impose the world ledger (kills stay killed, loot stays dropped,
+    // chests stay opened) - then top up any live kill-quest targets so the
+    // board's culls are completable within a short walk of town.
+    if (S.applyMapState) S.applyMapState();
+    this.ensureQuestTargets(region, rnd, ground);
   }
 
   populateTown(town, ground, rnd) {
@@ -243,6 +256,10 @@ export class Spawner {
       const e = this.spawnMonster(kind, s.x, s.y ?? ground(s.x, s.z), s.z, s);
       if (e && s.boss) e.label = `${e.label} (leader)`;
     }
+
+    // Cleared stays cleared: the ledger replaces the fresh population with
+    // the state the party left behind, until the long respawn timer lapses.
+    if (S.applyMapState) S.applyMapState();
   }
 
   /** GoblinA -> GoblinC: the top tier of the same sprite family, if it exists. */
@@ -301,13 +318,33 @@ export class Spawner {
     }, n.npc || {});
   }
 
+  /** Distance from a point to the nearest town centre, or Infinity. */
+  townDistance(x, z) {
+    let best = Infinity;
+    for (const t of this._townCenters || []) {
+      const d = Math.hypot(x - t.x, z - t.z);
+      if (d < best) best = d;
+    }
+    return best;
+  }
+
   /** A spawn descriptor may name one monster or a pack. */
   spawnGroup(s, rnd, ground, groupId = null) {
     // Region descriptors say `id`, dungeon descriptors say `id` or nothing,
     // hand-written ones say `kind`/`kinds` - accept the lot.
-    const ids = s.kinds || (s.kind ? [s.kind] : (s.id ? [s.id] : []));
+    let ids = s.kinds || (s.kind ? [s.kind] : (s.id ? [s.id] : []));
     if (!ids.length) return;
-    const count = s.count || (s.groupSize ? rnd.int(s.groupSize[0], s.groupSize[1]) : 1);
+    let count = s.count || (s.groupSize ? rnd.int(s.groupSize[0], s.groupSize[1]) : 1);
+    // THE OPENING RING (playtest #1): within ~4000u of a town only weak melee
+    // trash spawns, in singles and pairs; ranged/caster packs keep to the
+    // outer rings. Handled here so it holds whatever the region rolled.
+    if (!s.questTarget && this.monsters && this.monsters.shapeSpawnForTown && this._townCenters && this._townCenters.length) {
+      const dist = this.townDistance(s.x, s.z);
+      const regionId = (this.session.map && this.session.map.region && this.session.map.region.id) || this.session.mapId;
+      const shaped = this.monsters.shapeSpawnForTown(regionId, dist, ids, count, rnd);
+      ids = shaped.ids;
+      count = shaped.count;
+    }
     const spread = s.spread ?? 420;
     for (let i = 0; i < count; i++) {
       const kind = ids[rnd.int(ids.length)];
@@ -315,6 +352,41 @@ export class Spawner {
       const z = s.z + (i === 0 ? 0 : rnd.float(-spread, spread));
       const e = this.spawnMonster(kind, x, ground(x, z), z, s);
       if (e && groupId !== null) e.spawnGroup = groupId;
+    }
+  }
+
+  /**
+   * Make every kill/bounty quest of this region completable within a short
+   * walk: spawn its targets in a ring 3200-4800 units out from the first town
+   * (past the weak-melee inner ring, well inside ~5000). Bounty uniques get
+   * their posted name on the plate.
+   */
+  ensureQuestTargets(region, rnd, ground) {
+    const S = this.session;
+    const town = (this._townCenters || [])[0];
+    if (!town || !S.questPool) return;
+    const regionId = region.id || S.mapId;
+    for (const q of S.questPool) {
+      if (q.region !== regionId) continue;
+      if (q.state === 'rewarded' || q.state === 'failed') continue;
+      for (const o of q.objectives || []) {
+        if (o.kind !== 'kill' || o.done || !o.target) continue;
+        const need = Math.max(1, (o.count | 0) - (o.progress | 0));
+        const have = S.entities.list.filter(
+          (e) => e.category === CATEGORY.MONSTER && !e.dead && e.kind === o.target,
+        ).length;
+        if (have >= need) continue;
+        const missing = Math.min(need - have, 8);
+        const a0 = rnd.float(0, Math.PI * 2);
+        for (let i = 0; i < missing; i++) {
+          const a = a0 + (i / Math.max(1, missing)) * Math.PI * 0.9 + rnd.float(-0.15, 0.15);
+          const r = rnd.float(3200, 4800);
+          const x = town.x + Math.cos(a) * r;
+          const z = town.z + Math.sin(a) * r;
+          const e = this.spawnMonster(o.target, x, ground(x, z), z, { questTarget: true });
+          if (e && q.uniqueName && o.unique) e.label = q.uniqueName;
+        }
+      }
     }
   }
 
@@ -363,10 +435,16 @@ export class Spawner {
     const kind = kindMap[item.slot || item.type] || 'item_gold';
     const sh = this.sheet('prop', kind, 1);
     if (!sh) return null;
+    // A floor drop is named on hover: gold says how much, gear says what it
+    // is (playtest #14 - "gold piles labeled Item").
+    const label = item.gold ? `${item.gold} gold`
+      : item.name
+        || (this.items && this.items.itemName ? this.items.itemName(item, !!item.identified) : null)
+        || 'Item';
     return this.session.entities.add(new Entity({
       category: CATEGORY.ITEM, kind, sheet: sh, static: true,
       x, y, z, scale: 0.7, radius: 50, solid: false,
-      data: item, label: item.name || 'Item',
+      data: item, label,
       interact: { kind: 'item', item },
     }));
   }

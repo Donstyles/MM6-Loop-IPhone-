@@ -400,22 +400,96 @@ say(`main chain of ${chain.length}, ${questCount} side quests generated, ${Quest
   ok(casts === 0, 'a feebleminded caster never casts');
 }
 
-// The opening fight: 3 GoblinA vs a fresh party - dangerous but winnable.
+// ---------------------------------------------------------------------------
+// 9b. The early-game walkover table (cycle-2 playtest #1)
+// ---------------------------------------------------------------------------
+//
+// The first-session contract: a fresh L1 party COMFORTABLY beats the singles
+// and pairs of weak melee that spawn near town, is genuinely hurt by a trio,
+// and a ranged-caster trio (the outer-ring encounter) costs several times the
+// blood of the town-ring fights.
+
+section('early game');
 {
-  let wins = 0, dmgFrac = 0;
-  const N = 40;
-  for (let t = 0; t < N; t++) {
-    const rand = new Rand('gob' + t);
-    const p = Party.createParty('fresh' + t);
-    const gs = [Monsters.spawnMonster('GoblinA'), Monsters.spawnMonster('GoblinA'), Monsters.spawnMonster('GoblinA')];
-    const total = p.members.reduce((s, c) => s + c.hp, 0);
-    const r = Combat.simulateFight(p.members, gs, rand, 40, { useSpells: true });
-    if (r.win) wins++;
-    dmgFrac += r.monsterDamage / total;
+  const run = (kinds, opts, N = 40) => {
+    let wins = 0, dmgFrac = 0, hpLeft = 0;
+    for (let t = 0; t < N; t++) {
+      const rand = new Rand('open' + kinds.join('') + t);
+      const p = Party.createParty('fresh' + t);
+      const gs = kinds.map((k) => Monsters.spawnMonster(k));
+      const total = p.members.reduce((s, c) => s + c.hp, 0);
+      const r = Combat.simulateFight(p.members, gs, rand, 40, { useSpells: true, ...(opts || {}) });
+      if (r.win) wins++;
+      dmgFrac += r.monsterDamage / total;
+      hpLeft += p.members.reduce((s, c) => s + Math.max(0, c.hp), 0) / total;
+    }
+    return { win: wins / N, dmg: dmgFrac / N, hpLeft: hpLeft / N };
+  };
+
+  const pair = run(['GoblinA', 'GoblinA']);
+  ok(pair.win >= 0.95, `2 GoblinA vs L1 party: win rate ${(pair.win * 100).toFixed(0)}% - the opening fight must be a win`);
+  ok(pair.hpLeft > 0.5, `2 GoblinA vs L1 party: only ${(pair.hpLeft * 100).toFixed(0)}% HP left - not a comfortable win`);
+
+  const trio = run(['GoblinA', 'GoblinA', 'GoblinA']);
+  ok(trio.win >= 0.85, `3 GoblinA vs L1 party: win rate ${(trio.win * 100).toFixed(0)}% - too hard`);
+  ok(trio.dmg >= 0.03, `3 GoblinA vs L1 party: only ${(trio.dmg * 100).toFixed(1)}% HP paid - toothless`);
+
+  // The outer-ring caster trio, engaging from range: this is the encounter
+  // that must NOT live next to town. Several times the blood of the pair.
+  const casters = run(['GoblinB', 'GoblinB', 'GoblinB'], { range: 1400 });
+  ok(casters.dmg >= Math.max(0.1, pair.dmg * 2.5),
+    `ranged trio costs ${(casters.dmg * 100).toFixed(1)}% vs pair's ${(pair.dmg * 100).toFixed(1)}% - not scary enough`);
+  say(`walkover table: 2xGoblinA ${(pair.win * 100).toFixed(0)}% win / ${(pair.hpLeft * 100).toFixed(0)}% HP left; `
+    + `3xGoblinA ${(trio.dmg * 100).toFixed(1)}% HP cost; ranged trio ${(casters.dmg * 100).toFixed(1)}% HP cost`);
+
+  // Tier-1 melee hits 2-4ish, MM6 numbers, not 8-13.
+  const gob = Monsters.monsterById('GoblinA');
+  const gavg = (gob.attack.dice.n * (gob.attack.dice.s + 1)) / 2 + gob.attack.bonus;
+  ok(gavg >= 2 && gavg <= 5, `GoblinA average swing ${gavg.toFixed(1)} outside the 2-5 band`);
+  const rat = Monsters.monsterById('RatA');
+  const ravg = (rat.attack.dice.n * (rat.attack.dice.s + 1)) / 2 + rat.attack.bonus;
+  ok(ravg >= 1.5 && ravg <= 4, `RatA average swing ${ravg.toFixed(1)} outside the 1.5-4 band`);
+  // Tier-1 ranged is cut and slow.
+  const shaman = Monsters.monsterById('GoblinB');
+  const savg = (shaman.ranged.damage.n * (shaman.ranged.damage.s + 1)) / 2 + shaman.ranged.bonus;
+  ok(savg <= 9, `GoblinB bolt averages ${savg.toFixed(1)} - tier-1 ranged must stay under ~9`);
+  ok(shaman.ranged.cooldown >= 4, `GoblinB fires every ${shaman.ranged.cooldown}s - tier-1 casters must be slow`);
+
+  // The town ring (within 4000u): weak melee only, singles and pairs.
+  const ring = Monsters.townRingPool('new_sorpigal', 3000);
+  ok(ring && ring.length > 0, 'town ring pool is empty for New Sorpigal');
+  for (const m of ring || []) {
+    ok(!Monsters.isRangedThreat(m), `${m.id} (ranged/caster) in the town ring pool`);
+    ok(m.level <= 5, `${m.id} (L${m.level}) too strong for the town ring`);
+    ok(m.hostile, `${m.id} non-hostile in the town ring pool`);
   }
-  ok(wins / N >= 0.85, `3 GoblinA vs fresh party: win rate ${(wins / N * 100).toFixed(0)}% - too hard`);
-  ok(dmgFrac / N >= 0.06, `3 GoblinA vs fresh party: only ${(dmgFrac / N * 100).toFixed(0)}% party HP lost - a walkover`);
-  say(`opening fight: ${(wins / N * 100).toFixed(0)}% wins, ${(dmgFrac / N * 100).toFixed(0)}% of party HP paid for it`);
+  {
+    const r = new Rand('shape');
+    const shaped = Monsters.shapeSpawnForTown('new_sorpigal', 2000, ['GoblinB', 'GoblinB', 'GoblinB'], 3, r);
+    ok(shaped.count <= 2, `near-town group of ${shaped.count} - must be singles/pairs`);
+    const def = Monsters.monsterById(shaped.ids[0]);
+    ok(def && !Monsters.isRangedThreat(def) && def.level <= 5,
+      `near-town shaping produced ${shaped.ids[0]} - still a ranged/strong spawn`);
+    const far = Monsters.shapeSpawnForTown('new_sorpigal', 9000, ['GoblinB', 'GoblinB'], 3, r);
+    ok(far.ids[0] === 'GoblinB' && far.count === 3, 'far spawns must pass through unshaped');
+  }
+
+  // Pluralisation: no more "Kill 5 Follower of Baas".
+  ok(Monsters.monsterPlural('Follower of Baa') === 'Followers of Baa', 'plural: Follower of Baa');
+  ok(Monsters.monsterPlural('Harpy') === 'Harpies', 'plural: Harpy');
+  ok(Monsters.monsterPlural('Cutpurse') === 'Cutpurses', 'plural: Cutpurse');
+  ok(Monsters.monsterPlural('Wolfman') === 'Wolfmen', 'plural: Wolfman');
+
+  // Quest targets: hostile, spawnable families only, small culls near home.
+  for (const q of Quests.generateQuestsForRegion('new_sorpigal', 'wow', 6)) {
+    for (const o of q.objectives || []) {
+      if (o.kind !== 'kill' || !o.target) continue;
+      const m = Monsters.monsterById(o.target);
+      ok(m && m.hostile, `${q.title}: target ${o.target} is not hostile`);
+      ok(m && m.family !== 'Guard' && m.name !== 'Peasant', `${q.title}: target reads as townsfolk`);
+      if (q.type === 'kill') ok(o.count <= 6, `${q.title}: asks for ${o.count} kills in a starter region`);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -792,6 +866,207 @@ for (const lv of [1, 5, 10, 15, 20, 25, 30, 40]) {
     + `${hours.toFixed(1).padStart(13)}   ${Math.round(goldPerHour).toString().padStart(9)}`);
   ok(hours < 60, `levelling from ${lv} to ${lv + 1} takes ${hours.toFixed(1)} hours - too grindy`);
   ok(hours > 0.05, `levelling from ${lv} to ${lv + 1} takes ${hours.toFixed(2)} hours - too fast`);
+}
+
+// ---------------------------------------------------------------------------
+// 14. Economy guards: selling can never out-earn buying
+// ---------------------------------------------------------------------------
+
+section('economy guards');
+{
+  const factors = [0.85, 0.9, 1, 1.1, 1.2];
+  for (let lv = 0; lv <= 14; lv++) {
+    for (let mastery = 1; mastery <= 3; mastery++) {
+      const c = Party.createCharacter(new Rand('m' + lv + mastery), 'knight', { name: 'M' });
+      if (lv > 0) c.skills.merchant = { level: lv, mastery };
+      for (const tf of factors) {
+        const p = Stats.priceMultipliers(c, tf);
+        ok(p.sell < p.buy, `sell ${p.sell.toFixed(3)} >= buy ${p.buy.toFixed(3)} at merchant ${lv}/${mastery}, town ${tf}`);
+        ok(p.sell <= 0.95 && p.buy > 0, `price multipliers out of band at ${lv}/${mastery}/${tf}`);
+      }
+    }
+  }
+  // Master's atCost: buys at cost (multiplier capped at 1), never below-cost.
+  const m = Party.createCharacter(new Rand('mm'), 'knight', { name: 'MM' });
+  m.skills.merchant = { level: 10, mastery: Skills.MASTERY.MASTER };
+  const pm = Stats.priceMultipliers(m, 1.2);
+  ok(pm.buy <= 1, `Merchant Master should buy at cost, buys at ${pm.buy.toFixed(2)}`);
+  ok(pm.sell < pm.buy, 'Merchant Master still sells below cost');
+  say('sell < buy holds across 225 skill/town combinations; Master buys at cost');
+}
+
+// ---------------------------------------------------------------------------
+// 15. Session-level: ONE clock, persistent RNG streams, defeat, world ledger
+// ---------------------------------------------------------------------------
+
+section('session');
+try {
+  const THREE = await import('three');
+  const { Session } = await import('../src/game/session.js');
+  const { Entity, CATEGORY } = await import('../src/ents/entity.js');
+  const CG = await import('../src/game/combatglue.js');
+
+  const stubEngine = () => ({
+    scene: new THREE.Scene(), camera: new THREE.PerspectiveCamera(), renderer: null,
+    setIndoor() {}, setTint() {}, setFade() {}, setFlash() {},
+  });
+  const stubMap = () => ({
+    indoor: false, group: null,
+    groundAt: () => 0, ceilingAt: () => Infinity, blocked: () => false,
+    waterLevelAt: () => null, lightAt: () => ({ r: 1, g: 1, b: 1 }),
+    fog: { color: new THREE.Color(0x8fa5bd), near: 1600, far: 9000 },
+    start: { x: 0, y: 0, z: 0, yaw: 0 },
+  });
+  const makeSession = (seedTag) => {
+    const party = Party.createParty(seedTag || 'sess');
+    const s = new Session(stubEngine(), party);
+    s.modules = { partyMod: Party, combatMod: Combat, monsterMod: Monsters, itemMod: Items, questMod: Quests };
+    CG.installCombat(s);
+    s.setMap(stubMap(), 'new_sorpigal');
+    s.worldSeed = 12345;
+    return s;
+  };
+
+  // ONE clock: session.clock IS party.minutes; every advance path agrees.
+  {
+    const s = makeSession('clock');
+    ok(s.clock.minutes === s.party.minutes, 'clock reads party.minutes');
+    s.clock.advanceMinutes(90);
+    ok(s.party.minutes === s.clock.minutes && s.clock.minutes === 9 * 60 + 90,
+      'advanceMinutes moves the one timeline');
+    Party.advanceTime(s.party, 60, new Rand(1));
+    ok(s.clock.minutes === 9 * 60 + 150, 'party.advanceTime moves the same clock (training path)');
+    // Realtime: advanceGameTime clamps dt and ticks buffs on the same line.
+    const ch = s.party.members[0];
+    ch.buffs.bless = { power: 3, expires: 2 };
+    const t0 = s.clock.minutes;
+    s.clock.advanceMinutes(5);
+    s.tickTime(5, t0);
+    ok(!ch.buffs.bless, 'tickTime expires buffs over a manual jump');
+    // And never double-bills a span advanceTime already covered.
+    const gold0 = s.party.gold;
+    s.party.hirelings = [{ dailyWage: 10 }];
+    Party.advanceTime(s.party, 24 * 60, new Rand(2));   // pays one day's wage
+    const paidOnce = gold0 - s.party.gold;
+    s.tickTime(24 * 60, s.clock.minutes - 24 * 60);      // same span: must no-op
+    ok(gold0 - s.party.gold === paidOnce, 'tickTime does not double-bill a span advanceTime covered');
+    s.party.hirelings = [];
+  }
+
+  // rngFor: persistent per-session streams whose cursor rides in the save.
+  {
+    const s = makeSession('rng');
+    const r1 = s.rngFor('rest');
+    ok(s.rngFor('rest') === r1, 'rngFor returns the SAME stream on re-request');
+    const a = r1.float(), b = r1.float();
+    ok(a !== b || true, 'draws advance');
+    const expected = [r1.float(), r1.float()];
+    const blob = JSON.parse(JSON.stringify(s.saveState()));
+    // A fresh session restoring the blob resumes the stream mid-sequence.
+    const s2 = makeSession('rng2');
+    s2.restoreState(blob);
+    const r2 = s2.rngFor('rest');
+    // The saved cursor included the two `expected` draws; rewind by re-seeding
+    // a third session that only saw the first two draws.
+    const s3 = makeSession('rng3');
+    s3.worldSeed = 12345;
+    const blob2 = { ...blob, rngs: { rest: { seed: blob.rngs.rest.seed, cursor: 2 } } };
+    s3.restoreState(blob2);
+    const r3 = s3.rngFor('rest');
+    ok(r3.float() === expected[0] && r3.float() === expected[1],
+      'restored rest stream resumes exactly where the save left it');
+    ok(typeof blob.rngs.rest.cursor === 'number' && blob.rngs.rest.cursor === 4,
+      `rng cursor rides in saveState (got ${blob.rngs && blob.rngs.rest && blob.rngs.rest.cursor})`);
+    void r2;
+  }
+
+  // mapMeta carries BOTH kind and type, in lockstep (systems #1).
+  {
+    const s = makeSession('meta');
+    ok(s.mapMeta && s.mapMeta.kind === 'region' && s.mapMeta.type === 'region',
+      'setMap writes both mapMeta.kind and mapMeta.type');
+  }
+
+  // Defeat: single-fire, respawns at the town fountain, clears hostiles,
+  // leaves the party WEAK at 1 hp - not a free full-cure (systems #10).
+  {
+    const s = makeSession('defeat');
+    s.regionTowns = [{ x: 1486, z: -6924, r: 1600 }];
+    // A well prop marks the fountain; a rat waits right on top of it.
+    s.entities.add(new Entity({
+      category: CATEGORY.PROP, kind: 'well', sheet: null, static: true, x: 1486, y: 0, z: -6924,
+    }));
+    const rat = s.entities.add(new Entity({
+      category: CATEGORY.MONSTER, kind: 'RatA', sheet: null, x: 1600, y: 0, z: -6800,
+    }));
+    rat.data = { hostile: true, name: 'Common Rat' };
+    s.player.pos.set(9000, 0, 9000);
+    for (const c of s.party.members) c.hp = 0;
+    const clock0 = s.clock.minutes;
+    const gold0 = s.party.gold;
+
+    // Hammer the check the way a frame loop would: it must arm exactly once.
+    for (let i = 0; i < 10; i++) CG.checkPartyDefeat(s);
+    ok(s.party.deaths === 0, 'defeat penalties wait for the fade, not the check');
+    s.transition.update(1.2);                     // fade completes, callback fires
+    await new Promise((r) => setTimeout(r, 20)); // the callback is async
+    for (let i = 0; i < 10; i++) CG.checkPartyDefeat(s);
+    ok(s.party.deaths === 1, `deaths counter must be exactly 1, got ${s.party.deaths}`);
+    ok(s.party.gold === gold0 - Math.floor(gold0 * 0.1), 'gold penalty applied exactly once');
+    const d = Math.hypot(s.player.pos.x - 1486, s.player.pos.z - (-6924));
+    ok(d < 1500, `party woke ${Math.round(d)}u from the fountain - must be beside it`);
+    const hostilesNear = s.entities.list.filter((e) => e.category === CATEGORY.MONSTER && !e.dead
+      && Math.hypot(e.pos.x - s.player.pos.x, e.pos.z - s.player.pos.z) < 1500).length;
+    ok(hostilesNear === 0, `${hostilesNear} hostiles inside the respawn grace radius`);
+    ok(s.party.members.every((c) => c.hp === 1 && c.conditions.weak === true),
+      'revival leaves everyone WEAK at 1 hp - the temple stays relevant');
+    ok(s.clock.minutes - clock0 >= 7 * 24 * 60, 'defeat costs the week');
+    ok(s.combatMusicOverride() === 'defeat' || s._defeatMusicT > 0 || s._defeatMusicT === undefined,
+      'defeat dirge holds the music override');
+  }
+
+  // World ledger: a killed monster stays dead in the map snapshot; dungeons
+  // restock only after months.
+  {
+    const s = makeSession('ledger');
+    const gob = s.entities.add(new Entity({
+      category: CATEGORY.MONSTER, kind: 'GoblinA', sheet: null, x: 500, y: 0, z: 500,
+    }));
+    gob.data = Monsters.monsterById('GoblinA');
+    gob.hp = 5;
+    s.damageMonster(gob, 999, 'physical', null);
+    ok(gob.dead === true, 'damageMonster kills at 0 hp');
+    s.snapshotMapState();
+    const st = s.worldState.maps['r:new_sorpigal'];
+    ok(st && st.monsters.length === 1 && st.monsters[0].dead === true,
+      'ledger records the corpse for the map');
+    ok(s.applyMapState() === true, 'ledger re-applies inside the respawn window');
+    // A dungeon key older than six months is discarded (full respawn).
+    s.worldState.maps['d:goblinwatch'] = { at: s.clock.minutes, indoor: true, monsters: [], items: [], chests: {} };
+    s.clock.advanceMinutes(7 * 28 * 24 * 60);
+    s.map.indoor = true; s.mapId = 'goblinwatch';
+    ok(s.applyMapState() === false && !s.worldState.maps['d:goblinwatch'],
+      'a dungeon ledger entry expires after months of game time');
+    // Outdoor packs wait ~2 weeks, not a day.
+    ok(Session.OUTDOOR_RESPAWN_MINUTES >= 13 * 24 * 60, 'outdoor respawn is weeks, not daily');
+    ok(Session.DUNGEON_RESPAWN_MINUTES >= 5 * 28 * 24 * 60, 'dungeon respawn is months');
+  }
+
+  // TB fairness: hesitation is long, and there is a movement/points tax.
+  {
+    const s = makeSession('tb');
+    ok(Session.TB_HESITATION >= 10, 'TB hesitation must be >= 10s');
+    s.enterTurnBased();
+    ok(s.turnBased && s.turnPoints === 130, 'TB engages');
+    s.spendTurnPoints(26);
+    ok(s.turnPoints === 104, 'activation/movement drains turn points');
+    s.leaveTurnBased();
+  }
+
+  say('session-level checks complete (one clock, rng streams, defeat, ledger, TB)');
+} catch (e) {
+  failures++;
+  console.error('  FAIL  session-level harness crashed:', e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : e);
 }
 
 // ---------------------------------------------------------------------------

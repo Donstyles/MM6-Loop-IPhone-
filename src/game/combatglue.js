@@ -164,6 +164,10 @@ export function installCombat(session) {
   session.onMonsterRangedCb = (e) => {
     const def = e.data || {};
     const r = def.ranged || {};
+    // MM6-slow caster cadence at low tiers: the entity AI's flat 2-3s reload
+    // is overridden by the bestiary's own cooldown (playtest #1 - starter
+    // shamans machine-gunned an 11-29 HP party).
+    if (r.cooldown) e.recovery = Math.max(e.recovery || 0, r.cooldown * (0.85 + rnd.float(0, 0.3)));
     const vfxId = r.vfx || (r.spell ? ((spellById(r.spell) || {}).vfx || 'fire_bolt') : 'arrow');
     if (!session.vfx) { rangedHitParty(session, e, combat, rnd); return; }
     const from = _v.set(e.pos.x, e.pos.y + (e.sizeH || 200) * 0.6, e.pos.z);
@@ -184,7 +188,26 @@ export function installCombat(session) {
   session.handleActivate = (hit) => {
     const e = hit.entity;
     const kind = hit.kind;
+    // In turns, opening and talking are actions too (systems #2).
+    if (session.turnBased && session.spendTurnPoints && session.countHostiles() > 0) {
+      session.spendTurnPoints(13);
+    }
     if (kind === 'npc') {
+      // Talking IS the objective for deliver/find quests: dispatch and SAY SO
+      // before the dialogue screen opens, so "You deliver the letter" lands
+      // on the log instead of completing silently (playtest #10).
+      const npcId = e.data && (e.data.npcId || e.data.name);
+      if (npcId && session.party) {
+        const changed = dispatchQuestEvent(session.party, { type: 'talk', npcId });
+        for (const q of changed) {
+          const o = (q.objectives || []).find((x) => x.kind === 'talk' && x.done && x.target === npcId);
+          if (!o) continue;
+          if (q.type === 'deliver') session.message('You deliver the letter.', '#ffd84a');
+          else if (q.type === 'find_person') session.message(`You have found ${npcId}.`, '#ffd84a');
+          else session.message(`Spoken with ${npcId}.`, '#ffd84a');
+        }
+        announceQuestChanges(session, changed);
+      }
       window.__openScreen && window.__openScreen('dialogue', { npc: e.data, entity: e });
     } else if (kind === 'chest') {
       openChest(session, e, rnd);
@@ -233,6 +256,15 @@ export function installCombat(session) {
    * is seeded, so the pool regenerates identically for save/restore.
    */
   session.ensureQuestPool = (regionId, seed) => {
+    // A LOADED save may carry a different world seed than this boot rolled;
+    // quests must regenerate from the save's seed or none of the saved pool
+    // state lines up. Seed change = rebuild from scratch.
+    if (session._questPoolSeed !== undefined && session._questPoolSeed !== seed) {
+      session.questPool = null;
+      session._questRegions = null;
+      session._mainChainMade = false;
+    }
+    session._questPoolSeed = seed;
     if (!session.questPool) session.questPool = [];
     if (!session._questRegions) session._questRegions = new Set();
     if (!session._mainChainMade) {
@@ -358,6 +390,10 @@ export function installCombat(session) {
   session.update = (dt, input) => {
     normalizeQuestContainers(session);
     baseUpdate(dt, input);
+    // While the world is frozen under a panel, recovery and defeat checks
+    // freeze with it - no free recovery, no dying behind a shop screen.
+    if (session.worldFrozen && session.worldFrozen()) return;
+    session._defeatCooldown = Math.max(0, (session._defeatCooldown || 0) - dt);
     session.tickRecovery(dt);
     checkPartyDefeat(session);
   };
@@ -594,7 +630,12 @@ function fireSpell(session, ch, spell, target, combat, rnd) {
 
   const onHit = (pos, hitEnt) => {
     if (session.audio) session.audio.play(impactSnd, { pos: pos || target.pos, volume: 0.8 });
-    const victim = hitEnt || target;
+    // A projectile only counts what it can actually wound: an intercepting
+    // prop or townsperson (no combatant, no hp) falls through to the aimed
+    // target instead of silently voiding the spell (systems #9).
+    const victim = (hitEnt && hitEnt.category === CATEGORY.MONSTER && !hitEnt.dead
+      && (hitEnt.mon || hitEnt.hp > 0) && !(hitEnt.data && hitEnt.data.hostile === false))
+      ? hitEnt : target;
     let total = applyTo(victim);
     // Area spells splash the real radius, at full spell damage, as MM6 does.
     if (spell.radius && spell.type === 'damage') {
@@ -812,52 +853,82 @@ function hitEscort(session, attacker, rnd) {
   }
 }
 
-/** The whole party is down: MM6-style defeat, not a silent zombie walk. */
-function checkPartyDefeat(session) {
-  if (session._defeatBusy) return;
+/**
+ * The whole party is down: MM6-style defeat, not a silent zombie walk.
+ *
+ * Single-fire by construction (playtest #5: deaths counted 16 after ~10
+ * defeats): the busy flag holds through the whole async respawn, the callback
+ * itself is once-guarded, and a short cooldown after revival stops the same
+ * frame's stray hit from wiping the freshly-woken party a second time.
+ *
+ * Exported for the systems harness.
+ */
+export function checkPartyDefeat(session) {
+  if (session._defeatBusy) return false;
+  if ((session._defeatCooldown || 0) > 0) return false;
   const ms = (session.party && session.party.members) || [];
-  if (!ms.length) return;
+  if (!ms.length) return false;
   const down = ms.every((c) => c.hp <= 0
     || conditionList(c).some((k) => ['dead', 'unconscious', 'eradicated', 'stoned'].includes(String(k).toLowerCase())));
-  if (!down) return;
+  if (!down) return false;
 
   session._defeatBusy = true;
   session.message('Your party has been defeated!', '#ff4030');
   if (session.audio) session.audio.play('death_player');
-  if (session.music) { session.music.setIntensity(0); session.music.play('defeat'); }
+  // The dirge owns the deck for ~8 seconds; the audio director defers to
+  // combatMusicOverride() === 'defeat' and holds the region track (audio #3).
+  if (session.beginDefeatMusic) session.beginDefeatMusic(8);
+  else if (session.music) { session.music.setIntensity(0); session.music.play('defeat'); }
 
+  let fired = false;
   session.transition.start(1.0, async () => {
+    if (fired) return;
+    fired = true;
     const party = session.party;
     const lost = Math.floor((party.gold | 0) * 0.1);
     party.gold = (party.gold | 0) - lost;
     party.deaths = (party.deaths | 0) + 1;
     for (const c of party.members || []) {
       c.deaths = (c.deaths | 0) + 1;
-      c.conditions = {};
+      // MM6 revives the fallen WEAK, at one hit point: defeat is not a free
+      // temple visit, and the temple stays in business (systems #10).
+      c.conditions = { weak: true };
       c.hp = 1;
       c.recovery = 0;
     }
     // A week passes while somebody drags four bodies back to town.
     session.clock.advanceMinutes(7 * 24 * 60);
+    if (session.party) session.party._tickedTo = session.clock.minutes;
+    if (session._tickAnchor !== undefined) session._tickAnchor = session.clock.minutes;
     try {
       if (session.mapId !== 'new_sorpigal' || (session.map && session.map.indoor)) {
         const { loadRegion } = await import('../bootstrap.js');
         await loadRegion(session, 'new_sorpigal', session.worldSeed || 1);
-      } else if (session.map) {
-        // Already home: put the party back at the town spawn.
-        const s = session.map.start || { x: 0, y: 0, z: 0, yaw: 0 };
-        const spot = session.findClearSpot(session.map, s);
+      }
+      // Wake at the ACTUAL town fountain - resolved from the loaded town
+      // layout, never map.start's world-origin fallback (playtest #2).
+      if (session.map && session.townRespawnPoint) {
+        const spot = session.findClearSpot(session.map, session.townRespawnPoint());
         session.player.pos.set(spot.x, spot.y, spot.z);
         session.player.vel.set(0, 0, 0);
+        session.player.yaw = spot.yaw || 0;
       }
+      if (session.clearHostilesNear) {
+        session.clearHostilesNear(session.player.pos.x, session.player.pos.z, 1500);
+      }
+      if (session.beginGrace) session.beginGrace(2);
     } catch (err) { console.warn('defeat respawn failed', err); }
     session.inCombat = false;
     session.turnBased = false;
     session._combatLinger = 0;
     session.message(`You come to by the fountain in New Sorpigal, a week later and ${lost} gold poorer.`, '#ffd84a');
-    if (session.music) session.music.play(session.musicTrack || 'field');
+    session.message('The party is weak from the ordeal. The temple can restore them.', '#ffd84a');
+    // Music: the dirge is still holding the deck; the director takes over
+    // when the override clears. No forced 'field' here (audio #2/#3).
+    session._defeatCooldown = 3;
     session._defeatBusy = false;
   });
+  return true;
 }
 
 // --- kills, loot, quests -------------------------------------------------------
@@ -963,9 +1034,11 @@ function openChest(session, e, rnd) {
 
 function pickUp(session, e) {
   const item = e.data;
-  if (item && item.gold) {
-    session.party.gold += item.gold;
-    session.message(`You pick up ${item.gold} gold.`, '#ffd84a');
+  const items = session.modules?.itemMod;
+  if (item && (item.gold || item.type === 'gold')) {
+    const amount = item.gold || item.quantity || 0;
+    session.party.gold += amount;
+    session.message(`You pick up ${amount} gold.`, '#ffd84a');
     if (session.audio) session.audio.play('gold_pickup');
   } else if (item) {
     const p = session.modules?.partyMod;
@@ -978,7 +1051,11 @@ function pickUp(session, e) {
     else if (ch && Array.isArray(ch.inventory)) { ch.inventory.push(item); ok = true; }
     else if (ch && ch.inventory && Array.isArray(ch.inventory.items)) { ch.inventory.items.push(item); ok = true; }
     if (!ok) { session.message('There is no room in your packs.'); return; }
-    session.message(`You pick up ${item.name || 'an item'}.`);
+    // Name it properly: generated loot carries a def id, not a prose name
+    // (playtest #14 - "You pick up an item." for everything).
+    const label = (items && items.itemName ? items.itemName(item, !!item.identified) : null)
+      || item.name || 'an item';
+    session.message(`You pick up ${label}.`);
     if (session.audio) session.audio.play('item_pickup');
     // Fetch quests watch the floor as well as the corpse.
     const changed = dispatchQuestEvent(session.party, {
@@ -1009,16 +1086,22 @@ function doTransition(session, t) {
       // Remember the door we came in through so the dungeon can offer it back.
       session._dungeonBack = t.back || null;
       await loadDungeon(session, t.toDungeon, t.seed || 1, t.entry);
+      // BOTH kind and type, always (systems #1): the save loader dispatches on
+      // `type`, this side historically wrote only `kind`, and every dungeon
+      // save loaded as an overworld region at (0,800,0).
       session.mapMeta = {
-        kind: 'dungeon', id: session.mapId, spec: t.toDungeon,
+        kind: 'dungeon', type: 'dungeon', id: session.mapId, spec: t.toDungeon,
         seed: t.seed || 1, back: t.back || null, entry: t.entry || null,
       };
     } else if (t.toRegion) {
       const es = session.escort;
       session._dungeonBack = null;
-      const seed = t.seed || session.worldSeed || 1;
+      // Regions ALWAYS regenerate from the one world seed - a door that
+      // carried its own seed rerolled every POI in the region it led back to
+      // (playtest #4: Goblinwatch moved 20k units after a defeat reload).
+      const seed = session.worldSeed ?? t.seed ?? 1;
       await loadRegion(session, t.toRegion, seed, t.entry);
-      session.mapMeta = { kind: 'region', id: session.mapId, seed, entry: t.entry || null };
+      session.mapMeta = { kind: 'region', type: 'region', id: session.mapId, seed, entry: t.entry || null };
       // Reaching the road out with the charge alive counts as delivered.
       if (es && es.quest) {
         const o = (es.quest.objectives || []).find((x) => x.kind === 'escort');
