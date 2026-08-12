@@ -33,18 +33,47 @@ function barrelBody(H, hexWood, hexBand, rnd) {
 }
 
 const BUILDERS = {
+  // A proper strongbox: horizontal planks with per-board tone, dark iron
+  // straps with proud rivets, a domed banded lid and a bright hasp. The old
+  // one was a single flat-toned box that baked down to a blurry brown cube.
   chest: (H, rnd, open) => {
     const g = new THREE.Group();
-    const wood = rampHex('wood', 4), band = rampHex('grey', 3), gold = rampHex('gold', 10);
-    g.add(box(H * 1.35, H * 0.62, H * 0.85, wood, { pivot: 'bottom' }));
-    for (const x of [-0.34, 0, 0.34]) g.add(box(H * 0.09, H * 0.66, H * 0.90, band, { pivot: 'bottom', x: H * 1.35 * x }));
-    g.add(box(H * 1.38, H * 0.09, H * 0.88, band, { pivot: 'bottom', y: H * 0.53 }));
-    const lid = grp(0, H * 0.62, -H * 0.42);
+    const wood = rampHex('wood', 5), woodDk = rampHex('wood', 3);
+    const iron = rampHex('grey', 4), ironLt = rampHex('grey', 9);
+    const gold = rampHex('gold', 11);
+    const W = H * 1.35, D = H * 0.85, BH = H * 0.62;
+    // Body planks, alternating tone so each board reads at 40px.
+    const nP = 3;
+    for (let i = 0; i < nP; i++) {
+      g.add(box(W, BH / nP + 0.4, D, mulHex(wood, 0.80 + (i % 2) * 0.30), { pivot: 'bottom', y: (BH / nP) * i }));
+    }
+    // Dark base skid.
+    g.add(box(W * 1.06, H * 0.08, D * 1.07, woodDk, { pivot: 'bottom' }));
+    // Iron straps down the face, plus the top rim band.
+    for (const x of [-0.33, 0.33]) {
+      g.add(box(H * 0.13, BH + H * 0.02, D * 1.06, iron, { pivot: 'bottom', x: W * x }));
+    }
+    g.add(box(W * 1.05, H * 0.08, D * 1.05, iron, { pivot: 'bottom', y: BH - H * 0.06 }));
+    // Rivets along the rim band.
+    for (let i = 0; i < 5; i++) {
+      g.add(sph(H * 0.038, ironLt, { x: W * (-0.42 + i * 0.21), y: BH - H * 0.02, z: D * 0.52, sz: 0.55 }));
+    }
+    // Domed lid with iron hoops and end caps.
+    const lid = grp(0, BH, -D * 0.42);
     g.add(lid);
-    lid.add(cyl(H * 0.42, H * 0.42, H * 1.35, wood, { seg: 8, rz: PI / 2, y: 0, z: H * 0.42 }));
-    lid.add(cyl(H * 0.44, H * 0.44, H * 0.12, band, { seg: 9, rz: PI / 2, z: H * 0.42 }));
+    lid.add(cyl(D * 0.44, D * 0.44, W * 0.98, mulHex(wood, 1.12), { seg: 8, rz: PI / 2, z: D * 0.42 }));
+    for (const x of [-0.33, 0.33]) {
+      lid.add(cyl(D * 0.465, D * 0.465, H * 0.13, iron, { seg: 8, rz: PI / 2, x: W * x, z: D * 0.42 }));
+    }
+    for (const sx of [-1, 1]) {
+      lid.add(cyl(D * 0.45, D * 0.45, H * 0.05, woodDk, { seg: 8, rz: PI / 2, x: sx * W * 0.495, z: D * 0.42 }));
+    }
     if (open) lid.rotation.x = -2.1;
-    else g.add(box(H * 0.22, H * 0.22, H * 0.10, gold, { y: H * 0.52, z: H * 0.44 }));
+    else {
+      // Hasp and a bright lock plate - the glint that says "openable".
+      g.add(box(H * 0.16, H * 0.22, H * 0.05, ironLt, { y: BH - H * 0.04, z: D * 0.54 }));
+      g.add(box(H * 0.11, H * 0.13, H * 0.06, gold, { y: BH - H * 0.15, z: D * 0.55 }));
+    }
     if (open) {
       g.add(box(H * 1.1, H * 0.18, H * 0.6, gold, { y: H * 0.5 }));
       for (let i = 0; i < 6; i++) g.add(sph(H * 0.07, rampHex('gold', 12), { x: rnd.float(-0.5, 0.5) * H, z: rnd.float(-0.25, 0.25) * H, y: H * 0.62 }));
@@ -86,7 +115,7 @@ const BUILDERS = {
     }
     for (let i = 0; i < 5; i++) {
       const t = i / 5;
-      g.add(cone(H * (0.24 - t * 0.16), H * (0.34 - t * 0.14), rampHex('fire', 8 + i), { y: H * (0.16 + t * 0.42), emissive: 0.9, seg: 6, ry: t * 2 }));
+      g.add(cone(H * (0.24 - t * 0.16), H * (0.34 - t * 0.14), rampHex('fire', 6 + i), { y: H * (0.16 + t * 0.42), emissive: 0.8, seg: 6, ry: t * 2 }));
     }
     return g;
   },
@@ -97,7 +126,9 @@ const BUILDERS = {
       const a = (i / 12) * PI * 2;
       g.add(box(H * 0.22, H * 0.42, H * 0.16, mulHex(stone, 0.82 + (i % 3) * 0.14), { pivot: 'bottom', x: Math.cos(a) * H * 0.52, z: Math.sin(a) * H * 0.52, ry: -a }));
     }
-    g.add(cyl(H * 0.45, H * 0.45, H * 0.06, rampHex('water', 6), { seg: 12, y: H * 0.30 }));
+    // Water sits inside the ring; at 0.45H it met the posts' inner faces and
+    // clipped straight through them.
+    g.add(cyl(H * 0.36, H * 0.36, H * 0.06, rampHex('water', 6), { seg: 12, y: H * 0.30 }));
     for (const s of [-1, 1]) g.add(box(H * 0.10, H * 0.85, H * 0.10, rampHex('wood', 4), { pivot: 'bottom', x: s * H * 0.5, y: H * 0.42 }));
     g.add(cyl(H * 0.08, H * 0.08, H * 1.05, rampHex('wood', 6), { seg: 7, rz: PI / 2, y: H * 1.2 }));
     for (const s2 of [-1, 1]) g.add(box(H * 1.35, H * 0.08, H * 0.62, rampHex('wood', s2 > 0 ? 6 : 3), { y: H * 1.42, z: s2 * H * 0.26, rx: -s2 * 0.55 }));
@@ -131,9 +162,12 @@ const BUILDERS = {
     g.add(box(H * 0.16, H * 0.32, H * 0.08, iron, { pivot: 'bottom', y: H * 0.35 }));
     g.add(box(H * 0.06, H * 0.30, H * 0.06, iron, { y: H * 0.62, z: H * 0.10, rx: -0.5 }));
     g.add(cyl(H * 0.13, H * 0.09, H * 0.20, iron, { seg: 7, y: H * 0.78, z: H * 0.19 }));
+    // Deep orange, not the top of the fire ramp: the emissive boost in the
+    // bake pushes these up a step, and starting at shade 9 they came out a
+    // cream blob that read as a white lamp down a dark corridor.
     for (let i = 0; i < 4; i++) {
       const t = i / 4;
-      g.add(cone(H * (0.13 - t * 0.09), H * (0.26 - t * 0.10), rampHex('fire', 9 + i), { y: H * (0.90 + t * 0.22), z: H * 0.19, emissive: 0.95, seg: 6, ry: t * 2 }));
+      g.add(cone(H * (0.13 - t * 0.09), H * (0.26 - t * 0.10), rampHex('fire', 6 + i), { y: H * (0.90 + t * 0.22), z: H * 0.19, emissive: 0.8, seg: 6, ry: t * 2 }));
     }
     return g;
   },
@@ -299,7 +333,7 @@ const BUILDERS = {
     g.add(cyl(H * 0.46, H * 0.46, H * 0.06, mulHex(iron, 1.3), { seg: 10, y: H * 0.94 }));
     for (let i = 0; i < 4; i++) {
       const t = i / 4;
-      g.add(cone(H * (0.32 - t * 0.22), H * (0.40 - t * 0.16), rampHex('fire', 9 + i), { y: H * (1.0 + t * 0.34), emissive: 0.95, seg: 6, ry: t * 2 }));
+      g.add(cone(H * (0.32 - t * 0.22), H * (0.40 - t * 0.16), rampHex('fire', 6 + i), { y: H * (1.0 + t * 0.34), emissive: 0.8, seg: 6, ry: t * 2 }));
     }
     return g;
   },
@@ -366,6 +400,50 @@ const BUILDERS = {
     g.add(plate(H * 0.50, H * 0.90, rampHex('blood', 6), { x: H * 0.27, y: H * 1.14, thick: H * 0.02 }));
     g.add(plate(H * 0.24, H * 0.30, rampHex('gold', 11), { x: H * 0.27, y: H * 1.30, z: H * 0.02, thick: H * 0.012 }));
     for (let i = 0; i < 4; i++) g.add(cone(H * 0.05, H * 0.14, rampHex('blood', 5), { x: H * (0.06 + i * 0.14), y: H * 0.66, rx: PI }));
+    return g;
+  },
+  // A kerbed bed of flowers - towns scatter these and the spawner used to
+  // warn "no sprite for prop/flowerbed" and drop them.
+  flowerbed: (H, rnd) => {
+    const g = new THREE.Group();
+    const stone = rampHex('stone', 6);
+    g.add(box(H * 2.4, H * 0.40, H * 1.5, stone, { pivot: 'bottom' }));
+    g.add(box(H * 2.2, H * 0.12, H * 1.3, rampHex('dirt', 4), { pivot: 'bottom', y: H * 0.38 }));
+    for (let i = 0; i < 11; i++) {
+      const x = rnd.float(-0.95, 0.95) * H, z = rnd.float(-0.5, 0.5) * H;
+      const h = H * rnd.float(0.28, 0.55);
+      g.add(box(H * 0.035, h, H * 0.035, rampHex('grass', 7), { pivot: 'bottom', x, z, y: H * 0.42 }));
+      g.add(sph(H * 0.075, rampHex(rnd.pick(['blood', 'gold', 'plaster']), 11), { x, z, y: H * 0.42 + h }));
+    }
+    return g;
+  },
+  // Wall lever - dungeons export these as interactable props.
+  lever: (H, rnd) => {
+    const g = new THREE.Group();
+    const iron = rampHex('grey', 5), stone = rampHex('stone', 6);
+    g.add(box(H * 0.55, H * 0.75, H * 0.14, stone, { pivot: 'bottom' }));
+    g.add(box(H * 0.42, H * 0.60, H * 0.06, mulHex(stone, 0.8), { pivot: 'bottom', y: H * 0.07, z: H * 0.05 }));
+    g.add(cyl(H * 0.07, H * 0.07, H * 0.10, iron, { seg: 7, y: H * 0.40, z: H * 0.10, rx: PI / 2 }));
+    g.add(box(H * 0.055, H * 0.5, H * 0.055, iron, { pivot: 'bottom', y: H * 0.38, z: H * 0.14, rx: 0.6 }));
+    g.add(sph(H * 0.085, rampHex('blood', 8), { y: H * 0.80, z: H * 0.42 }));
+    return g;
+  },
+  // Mooring bollards + rope at a jetty's end (town.js pushes a 'dock' prop
+  // there); previously it warned and vanished.
+  dock: (H, rnd) => {
+    const g = new THREE.Group();
+    const wood = rampHex('wood', 4);
+    const posts = [[-0.45, 0, 1.0], [0.45, 0.1, 0.82], [0.05, -0.35, 0.58]];
+    for (const [x, z, hh] of posts) {
+      g.add(cyl(H * 0.09, H * 0.11, H * hh, mulHex(wood, rnd.float(0.85, 1.12)), {
+        seg: 7, pivot: 'bottom', x: x * H, z: z * H, rz: rnd.float(-0.08, 0.08),
+      }));
+      g.add(cyl(H * 0.125, H * 0.125, H * 0.05, rampHex('wood', 6), { seg: 7, x: x * H, z: z * H, y: H * hh }));
+    }
+    // Rope: a coil on the tall post and a sagging run between the two.
+    g.add(cyl(H * 0.135, H * 0.135, H * 0.10, rampHex('sand', 7), { seg: 7, x: -0.45 * H, y: H * 0.66 }));
+    g.add(box(H * 0.9, H * 0.035, H * 0.035, rampHex('sand', 6), { y: H * 0.60, rz: -0.14 }));
+    g.add(sph(H * 0.16, mulHex(wood, 0.8), { x: 0.1 * H, z: 0.3 * H, y: H * 0.10, sy: 0.5 }));
     return g;
   },
   market_stall: (H, rnd) => {
@@ -480,8 +558,13 @@ function lootTilt(fill, H) {
 
 /** height in world units + billboard aspect (w/h). */
 export const PROP_DEFS = {
-  chest: { h: 64, aspect: 1.35 },
-  chest_open: { h: 64, aspect: 1.35 },
+  // `cell` pins the bake's cell height: chests are inspected point-blank at
+  // every loot stop, and the default budget baked them at 48px - a blur.
+  chest: { h: 64, aspect: 1.35, cell: 88 },
+  chest_open: { h: 64, aspect: 1.35, cell: 88 },
+  flowerbed: { h: 56, aspect: 2.2 },
+  dock: { h: 120, aspect: 1.15 },
+  lever: { h: 96, aspect: 0.8 },
   barrel: { h: 84, aspect: 0.95 },
   crate: { h: 76, aspect: 1.15 },
   sack: { h: 60, aspect: 1.05 },

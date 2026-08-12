@@ -527,11 +527,24 @@ export class VFXSystem {
       }
     }
     if (!hit && !s.target && ctx && ctx.player && s.source) {
-      // A monster's projectile: the party is the thing it can run into.
+      // A monster's projectile: the party is the thing it can run into. This
+      // is a *swept* segment-vs-sphere test - a bolt at 1600u/s crosses the
+      // party's 90-unit radius in under a frame at 30fps, so testing only the
+      // end point let every bolt tunnel through the party and roam the map.
       const pp = ctx.player.pos;
       const pr = (ctx.playerRadius || 90) + s.radius;
-      const pdx = nx - pp.x, pdz = nz - pp.z, pdy = ny - (pp.y + 160);
-      if (pdx * pdx + pdz * pdz <= pr * pr && Math.abs(pdy) < 200) hitTerrain = true;
+      const cyp = pp.y + 110;                        // mid-body, eye is at 160
+      const dxs = nx - s.x, dys = ny - s.y, dzs = nz - s.z;
+      const mx = s.x - pp.x, my = s.y - cyp, mz = s.z - pp.z;
+      const a2 = dxs * dxs + dys * dys + dzs * dzs;
+      let t = a2 > 1e-6 ? -(mx * dxs + my * dys + mz * dzs) / a2 : 0;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const qx = mx + dxs * t, qy = my + dys * t, qz = mz + dzs * t;
+      if (qx * qx + qy * qy + qz * qz <= pr * pr) {
+        // Detonate at the point of closest approach, not past the party.
+        s.x += dxs * t; s.y += dys * t; s.z += dzs * t;
+        hitTerrain = true;
+      }
     }
     if (!hit && ctx) {
       if (ctx.groundAt) {
@@ -562,10 +575,19 @@ export class VFXSystem {
       }
     }
 
-    const done = hit || hitTerrain || s.travelled >= s.range;
+    // A projectile always terminates: on a hit, on terrain, at max range, or
+    // on a hard lifetime cap (guards a homing bolt orbiting forever). Nothing
+    // is ever allowed to roam the map.
+    const expired = s.travelled >= s.range
+      || s.age > s.range / Math.max(1, s.speed) + 3;
+    const done = hit || hitTerrain || expired;
     if (!done) return;
     if (s.impactId) {
       this.burst(s.impactId, s.x, s.y, s.z, { scale: s.scale, tint: [s.tr, s.tg, s.tb] });
+    } else if (expired && !hit) {
+      // Ran out of range in mid-air: a small puff, so the bolt visibly dies
+      // rather than blinking out.
+      this.burst('dust_puff', s.x, s.y, s.z, { scale: s.scale * 0.7 });
     }
     if (s.onHit) s.onHit(s, hit || null);
     this.stop(s);
@@ -577,6 +599,7 @@ export class VFXSystem {
     const sr = spriteRenderer || this.sr;
     if (!sr) return 0;
     const cx = camera ? camera.position.x : 0;
+    const cy = camera ? camera.position.y : 0;
     const cz = camera ? camera.position.z : 0;
     const far = (ctx && ctx.drawDistance) || 9000;
     const far2 = far * far;
@@ -588,6 +611,15 @@ export class VFXSystem {
       if (!s.active || !s.sheet || s.ta <= 0) continue;
       const dx = s.x - cx, dz = s.z - cz;
       if (dx * dx + dz * dz > far2) continue;
+      // Near-camera behaviour: an effect flying at the lens must never become
+      // a screen-filling starburst. It dissolves out (ordered-dither in the
+      // batch shader) from ~380 units and is fully invisible under ~120 - the
+      // hit itself is the party's problem to show, not the world's.
+      const dyc = s.y - cy;
+      const dist = Math.sqrt(dx * dx + dyc * dyc + dz * dz);
+      const nearK = (dist - 120) / 260;
+      if (nearK <= 0.02) continue;
+      const nearFade = nearK >= 1 ? 1 : nearK;
 
       const sheet = s.sheet;
       let ai = 0;
@@ -603,14 +635,19 @@ export class VFXSystem {
       const uv = sheet.uv('play', s.frame, ai);
       if (!uv) continue;
 
-      const w = sheet.worldW * s.scale;
-      const h = sheet.worldH * s.scale;
+      let w = sheet.worldW * s.scale;
+      let h = sheet.worldH * s.scale;
+      // Size clamp: the quad may never grow past what fits comfortably at its
+      // distance, so a fireball two steps away stays a fireball.
+      const maxSize = Math.max(60, dist * 1.05);
+      const big = Math.max(w, h);
+      if (big > maxSize) { const k = maxSize / big; w *= k; h *= k; }
       const batch = sr.batchFor(sheet.texture);
       // Sprite quads grow upward from their anchor; effects are centred on
       // their point, so drop the anchor by half the height.
       batch.add(s.x, s.y - h * 0.5, s.z, w, h,
         uv[0], uv[1], uv[2], uv[3],
-        s.tr, s.tg, s.tb, s.ta, 1);
+        s.tr, s.tg, s.tb, s.ta * nearFade, 1);
       drawn++;
     }
     this._drawn = drawn;

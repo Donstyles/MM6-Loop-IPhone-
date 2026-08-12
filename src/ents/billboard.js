@@ -65,26 +65,31 @@ in vec2 vUv;
 in vec4 vTint;
 in float vFogDepth;
 
-// The atlas is sRGB-tagged, so the sample below is decoded to linear on fetch,
-// but a raw shader gets no matching encode on the way out and the render target
-// is sRGB. Without this every monster, tree and prop leaves through the
-// sRGB->linear curve while the geometry around them does not, so the sprites
-// sit visibly darker than the world they stand in.
-vec3 toSRGB(vec3 v) {
-  return mix(pow(max(v, vec3(0.0)), vec3(0.41666)) * 1.055 - 0.055, v * 12.92,
-             vec3(lessThanEqual(v, vec3(0.0031308))));
-}
-
+// The atlas is sRGB-tagged (decoded to linear on fetch) and the render target
+// is an SRGB8 attachment, so the *hardware* re-encodes on write. No manual
+// encode here: adding one (as this shader once did) runs every sprite through
+// the sRGB curve twice, and the whole bestiary washes out into pale toys -
+// measured directly: atlas texel 47 landed on screen at 118.
 void main() {
   vec4 c = texture(map, vUv);
   if (c.a < alphaTest) discard;
+  // Partial opacity on an opaque, alpha-tested batch: an ordered-dither
+  // screen door, the era's own transparency. This is what lets an effect
+  // sprite dissolve as it closes on the camera without any blending state.
+  if (vTint.a < 0.996) {
+    const float B[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0,
+                                  3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+    vec2 q = floor(gl_FragCoord.xy);
+    int bi = int(mod(q.x, 4.0)) + int(mod(q.y, 4.0)) * 4;
+    if (vTint.a < (B[bi] + 0.5) / 16.0) discard;
+  }
   // Sprites take the same 32-step greyscale multiply the world does; the
   // banding that produces is authentic, not an artefact.
   vec3 t = floor(clamp(vTint.rgb, 0.0, 1.0) * 31.0 + 0.5) * (8.0 / 248.0);
   c.rgb *= t;
   float f = smoothstep(fogNear, fogFar, vFogDepth);
   c.rgb = mix(c.rgb, fogColor, f);
-  pc_fragColor = vec4(toSRGB(c.rgb), vTint.a);
+  pc_fragColor = vec4(c.rgb, 1.0);
 }
 `;
 

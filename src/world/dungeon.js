@@ -156,10 +156,18 @@ const SRGB_TO_LIN = (c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.
 // How far a fragment is from the party *is* its view-space depth, so the whole
 // light costs one length() and needs nothing updated per object per frame.
 
-/** Live uniforms, shared by every patched dungeon material. */
+/**
+ * Live uniforms, shared by every patched dungeon material.
+ *
+ * uTorchP is deliberately well under 1: at full strength the white camera
+ * light flattened every baked sconce pool within 800 units into one even
+ * wash, and the pools *are* the MM6 dungeon image. At 0.55 the party can
+ * still read the wall it is facing while the sconce pools stay the brightest
+ * thing in the corridor.
+ */
 const TORCH_U = {
   uTorchR: { value: TORCHLIGHT_RADIUS * PARTY_TORCH_POWER },
-  uTorchP: { value: 1 },
+  uTorchP: { value: 0.55 },
 };
 
 /** Where the party is standing, kept current for `lightAt`. */
@@ -177,7 +185,13 @@ const TORCH_FRAG = `
   float mTot = floor(31.5 - dimT) * 0.031372549;
   float lin = mTot < 0.04045 ? mTot / 12.92 : pow((mTot + 0.055) / 1.055, 2.4);
   // Self-lit faces (lava) bake above 1.0; the torch may only ever brighten.
-  diffuseColor.rgb *= vColor.rgb * max(1.0, lin / max(vColor.r, 1e-5));
+  float tGain = max(1.0, lin / max(vColor.r, 1e-5));
+  // The added light is *warm* - a torch, not a headlamp. MM6's lights are
+  // monochrome, but its torch pools read orange because the flame sprite and
+  // the wall art are; a moving pure-white brightener reads as a flashlight.
+  float tDelta = tGain - 1.0;
+  vec3 tWarm = vec3(1.0 + tDelta, 1.0 + tDelta * 0.74, 1.0 + tDelta * 0.46);
+  diffuseColor.rgb *= vColor.rgb * tWarm;
 #else
   #include <color_fragment>
 #endif
@@ -902,8 +916,12 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
     x: t.x, y: t.y - 10, z: t.z, w: t.kind === 'brazier' ? 220 : 130, h: t.kind === 'brazier' ? 280 : 190,
     tint: [1, 1, 1],
   }));
+  // Flames are additive, so they fog toward *black* (mixing an additive quad
+  // toward the scene fog colour leaves a glowing smudge), and they die sooner
+  // than the walls: a bright flame dot that outlives the sconce bracket under
+  // it reads as a flame floating in the void.
   const flames = flameInst.length ? makeBillboardField(flameTexture(), flameInst, {
-    fogColor: DUNGEON_FOG_COLOR, fogNear: DUNGEON_FOG_NEAR, fogFar: DUNGEON_FOG_FAR,
+    fogColor: 0x000000, fogNear: DUNGEON_FOG_NEAR, fogFar: DUNGEON_FOG_FAR * 0.72,
   }) : null;
   if (flames) {
     flames.material.blending = THREE.AdditiveBlending;
@@ -953,7 +971,9 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
     const a = flames.geometry.attributes.iTint.array;
     for (let i = 0; i < flameInst.length; i++) {
       const f = 0.78 + 0.22 * Math.sin(flick * 11 + i * 2.3) + 0.10 * Math.sin(flick * 27.3 + i);
-      a[i * 3] = f; a[i * 3 + 1] = f * 0.96; a[i * 3 + 2] = f * 0.9;
+      // Strongly warm: at distance only the bright core survives the fog, and
+      // a near-neutral tint left it reading as a blue-white wisp.
+      a[i * 3] = f; a[i * 3 + 1] = f * 0.80; a[i * 3 + 2] = f * 0.48;
     }
     flames.geometry.attributes.iTint.needsUpdate = true;
   }
@@ -1064,9 +1084,11 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
     return 'stone';
   }
 
-  const props = torches.map((t) => ({
-    kind: t.kind === 'brazier' ? 'brazier' : 'torch', x: t.x, y: t.y, z: t.z,
-  })).concat(levers.map((l) => ({ kind: 'lever', x: l.x, y: l.y, z: l.z })));
+  // Levers only. The torches are already fully represented by this module -
+  // bracket geometry baked into the mesh plus the instanced flame billboards -
+  // and exporting them as props as well stacked a torch_wall sprite and a vfx
+  // flame on top of every sconce: three flames adding up to a white blob.
+  const props = levers.map((l) => ({ kind: 'lever', x: l.x, y: l.y, z: l.z }));
 
   prog(1, 'done');
 

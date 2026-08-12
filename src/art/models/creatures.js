@@ -31,14 +31,85 @@ const sat = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 
 const MAT_CACHE = new Map();
 
+// --- material classes -------------------------------------------------------
+// The sprite baker textures every surface by *material class* - skin gets
+// mottling, cloth a weave, metal glint bands, bone striations - which is what
+// separates a pre-rendered 1998 turntable sprite from a flat-colour voxel toy.
+// A model's parts carry only plain hex colours, so the class is inferred: each
+// creature registers its resolved palette (skin/cloth/metal/...) before its
+// rig is built, and matFor matches any colour - including mulHex shade
+// variants, which keep their chroma direction - against that registry.
+
+export const MAT_CLASS = { skin: 0, cloth: 1, metal: 2, bone: 3, wood: 4, hair: 5, matte: 6 };
+export const MAT_CLASS_COUNT = 7;
+
+// Registered chroma directions: [x, y, z (normalised rgb), classIndex].
+let _ctxReg = [];
+const _baseReg = [];
+{
+  // Standing registry for models built outside a creature context (flora,
+  // props): classify by the ramp family the colour came from.
+  const rampCls = [
+    ['flesh', 'skin'], ['wood', 'wood'], ['gold', 'metal'], ['grey', 'metal'],
+    ['stone', 'metal'], ['plaster', 'bone'],
+  ];
+  for (const [name, cls] of rampCls) {
+    const n = name === 'flesh' ? 8 : 16;
+    for (let s = 1; s < n; s++) {
+      const hex = rampHex(name, s);
+      const r = (hex >> 16) & 255, g = (hex >> 8) & 255, b = hex & 255;
+      const l = Math.hypot(r, g, b) || 1;
+      _baseReg.push([r / l, g / l, b / l, MAT_CLASS[cls]]);
+    }
+  }
+}
+
+/** Register a creature's resolved palette; called before its rig is built. */
+export function setMaterialContext(C) {
+  _ctxReg = [];
+  if (!C) return;
+  const slots = [
+    ['skin', 'skin'], ['skin2', 'skin'], ['body', 'skin'],
+    ['cloth', 'cloth'], ['cloth2', 'cloth'], ['trouser', 'cloth'], ['boot', 'cloth'],
+    ['metal', 'metal'], ['horn', 'bone'], ['wood', 'wood'], ['hair', 'hair'],
+    ['wing', 'skin'], ['wing2', 'bone'],
+  ];
+  for (const [slot, cls] of slots) {
+    const hex = C[slot];
+    if (hex === undefined) continue;
+    const r = (hex >> 16) & 255, g = (hex >> 8) & 255, b = hex & 255;
+    const l = Math.hypot(r, g, b) || 1;
+    _ctxReg.push([r / l, g / l, b / l, MAT_CLASS[cls]]);
+  }
+}
+
+function classify(hex) {
+  const r = (hex >> 16) & 255, g = (hex >> 8) & 255, b = hex & 255;
+  const l = Math.hypot(r, g, b) || 1;
+  const x = r / l, y = g / l, z = b / l;
+  let best = MAT_CLASS.matte, bestD = 0.9965;   // chroma-direction cosine gate
+  for (const e of _ctxReg) {
+    const d = x * e[0] + y * e[1] + z * e[2];
+    if (d > bestD) { bestD = d; best = e[3]; }
+  }
+  if (best !== MAT_CLASS.matte) return best;
+  for (const e of _baseReg) {
+    const d = x * e[0] + y * e[1] + z * e[2];
+    if (d > bestD) { bestD = d; best = e[3]; }
+  }
+  return best;
+}
+
 /** A flat-shaded material for a 0xRRGGBB colour. `emissive` 0..1 self-lights. */
 export function matFor(hex, o = {}) {
   const em = o.emissive || 0;
-  const key = `${hex | 0}|${em}`;
+  const cls = o.mat !== undefined ? (MAT_CLASS[o.mat] ?? o.mat) : classify(hex | 0);
+  const key = `${hex | 0}|${em}|${cls}`;
   let m = MAT_CACHE.get(key);
   if (!m) {
     m = new THREE.MeshLambertMaterial({ color: hex, flatShading: true });
     m.userData.emissive = em;
+    m.userData.mat = cls;
     MAT_CACHE.set(key, m);
   }
   return m;
@@ -537,9 +608,11 @@ function buildBipedRig(H, P, C, rnd) {
     for (const s of [-1, 1]) torso.add(sph(shoulderW * 0.30, C.metal, { x: s * shoulderW * 0.52, y: torsoH * 0.95, sy: 0.62 }));
   }
   if (P.tatter) {
-    for (let i = 0; i < 6; i++) {
+    // Few and small: six large plates merged into a single pale slab across
+    // the back, and the whole rear silhouette read as cloth, not creature.
+    for (let i = 0; i < 4; i++) {
       const a = rnd.float(-PI, PI);
-      torso.add(plate(hipW * 0.3, torsoH * rnd.float(0.25, 0.6), C.cloth,
+      torso.add(plate(hipW * 0.24, torsoH * rnd.float(0.20, 0.45), C.cloth,
         { x: Math.cos(a) * hipW * 0.55, z: Math.sin(a) * torsoD * 0.6, y: torsoH * rnd.float(0.05, 0.35), rz: rnd.float(-0.3, 0.3), thick: 1 }));
     }
   }
@@ -1964,29 +2037,30 @@ const LIFT = {
   skin2: 92, cloth2: 82, wing: 108, wing2: 82, trouser: 82, boot: 70,
 };
 
-function resolveCols(p = {}) {
-  const skin = lift(rc(p.skin, rampHex('flesh', 4)), LIFT.skin);
-  const cloth = lift(rc(p.cloth, rampHex('dirt', 6)), LIFT.cloth);
-  const wood = lift(rc(p.wood, rampHex('wood', 6)), LIFT.wood);
+function resolveCols(p = {}, liftScale = 1) {
+  const L = (t) => t * liftScale;
+  const skin = lift(rc(p.skin, rampHex('flesh', 4)), L(LIFT.skin));
+  const cloth = lift(rc(p.cloth, rampHex('dirt', 6)), L(LIFT.cloth));
+  const wood = lift(rc(p.wood, rampHex('wood', 6)), L(LIFT.wood));
   const C = {
     skin,
     // Derived tones come off the *lifted* base, so they keep their intended
     // ratio to it and only get lifted themselves if they were authored dark.
-    skin2: lift(rc(p.skin2, mulHex(skin, 0.78)), LIFT.skin2),
-    body: lift(rc(p.body, skin), LIFT.body),
+    skin2: lift(rc(p.skin2, mulHex(skin, 0.78)), L(LIFT.skin2)),
+    body: lift(rc(p.body, skin), L(LIFT.body)),
     cloth,
-    cloth2: lift(rc(p.cloth2, mulHex(cloth, 0.7)), LIFT.cloth2),
-    metal: lift(rc(p.metal, rampHex('stone', 9)), LIFT.metal),
+    cloth2: lift(rc(p.cloth2, mulHex(cloth, 0.7)), L(LIFT.cloth2)),
+    metal: lift(rc(p.metal, rampHex('stone', 9)), L(LIFT.metal)),
     wood,
-    hair: lift(rc(p.hair, rampHex('wood', 4)), LIFT.hair),
-    horn: lift(rc(p.horn, rampHex('sand', 11)), LIFT.horn),
+    hair: lift(rc(p.hair, rampHex('wood', 4)), L(LIFT.hair)),
+    horn: lift(rc(p.horn, rampHex('sand', 11)), L(LIFT.horn)),
     // Eyes and glows are meant to be extremes; they are never lifted.
     eye: rc(p.eye, 0x0b0b0f),
     glow: rc(p.glow, rampHex('arcane', 6)),
-    wing: lift(rc(p.wing, mulHex(skin, 0.85)), LIFT.wing),
-    wing2: lift(rc(p.wing2, mulHex(skin, 0.6)), LIFT.wing2),
-    trouser: lift(rc(p.trouser, mulHex(cloth, 0.62)), LIFT.trouser),
-    boot: lift(rc(p.boot, mulHex(wood, 0.55)), LIFT.boot),
+    wing: lift(rc(p.wing, mulHex(skin, 0.85)), L(LIFT.wing)),
+    wing2: lift(rc(p.wing2, mulHex(skin, 0.6)), L(LIFT.wing2)),
+    trouser: lift(rc(p.trouser, mulHex(cloth, 0.62)), L(LIFT.trouser)),
+    boot: lift(rc(p.boot, mulHex(wood, 0.55)), L(LIFT.boot)),
   };
   return C;
 }
@@ -2045,6 +2119,9 @@ function F(id, arch, height, pal, params, tiers, extra = {}) {
     id, arch, height, palette: pal, params,
     ranged: !!extra.ranged, flying: !!extra.flying,
     aspect: extra.aspect || 0,
+    // Scales the minimum-luminance lift: <1 lets a family sit darker than the
+    // standard floor (the goblin must read darker than the turf, spec §18).
+    lift: extra.lift === undefined ? 1 : extra.lift,
     suffixes: extra.suffixes || ['A', 'B', 'C'],
     tiers: tiers.map((t, i) => ({
       name: t[0], level: t[1] || 1, hp: t[2] || 1,
@@ -2274,18 +2351,20 @@ F('Ghost', 'biped', 200,
 // on), the rags are a warm tan that cannot be mistaken for the skin, and the
 // hunch is strong enough to change the silhouette rather than just the pose.
 F('Goblin', 'biped', 172,
-  // A goblin is seen against lit grass at #4C6A2C-#7A9048, so a mid grass-green
-  // skin makes it vanish into the ground cover. MM6's goblin is a *darker*,
-  // yellower green than the turf with light tan rags, which is what gives it a
-  // readable silhouette and a light accent at the waist.
-  { skin: ['foliage', 9], skin2: ['foliage', 6], cloth: ['sand', 10], cloth2: ['dirt', 7], metal: ['stone', 9], horn: ['plaster', 10] },
+  // Spec §18: the goblin is a *darker, yellower* green than the turf it stands
+  // on - olive swamp tones, not grass green - with light tan rags for the
+  // waist accent. The reduced lift (extra.lift below) lets it sit under the
+  // standard luminance floor; the silhouette work is done by the pale rags,
+  // the club and the strong baked key light, not by out-brightening the lawn.
+  { skin: ['swamp', 8], skin2: ['swamp', 5], cloth: ['sand', 10], cloth2: ['dirt', 7], metal: ['stone', 9], horn: ['plaster', 10] },
   {
     headR: 0.105, legLen: 0.40, torsoH: 0.30, hunch: 0.30, ears: 'long', weapon: 'club',
     shoulderW: 0.26, hipW: 0.20, armLen: 0.46, stride: 1.1, tatter: 1, boots: 0,
   },
   [['Goblin', 4, 13],
     ['Goblin Shaman', 6, 21, { skin: ['swamp', 9], cloth: ['blood', 6], cloth2: ['sand', 11], glow: ['fire', 11], weapon: 'staff' }],
-    ['Goblin King', 10, 40, { skin: ['grass', 7], cloth: ['blood', 5], cloth2: ['blood', 7], metal: ['gold', 10], weapon: 'axe', helm: 'crown' }, 1.16]]);
+    ['Goblin King', 10, 40, { skin: ['swamp', 7], cloth: ['blood', 5], cloth2: ['blood', 7], metal: ['gold', 10], weapon: 'axe', helm: 'crown' }, 1.16]],
+  { lift: 0.78 });
 
 F('Guard', 'biped', 198,
   { skin: ['flesh', 5], body: ['stone', 8], cloth: ['sky', 6], cloth2: ['gold', 9], metal: ['stone', 11] },
@@ -2639,7 +2718,8 @@ export function buildCreature(kind, seed = 1) {
   if (!fam) throw new Error('unknown creature: ' + kind);
   const rnd = new Rand((seed >>> 0) ^ 0x9e3779b9);
   const shift = tier ? tier.paletteShift : {};
-  const C = resolveCols({ ...fam.palette, ...shift });
+  const C = resolveCols({ ...fam.palette, ...shift }, fam.lift);
+  setMaterialContext(C);
   const P = { ...ARCH_DEFAULTS[fam.arch], ...fam.params, ...pickParams(shift) };
   const H = fam.height * (tier ? tier.scale : 1) * rnd.float(0.96, 1.04);
   const rig = ARCH_BUILD[fam.arch](H, P, C, rnd);
@@ -2711,6 +2791,7 @@ export function buildNPC(archetype, seed = 1) {
   };
   if (P.body) { P.body = 0; C.body = C.metal; }
   else C.body = C.cloth;
+  setMaterialContext(C);
   // Proportion jitter keeps a crowd from looking cloned.
   P.legLen *= rnd.float(0.96, 1.04);
   P.shoulderW *= rnd.float(0.94, 1.08);

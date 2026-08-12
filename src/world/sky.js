@@ -87,6 +87,26 @@ export function quantiseShade(v) {
   return (8 * (31 - dim)) / 255;
 }
 
+/**
+ * THE shared time-of-day light curve, in sRGB space, pre-post-multiply.
+ *
+ * This is exactly the flat-ground factor of the terrain bake (terrain.js
+ * faceGrey with N = up): 1.0 through full daylight, rolling off toward 0.5
+ * across dawn/dusk as the sun drops below 0.3 elevation, and holding 0.5 at
+ * night. The shell's post pass applies the global timeTint() grey on top of
+ * the whole frame, so this factor is what terrain, flora and sprites must all
+ * share *before* that multiply - three different curves here is exactly the
+ * twilight patchwork bug. Anything that lights a sprite or a billboard batch
+ * outdoors samples this one function.
+ */
+export function daylightFactor(hours) {
+  const h = ((hours % 24) + 24) % 24;
+  const minutes = clamp((h - 5) * 60, 0, 960);
+  const sunY = Math.sin(minutes * Math.PI / 960);
+  const rel = sunY >= 0.30 ? 1 : Math.max(0, sunY) / 0.30;
+  return 0.5 + 0.5 * rel;
+}
+
 // --- cloud plate -----------------------------------------------------------
 
 const _skyTexCache = new Map();
@@ -98,9 +118,12 @@ const _skyTexCache = new Map();
 export function skyTexture(kind = 'plansky3') {
   const hit = _skyTexCache.get(kind);
   if (hit) return hit;
-  // 128 rather than 256: the plate is only ever seen heavily magnified or
-  // heavily tiled, and palettising 64k pixels costs a second of load time.
-  const S = 128;
+  // 256, the plansky's own resolution. The plate is seen heavily magnified at
+  // the zenith, and a 128px plate baked with an ordered dither turned every
+  // stretch into a field of magnified polka dots. Bake at full res with *no*
+  // dither - MM6's own sky bitmaps band, they do not dither - and let the
+  // cloud forms carry the image.
+  const S = 256;
   const p = new Pix(S, S);
   const seed = kind.length * 977 + 3;
   for (let y = 0; y < S; y++) {
@@ -113,19 +136,21 @@ export function skyTexture(kind = 'plansky3') {
       const mass = tileFbm2(u * 3.2, v * 3.2, 3, 4, 0.52, seed);
       const erode = tileFbm2(u * 8, v * 8, 8, 3, 0.5, seed + 29);
       const n = mass * 0.78 + erode * 0.22;
-      const cloud = smoothstep(0.50, 0.63, n);          // tight = separate forms
-      const core = smoothstep(0.58, 0.74, n);           // bright cumulus tops
+      const cloud = smoothstep(0.47, 0.60, n);          // tight = separate forms
+      const core = smoothstep(0.56, 0.72, n);           // bright cumulus tops
       // A light, slightly warm daylight blue. The grey multiply only ever
       // darkens from here, so the plate has to start bright.
-      const base = rampSample('sky', 0.90 + erode * 0.08);
-      let lit = mixC(base, [214, 220, 228], cloud);
-      lit = mixC(lit, [252, 251, 245], core * 0.85);
+      const base = rampSample('sky', 0.86 + erode * 0.10);
+      let lit = mixC(base, [216, 222, 230], cloud);
+      lit = mixC(lit, [252, 251, 245], core * 0.9);
       // Shade the undersides so the banks read as volumes.
-      const under = smoothstep(0.44, 0.58, tileFbm2(u * 3.2 + 0.06, v * 3.2 + 0.10, 3, 4, 0.52, seed));
-      p.setArr(x, y, scaleC(lit, 0.93 + 0.11 * under));
+      const under = smoothstep(0.42, 0.58, tileFbm2(u * 3.2 + 0.06, v * 3.2 + 0.10, 3, 4, 0.52, seed));
+      const shade = smoothstep(0.40, 0.55, mass) * (1 - core);
+      lit = mixC(lit, [168, 176, 190], shade * 0.35);
+      p.setArr(x, y, scaleC(lit, 0.92 + 0.13 * under));
     }
   }
-  const tex = toTexture(p, { dither: 12, repeat: true, mips: true, magNearest: false });
+  const tex = toTexture(p, { dither: 0, repeat: true, mips: true, magNearest: false });
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   _skyTexCache.set(kind, tex);
   return tex;
@@ -216,16 +241,11 @@ const SKY_FRAG = /* glsl */`
   varying vec3 vRay;
   varying vec2 vScreen;
 
-  // The cloud plate is sRGB-tagged, so the sample below is decoded to linear on
-  // fetch, and uHaze is authored in sRGB and stored linear - but a custom shader
-  // gets no matching encode on the way out, and the render target is sRGB. Left
-  // alone the whole sky leaves through the sRGB->linear curve, which is why a
-  // dusk sky measured 39/255 where the ground beside it measured 79.
-  vec3 toSRGB(vec3 v) {
-    return mix(pow(max(v, vec3(0.0)), vec3(0.41666)) * 1.055 - 0.055, v * 12.92,
-               vec3(lessThanEqual(v, vec3(0.0031308))));
-  }
-
+  // The cloud plate is sRGB-tagged (decoded to linear on fetch), uHaze is
+  // stored linear, and the render target is an SRGB8 attachment whose
+  // *hardware* encodes on write - so this shader stays entirely in linear.
+  // A manual encode on top of that ran the whole sky through the sRGB curve
+  // twice and bleached the cloud forms into a white sheet.
   void main() {
     vec3 d = normalize(vRay);
     // Screen-space distance to the horizon, in pixels, for the fade band.
@@ -245,11 +265,11 @@ const SKY_FRAG = /* glsl */`
       float band = 1.0 - smoothstep(0.0, uBandPx, horizonPx);
       float broad = 1.0 - smoothstep(0.0, uBandPx * 4.5, horizonPx);
       float f = clamp(band * 0.97 + broad * 0.45, 0.0, 1.0);
-      gl_FragColor = vec4(toSRGB(mix(c, uHaze, f)), 1.0);
+      gl_FragColor = vec4(mix(c, uHaze, f), 1.0);
     } else {
       // Below the horizon: solid haze fill. Terrain covers most of it; what is
       // left is the colour the world dissolves into.
-      gl_FragColor = vec4(toSRGB(uHaze), 1.0);
+      gl_FragColor = vec4(uHaze, 1.0);
     }
   }`;
 
@@ -393,19 +413,23 @@ export function buildSky(scene, opts = {}) {
       : (state.tod < 6 ? 6 - state.tod : state.tod >= 20 ? state.tod - 20 : 0);
     const cap = 216 / 255;
 
+    // The plate's grey luminance. Spec §4b/§9: MM6's distance haze is the
+    // time-of-day *grey* - objects fade toward grey/black, never toward a pale
+    // blue-white. The region's colour cast stays on the sky quad; the fog
+    // target itself is neutral.
+    const plateLum = 0.299 * state.plate.r + 0.587 * state.plate.g + 0.114 * state.plate.b;
+
     if (use.on) {
-      // GetLevelFogColor is a pure neutral grey, but applying it raw turns a
-      // black swamp into a snowfield because the sky above it still carries the
-      // region's colour cast. Pull it most of the way toward the region haze so
-      // fog and sky agree and each map keeps its character.
+      // Foggy day: GetLevelFogColor's neutral grey, #C8C8C8 in daylight down
+      // to #1F1F1F at night, with only a whisper of the region's cast so a
+      // swamp's wall of fog is not the same picture as an ice coast's.
       const dv = clamp(density, 0, 1);
       const v = ((1 - dv) * 200 + dv * 31) / 255;
-      const k = 0.62;
-      // Authored in sRGB; three's working space is linear, so say so.
+      const grey = lerpN(v, plateLum, 0.35);
       fog.color.setRGB(
-        lerpN(v, state.plate.r * g, k),
-        lerpN(v, state.plate.g * g, k),
-        lerpN(v * 1.01, state.plate.b * g, k),
+        lerpN(grey, state.plate.r * g, 0.18),
+        lerpN(grey, state.plate.g * g, 0.18),
+        lerpN(grey, state.plate.b * g, 0.18),
         THREE.SRGBColorSpace,
       );
       fog.near = use.weak;
@@ -414,14 +438,17 @@ export function buildSky(scene, opts = {}) {
       // the sky both end in the same grey wall.
       state.haze.copy(fog.color);
     } else {
-      // Clear day: the world fades toward the horizon haze, which is the cloud
-      // plate's own mean tinted exactly like the sky quad above it. Using the
-      // identical colour for fog target and sub-horizon fill is what makes the
-      // seam disappear; fading toward black instead leaves a dark rim.
-      state.haze.setRGB(state.plate.r * g, state.plate.g * g, state.plate.b * g, THREE.SRGBColorSpace);
-      const maxA = Math.min(cap, 0.58);
+      // Clear day: distance darkening only. The fade target is the neutral
+      // grey of the plate's luminance (the post pass darkens it with the rest
+      // of the frame, so one value serves the whole day), and the *amount* of
+      // haze follows the time-of-day curve: at 13:00 the spec says #FFFFFF -
+      // no haze at all - so the ramp starts near the far clip and barely
+      // saturates; toward dusk it pulls in and deepens.
+      state.haze.setRGB(plateLum * g, plateLum * g, plateLum * g, THREE.SRGBColorSpace);
+      const dayness = clamp((state.tint - 0.372) / (1 - 0.372), 0, 1);
       fog.color.copy(state.haze);
-      fog.near = SHADEMIST_DIST * 0.75;
+      fog.near = lerpN(SHADEMIST_DIST * 0.7, FAR_CLIP * 0.85, dayness);
+      const maxA = Math.min(cap, lerpN(0.58, 0.12, dayness));
       fog.far = fog.near + (FAR_CLIP - fog.near) / maxA;
     }
     mat.uniforms.uHaze.value.copy(state.haze);

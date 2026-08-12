@@ -635,18 +635,22 @@ function tRoadDirt() {
 }
 
 function tRoadCobble() {
+  // Spec §11: irregular rounded cobbles ~8-10 px across with *dark* mortar
+  // (#6E6A62-#A09A8E over #4A463E). Low warp and low dome keep each stone a
+  // crisp rounded pebble instead of the 30-60 px smears the old settings
+  // blurred into.
   const p = P();
   cobbleFill(p, {
-    per: 8, seed: 271, colDark: [98, 90, 78], colLite: [164, 154, 136],
-    mortar: [78, 72, 60], jitter: 1.0, gap: 0.18, dome: 0.34, warp: 0.4, rim: 0.28,
+    per: 8, seed: 271, colDark: [108, 104, 96], colLite: [162, 156, 142],
+    mortar: [58, 54, 46], jitter: 1.0, gap: 0.24, dome: 0.26, warp: 0.14, rim: 0.34,
   });
   // grit and moss settled in the joints
   paint(p, (x, y) => {
-    const t = smoothstep(0.62, 0.82, nz(x, y, 3, 277, 3, 0.6));
+    const t = smoothstep(0.66, 0.86, nz(x, y, 3, 277, 3, 0.6));
     if (t <= 0) return null;
-    return mixC(p.get(x, y), [72, 82, 46], t * 0.4);
+    return mixC(p.get(x, y), [66, 74, 44], t * 0.32);
   });
-  grit(p, 180, 281);
+  grit(p, 140, 281);
   return p;
 }
 
@@ -1232,8 +1236,11 @@ function tWallBrick() {
 function tWallStoneBlock() {
   const p = P();
   const seed = 769;
+  // Spec §12 grey stone block: #5E5E58-#9A9A90 with #3C3C38 joints - believable
+  // ashlar means mid-grey stones over genuinely dark mortar, not pale blocks in
+  // pale beds.
   const rows = 4, bh = 64 / rows;
-  const colDk = [80, 72, 58], colLt = [188, 178, 152], mortar = [100, 92, 74];
+  const colDk = [86, 84, 76], colLt = [156, 152, 138], mortar = [62, 60, 52];
   // per-course bed offset and per-course block count, both fixed
   const bedOff = [], nbOf = [], shiftOf = [];
   for (let r = 0; r < rows; r++) {
@@ -1312,8 +1319,10 @@ function ashlarWall(o) {
 }
 
 const tWallCastle = () => ashlarWall({
-  rows: 3, cols: 2, seed: 787, colA: [114, 108, 92], colB: [178, 170, 148],
-  mortar: [92, 86, 72], streak: 0.3,
+  // Spec §12 castle stone: #6A6A60-#A8A89C. Darker mortar and a stronger
+  // streak so a keep reads as weathered ashlar, not a pale blockout.
+  rows: 3, cols: 2, seed: 787, colA: [100, 98, 88], colB: [166, 162, 148],
+  mortar: [68, 66, 58], streak: 0.36,
 });
 const tWallCastleDark = () => ashlarWall({
   rows: 3, cols: 2, seed: 797, colA: [72, 68, 58], colB: [126, 120, 104],
@@ -2938,7 +2947,8 @@ const TONE = {
   dirt: [70, 124, 0.06, 0.14],
   mud: [58, 106, 0.08, 0.12],
   road_dirt: [76, 130, 0.10, 0.07],
-  road_cobble: [70, 162, 0.12, 0.09],
+  // cobbles #6E6A62-#A09A8E over #4A463E mortar: the low end is the mortar
+  road_cobble: [68, 152, 0.12, 0.05],
   sand: [158, 198, 0.16, 0.03],
   sand_dune: [152, 196, 0.14, 0.03],
   snow: [198, 244, 0.06, -0.02],
@@ -2960,9 +2970,11 @@ const TONE = {
   wall_plaster: [158, 212, 0.14, 0.04],
   wall_timber: [58, 216, 0.06, 0.05],
   wall_brick: [72, 168, 0.06, 0.05],
-  wall_stone_block: [78, 168, 0.08, 0.14],
-  wall_castle: [98, 172, 0.12, 0.13],
-  wall_castle_dark: [66, 132, 0.12, 0.13],
+  // §12: stone block #5E5E58-#9A9A90 (joints darker), castle #6A6A60-#A8A89C.
+  // Pulled down out of the pale blockout range and given real joint contrast.
+  wall_stone_block: [58, 150, 0.08, 0.06],
+  wall_castle: [66, 160, 0.10, 0.05],
+  wall_castle_dark: [52, 126, 0.12, 0.06],
   // spec §12 timber runs #5A4028-#8C6844; a brighter band turns the boards
   // orange and pushes them out of the palette's wood ramp
   wall_wood_plank: [44, 122, 0.10, 0.05],

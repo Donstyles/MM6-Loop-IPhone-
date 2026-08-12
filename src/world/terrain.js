@@ -230,6 +230,75 @@ const FALLBACK = {
 /** Ids we had to paint ourselves, so a preview can report coverage gaps. */
 export const missingTextureIds = [];
 
+// --- tile transition overlays -----------------------------------------------
+//
+// MM6's tile table carries ~46 hand-drawn transition variants per tileset pair
+// (§6/§11) - grass never meets dirt on a hard sawtooth line. We synthesise the
+// same effect: where two tile families meet, the higher-priority texture is
+// overlaid onto the lower tile as a quad whose alpha is a dithered, irregular
+// border band. One overlay texture per texture id, edge along v=1; the quad's
+// UVs rotate it to whichever side needs it, so a whole map costs a handful of
+// extra materials.
+
+// Which family wins the border. Roads are literally transition tiles in MM6
+// ("painted onto the terrain"), so they always overlay their surroundings.
+const EDGE_RANK = {
+  road_cobble: 6, road_dirt: 5, gravel: 4, farmland: 3.5,
+  dirt: 3, mud: 3, forest_floor: 2.6, swamp_muck: 2.4, sand: 2.2, beach_wet: 2.2,
+  snow: 2.1, snow_rock: 2.1, tundra: 2.05, ash: 2.05, volcanic_rock: 2.02,
+  grass: 2, grass_dry: 2, grass_lush: 2, sand_dune: 2.2,
+};
+function edgeRank(id) { return EDGE_RANK[id] || 0; }
+
+const _edgeTexCache = new Map();
+/**
+ * The texture id's bitmap with a dithered edge-band alpha along v=1 (fading
+ * out by mid-tile). Hard 1-bit alpha, irregular noise boundary, Bayer dither
+ * across the falloff - the same vocabulary as MM6's transition tiles.
+ */
+function edgeOverlayTexture(id) {
+  const hit = _edgeTexCache.get(id);
+  if (hit) return hit;
+  const S = 64;
+  const c = makeCanvas(S, S);
+  const g = ctx2d(c);
+  try {
+    const img = getTexture(id).image;
+    if (img && img.width) g.drawImage(img, 0, 0, S, S);
+    else throw new Error('no image');
+  } catch (e) {
+    const spec = FALLBACK[id] || FALLBACK.dirt;
+    const p = new Pix(S, S);
+    for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) p.setArr(x, y, rampSample(spec.ramp, (spec.lo + spec.hi) * 0.5));
+    g.putImageData(p.toImageData(), 0, 0);
+  }
+  const d = g.getImageData(0, 0, S, S);
+  const B4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+  const seed = id.length * 733 + 11;
+  for (let y = 0; y < S; y++) {
+    // Canvas row 0 uploads as v=1 (flipY), which is where the band lives.
+    for (let x = 0; x < S; x++) {
+      // Coverage 1 at the shared edge, gone by ~45% across the tile, with a
+      // wandering boundary so the border is ragged rather than ruled.
+      const wob = (valueNoise2(x * 0.11, seed, seed) - 0.5) * 0.22
+        + (valueNoise2(x * 0.37, seed + 7, seed + 7) - 0.5) * 0.10;
+      const cov = clamp(1 - (y / S) / (0.34 + wob), 0, 1);
+      const keep = (B4[(y & 3) * 4 + (x & 3)] + 0.5) / 16 < cov * cov * 1.35;
+      if (!keep) d.data[(y * S + x) * 4 + 3] = 0;
+    }
+  }
+  g.putImageData(d, 0, 0);
+  const tex = new THREE.CanvasTexture(c);
+  tex.magFilter = THREE.NearestFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  _edgeTexCache.set(id, tex);
+  return tex;
+}
+
 function fallbackTexture(id) {
   const hit = _fallbackCache.get(id);
   if (hit) return hit;
@@ -758,16 +827,47 @@ export function buildTerrain(hm, opts = {}) {
     side: THREE.FrontSide,
   }));
 
+  // Lazily-built overlay materials, one per texture id that ever wins an edge.
+  const edgeMats = new Map();
+  const edgeMatFor = (texIdx) => {
+    let m = edgeMats.get(texIdx);
+    if (!m) {
+      m = new THREE.MeshBasicMaterial({
+        map: edgeOverlayTexture(hm.texIds[texIdx]),
+        vertexColors: true,
+        fog: true,
+        side: THREE.FrontSide,
+        alphaTest: 0.5,
+        // Coplanar with the base tile on purpose (a lifted quad shows daylight
+        // under its rim on a slope); the offset settles the depth fight.
+        polygonOffset: true,
+        polygonOffsetFactor: -1.5,
+        polygonOffsetUnits: -1.5,
+      });
+      edgeMats.set(texIdx, m);
+    }
+    return m;
+  };
+
   const chunksPerSide = Math.ceil(size / CHUNK_TILES);
   const chunks = [];
   const maxTiles = CHUNK_TILES * CHUNK_TILES;
-  // 6 verts per tile: two independent flat-shaded triangles.
-  const pos = new Float32Array(maxTiles * 6 * 3);
-  const uv = new Float32Array(maxTiles * 6 * 2);
-  const col = new Float32Array(maxTiles * 6 * 3);
+  // 6 verts per tile for the two flat-shaded base triangles, plus up to two
+  // 6-vert transition overlays per tile.
+  const pos = new Float32Array(maxTiles * 18 * 3);
+  const uv = new Float32Array(maxTiles * 18 * 2);
+  const col = new Float32Array(maxTiles * 18 * 3);
   const byTex = new Map();
 
   const UVS = [[0, 0], [1, 0], [1, 1], [0, 1]];
+  // Per-corner overlay UVs for a differing neighbour on each side; the band in
+  // the overlay texture lives along v=1, so the shared edge maps to v=1.
+  const EDGE_UV = [
+    { di: 0, dj: -1, uvs: [[0, 1], [1, 1], [1, 0], [0, 0]] },
+    { di: 0, dj: 1, uvs: [[0, 0], [1, 0], [1, 1], [0, 1]] },
+    { di: -1, dj: 0, uvs: [[0, 1], [0, 0], [1, 0], [1, 1]] },
+    { di: 1, dj: 0, uvs: [[0, 0], [0, 1], [1, 1], [1, 0]] },
+  ];
 
   for (let cj = 0; cj < chunksPerSide; cj++) {
     for (let ci = 0; ci < chunksPerSide; ci++) {
@@ -831,6 +931,74 @@ export function buildTerrain(hm, opts = {}) {
         groups.push({ start, count: vcount - start, tex: texIdx });
       }
 
+      // Transition overlays: wherever a higher-priority tile family borders a
+      // tile of this chunk, lay its dithered edge band over the shared edge so
+      // grass never meets cobbles on a raw sawtooth line.
+      const overlayByTex = new Map();
+      for (let j = tj0; j < tj1; j++) {
+        for (let i = ti0; i < ti1; i++) {
+          const cell = j * size + i;
+          const tIdx = hm.tileTex[cell];
+          if (tIdx === hm.cliffIndex) continue;
+          const myRank = edgeRank(hm.texIds[tIdx]);
+          let picks = null;
+          for (let d = 0; d < 4; d++) {
+            const e = EDGE_UV[d];
+            const ni = i + e.di, nj = j + e.dj;
+            if (ni < 0 || nj < 0 || ni >= size || nj >= size) continue;
+            const nIdx = hm.tileTex[nj * size + ni];
+            if (nIdx === tIdx || nIdx === hm.cliffIndex) continue;
+            const r = edgeRank(hm.texIds[nIdx]);
+            if (r <= myRank || r <= 0) continue;
+            (picks || (picks = [])).push([r, d, nIdx]);
+          }
+          if (!picks) continue;
+          picks.sort((a, b) => b[0] - a[0]);
+          for (let k = 0; k < Math.min(2, picks.length); k++) {
+            const pk = picks[k];
+            let list = overlayByTex.get(pk[2]);
+            if (!list) { list = []; overlayByTex.set(pk[2], list); }
+            list.push(cell, pk[1]);
+          }
+        }
+      }
+      for (const [nIdx, list] of overlayByTex) {
+        const start = vcount;
+        for (let li = 0; li < list.length; li += 2) {
+          const cell = list[li], d = list[li + 1];
+          const i = cell % size, j = (cell / size) | 0;
+          const x0 = hm.origin + i * tile, z0 = hm.origin + j * tile;
+          const h00 = hm.height[j * N + i], h10 = hm.height[j * N + i + 1];
+          const h11 = hm.height[(j + 1) * N + i + 1], h01 = hm.height[(j + 1) * N + i];
+          const P = [
+            [x0, h00, z0], [x0 + tile, h10, z0],
+            [x0 + tile, h11, z0 + tile], [x0, h01, z0 + tile],
+          ];
+          const cuv = EDGE_UV[d].uvs;
+          const tris = [[0, 3, 1], [1, 3, 2]];
+          for (const tri of tris) {
+            const a = P[tri[0]], b = P[tri[1]], c = P[tri[2]];
+            let nx = (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1]);
+            let ny = (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]);
+            let nz = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+            const il = 1 / (Math.hypot(nx, ny, nz) || 1);
+            nx *= il; ny *= il; nz *= il;
+            if (ny < 0) { nx = -nx; ny = -ny; nz = -nz; }
+            const ex = 2.4;
+            let lx = nx * ex, ly = ny, lz = nz * ex;
+            const li2 = 1 / (Math.hypot(lx, ly, lz) || 1);
+            faceInfo.push(lx * li2, ly * li2, lz * li2, 1, ny);
+            for (const vi of tri) {
+              pos[vp++] = P[vi][0]; pos[vp++] = P[vi][1]; pos[vp++] = P[vi][2];
+              uv[vu++] = cuv[vi][0]; uv[vu++] = cuv[vi][1];
+              col[vc++] = 1; col[vc++] = 1; col[vc++] = 1;
+              vcount++;
+            }
+          }
+        }
+        groups.push({ start, count: vcount - start, mat: edgeMatFor(nIdx) });
+      }
+
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.BufferAttribute(pos.slice(0, vp), 3));
       geo.setAttribute('uv', new THREE.BufferAttribute(uv.slice(0, vu), 2));
@@ -839,7 +1007,7 @@ export function buildTerrain(hm, opts = {}) {
       const mats = [];
       groups.forEach((g, gi) => {
         geo.addGroup(g.start, g.count, gi);
-        mats.push(materials[g.tex]);
+        mats.push(g.mat || materials[g.tex]);
       });
       geo.computeBoundingSphere();
 
@@ -929,6 +1097,7 @@ export function buildTerrain(hm, opts = {}) {
   function dispose() {
     for (const c of chunks) c.mesh.geometry.dispose();
     for (const m of materials) m.dispose();
+    for (const m of edgeMats.values()) m.dispose();
     if (water) { water.geometry.dispose(); water.material.dispose(); }
   }
 
@@ -973,7 +1142,10 @@ export function makeBillboardField(tex, instances, opts = {}) {
       map: { value: tex },
       uRight: { value: new THREE.Vector3(1, 0, 0) },
       uLight: { value: 1 },
-      fogColor: { value: new THREE.Color(opts.fogColor || 0x9ab4cc) },
+      // NOT `||`: black (0x000000) is a legitimate fog target - additive
+      // flames fade toward black - and the falsy fallback silently swapped it
+      // for pale blue, which is how dungeon flames fogged into blue wisps.
+      fogColor: { value: new THREE.Color(opts.fogColor === undefined ? 0x9ab4cc : opts.fogColor) },
       fogNear: { value: opts.fogNear === undefined ? 2048 : opts.fogNear },
       fogFar: { value: opts.fogFar || FAR_CLIP },
     },
@@ -1002,16 +1174,10 @@ export function makeBillboardField(tex, instances, opts = {}) {
       varying vec2 vUv;
       varying vec3 vTint;
       varying float vFog;
-      // The atlas is sRGB-tagged, so the sample above is decoded to linear on
-      // fetch - but a custom shader gets no matching encode on the way out, and
-      // the render target is sRGB. Without this, every flora billboard renders
-      // through the sRGB->linear curve while the buildings beside them (which
-      // use a built-in material, and so do get the encode) do not, and the
-      // trees come out visibly darker than the walls they stand against.
-      vec3 toSRGB(vec3 v) {
-        return mix(pow(max(v, vec3(0.0)), vec3(0.41666)) * 1.055 - 0.055, v * 12.92,
-                   vec3(lessThanEqual(v, vec3(0.0031308))));
-      }
+      // The atlas is sRGB-tagged (decoded to linear on fetch) and the render
+      // target is an SRGB8 attachment, so the hardware re-encodes on write. A
+      // manual encode here ran every tree through the sRGB curve twice - the
+      // "ghost wood" of near-white birches was exactly that.
       void main() {
         vec4 c = texture2D(map, vUv);
         // 1-bit alpha: MM6 sprites never blend edges.
@@ -1019,7 +1185,7 @@ export function makeBillboardField(tex, instances, opts = {}) {
         // Same greyscale multiply the world uses, so flora sits in the scene.
         c.rgb *= vTint * uLight;
         float f = clamp((vFog - fogNear) / (fogFar - fogNear), 0.0, 1.0);
-        gl_FragColor = vec4(toSRGB(mix(c.rgb, fogColor, f)), 1.0);
+        gl_FragColor = vec4(mix(c.rgb, fogColor, f), 1.0);
       }`,
     transparent: false,
     depthWrite: true,
@@ -1106,6 +1272,10 @@ function paintTrunk(p, mask, o) {
   const {
     y0, y1, cx0, cx1, w0, w1, ramp: rampName = 'wood',
     base = 0.30, flare = 0.55, sway = 0, seed = 1, steps = 6,
+    // Ceiling on the ramp position. Bark noise stacks up to +0.8 over `base`,
+    // which ran pale trunks (birch on the plaster ramp) to the top of the ramp
+    // and read near-white against the haze. Spec wants mid values.
+    cap = 1,
   } = o;
   const span = Math.max(1, y1 - y0);
   const knots = [];
@@ -1132,7 +1302,7 @@ function paintTrunk(p, mask, o) {
         const d = dx * dx + dy * dy;
         if (d < 1) l += d < 0.42 ? -0.26 : 0.16;     // dark core, lit collar
       }
-      fput(p, x, y, rampSample(rampName, qb(l, steps)));
+      fput(p, x, y, rampSample(rampName, Math.min(cap, qb(l, steps))));
       const i = (y | 0) * p.w + (x | 0);
       if (x >= 0 && y >= 0 && x < p.w && y < p.h) mask[i] = 2;
     }
@@ -1146,7 +1316,7 @@ function paintTrunk(p, mask, o) {
  * along its length instead and it comes out as a dark plank.
  */
 function paintLimb(p, mask, ax, ay, bx, by, w0, w1, o = {}) {
-  const { ramp: rampName = 'wood', base = 0.24, seed = 1, steps = 6 } = o;
+  const { ramp: rampName = 'wood', base = 0.24, seed = 1, steps = 6, cap = 1 } = o;
   const len = Math.max(1e-3, Math.hypot(bx - ax, by - ay));
   const ux = (bx - ax) / len, uy = (by - ay) / len;
   const px0 = -uy, py0 = ux;                       // perpendicular
@@ -1161,7 +1331,7 @@ function paintLimb(p, mask, ax, ay, bx, by, w0, w1, o = {}) {
         if (dx * dx + dy * dy > (k + 0.35) * (k + 0.35)) continue;
         const side = k > 0 ? clamp((dx * px0 + dy * py0) / k, -1, 1) * sgn : 0;
         const px = Math.round(x + dx), py = Math.round(y + dy);
-        fput(p, px, py, rampSample(rampName, qb(barkTone(px, py, side, base, seed), steps)));
+        fput(p, px, py, rampSample(rampName, Math.min(cap, qb(barkTone(px, py, side, base, seed), steps))));
         if (px >= 0 && py >= 0 && px < p.w && py < p.h) mask[py * p.w + px] = 2;
       }
     }
@@ -1275,13 +1445,15 @@ function paintBroadleaf(p, mask, rnd, o) {
   const crownY = S * (o.crownY || 0.50);
   const trunkTop = crownY + S * 0.04;
 
-  // Trunk.
+  // Trunk. Pale (birch) bark is capped mid-ramp: spec wants a mid-grey trunk
+  // with dark lenticels, not a white pillar brighter than the sky haze.
   paintTrunk(p, mask, {
     y0: Math.round(trunkTop), y1: S - 1, cx0: cx, cx1: cx + (o.lean || 0) * S,
     w0: S * (o.wTop || 0.024), w1: S * (o.wBot || 0.042),
     base: o.barkBase === undefined ? 0.30 : o.barkBase,
     flare: 0.44, sway: S * 0.012, seed: o.seed, steps: 6,
     ramp: o.pale ? 'plaster' : 'wood',
+    cap: o.pale ? 0.64 : 0.86,
   });
   if (o.pale) {
     // Birch: horizontal lenticel bands scored across the white bark.
@@ -1308,13 +1480,15 @@ function paintBroadleaf(p, mask, rnd, o) {
     const bx = cx + Math.cos(a) * len * (o.spread || 1.25);
     const by = trunkTop + Math.sin(a) * len - S * 0.02;
     paintLimb(p, mask, cx + rnd.float(-1, 1), trunkTop + S * rnd.float(0.01, 0.09),
-      bx, by, S * 0.028, S * 0.010, { seed: o.seed + i, base: o.pale ? 0.34 : 0.22, ramp: o.pale ? 'plaster' : 'wood' });
+      bx, by, S * 0.028, S * 0.010,
+      { seed: o.seed + i, base: o.pale ? 0.30 : 0.22, ramp: o.pale ? 'plaster' : 'wood', cap: o.pale ? 0.60 : 0.86 });
     // A second-order fork off the tip: two twigs, so the branch structure is
     // still legible where it emerges from the foliage.
     for (let k = 0; k < 2; k++) {
       const a2 = a + (k ? 0.55 : -0.55) + rnd.float(-0.2, 0.2);
       paintLimb(p, mask, bx, by, bx + Math.cos(a2) * S * 0.11, by + Math.sin(a2) * S * 0.11,
-        S * 0.010, S * 0.005, { seed: o.seed + i * 3 + k, base: 0.20, ramp: o.pale ? 'plaster' : 'wood' });
+        S * 0.010, S * 0.005,
+        { seed: o.seed + i * 3 + k, base: 0.20, ramp: o.pale ? 'plaster' : 'wood', cap: o.pale ? 0.60 : 0.86 });
     }
     tips.push([bx, by]);
   }
@@ -1499,10 +1673,12 @@ function paintPalm(p, mask, rnd, o) {
 function paintDeadTree(p, mask, rnd, o) {
   const S = p.w, cx = S * 0.5;
   const topY = S * 0.34;
+  // Weathered dead wood sits low on the ramp; capping it keeps the trunk a
+  // grey-brown snag instead of blown-out driftwood.
   paintTrunk(p, mask, {
     y0: Math.round(topY), y1: S - 1, cx0: cx + S * 0.03, cx1: cx,
-    w0: S * 0.020, w1: S * 0.052, base: 0.22, flare: 0.7, sway: S * 0.02,
-    seed: o.seed, steps: 6,
+    w0: S * 0.020, w1: S * 0.052, base: 0.20, flare: 0.7, sway: S * 0.02,
+    seed: o.seed, steps: 6, cap: 0.72,
   });
   const forks = [];
   for (let i = 0; i < 5; i++) {
@@ -1616,9 +1792,11 @@ function paintRock(p, mask, rnd, o) {
         const nz = valueNoise2(px * 0.30, py * 0.30, o.seed + i * 11);
         if (d2 > 0.80 + (nz - 0.5) * 0.60) continue;
         // Flat facets rather than a shaded ball: quantise a low-frequency noise
-        // into four planes and shade each one whole.
+        // into four planes and shade each one whole. Top of the range is held
+        // to the mid-greys (§12 stone runs #5E5E58-#9A9A90) - the old 0.70
+        // ceiling read as whitewashed boulders on a clear day.
         const facet = Math.round(valueNoise2(px * 0.11, py * 0.13, o.seed + i) * 3) / 3;
-        const l = 0.08 + 0.62 * clamp(0.46 - dx * 0.26 - dy * 0.40 + (facet - 0.5) * 1.05, 0, 1);
+        const l = 0.07 + 0.50 * clamp(0.46 - dx * 0.26 - dy * 0.40 + (facet - 0.5) * 1.05, 0, 1);
         fput(p, px, py, rampSample(base, qb(l, 5)));
         mask[py * p.w + px] = 1;
       }
@@ -1665,7 +1843,7 @@ export function floraTexture(kind, seed = 1) {
         // as a ghost wood - brighter than the meadow in front of it and than
         // the sky behind it.
         ...o, pale: 1, leaf: 'grass', crownY: 0.44, crownR: 0.30, branches: 4,
-        ring: 5, wTop: 0.016, wBot: 0.026, lo: 0.30, hi: 0.74, holes: 0.36, spread: 1.0,
+        ring: 5, wTop: 0.016, wBot: 0.026, lo: 0.20, hi: 0.55, holes: 0.28, spread: 1.0,
       });
       break;
     case 'willow':

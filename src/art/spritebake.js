@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { PALETTE, nearestIndex } from '../core/palette.js';
-import { makeCanvas, ctx2d } from './texcanvas.js';
-import { ACTIONS, CREATURE_DEFS, CREATURE_FAMILIES, buildCreature, buildNPC } from './models/creatures.js';
+import { makeCanvas, ctx2d, Pix } from './texcanvas.js';
+import { tileFbm2, tileNoise2 } from '../core/rng.js';
+import { ACTIONS, CREATURE_DEFS, CREATURE_FAMILIES, MAT_CLASS_COUNT, buildCreature, buildNPC } from './models/creatures.js';
 import { FLORA_DEFS, buildFlora } from './models/flora.js';
 import { PROP_DEFS, buildProp } from './models/props.js';
 
@@ -63,12 +64,102 @@ const LIGHT_D = {
   keyDir: [-0.52, 0.60, 0.61],
   fillDir: [0.66, -0.16, 0.34],
   fillCol: [0.34, 0.40, 0.52],
-  ambient: 0.32,
-  key: 0.74,
+  ambient: 0.30,
+  key: 0.80,
   fill: 0.17,
-  wrap: 0.30,   // how much of the key wraps past the terminator
-  bands: 0,
+  wrap: 0.26,   // how much of the key wraps past the terminator
+  // Spec §2/§9: MM6 shades by swapping between 32 pre-darkened palettes, so
+  // its gradients band in 32 discrete steps. Quantising the baked light onto
+  // that ladder (before the 256-colour snap) is what makes a sprite read as a
+  // palettised pre-render instead of a smooth modern shade.
+  bands: 32,
 };
+
+// --- material detail atlas ---------------------------------------------------
+//
+// Per-class surface texture, one 64px row per MAT_CLASS: skin mottling, cloth
+// weave, metal glint bands, bone striations, wood grain, hair streaks, and a
+// gentle matte fallback. Stored as an RGB *multiplier* map around 128 (=1.0)
+// and sampled triplanar in object space by the bake shader, so a turntable's
+// eight octants show one coherent painted surface. This - not the geometry -
+// is what separates a 1998 pre-rendered sprite from a flat voxel toy.
+
+let _matTex = null;
+function matDetailTexture() {
+  if (_matTex) return _matTex;
+  const S = 64, N = MAT_CLASS_COUNT;
+  const p = new Pix(S, S * N);
+  const put = (row, x, y, mr, mg, mb) => {
+    p.set(x, row * S + y,
+      Math.max(0, Math.min(255, mr * 127.5)),
+      Math.max(0, Math.min(255, mg * 127.5)),
+      Math.max(0, Math.min(255, mb * 127.5)));
+  };
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const u = x / S, v = y / S;
+      { // 0 skin: organic mottle, big soft blotches with a fine break-up, the
+        // dark patches pulled slightly green the way hide discolours.
+        const big = tileFbm2(u * 5, v * 5, 5, 3, 0.55, 101) - 0.5;
+        const fine = tileFbm2(u * 16, v * 16, 16, 2, 0.5, 103) - 0.5;
+        const m = 1 + big * 0.42 + fine * 0.15;
+        put(0, x, y, m * (1 - Math.max(0, -big) * 0.10), m * (1 + big * 0.05), m * (1 - Math.max(0, big) * 0.16));
+      }
+      { // 1 cloth: patchy wear, soft fold shadows and faint stitch lines. The
+        // weave itself stays *quiet* - a strong texel checker turned every
+        // cape into a gingham tablecloth at sprite magnification.
+        const weave = ((x + y) % 2 === 0 ? -0.020 : 0.020);
+        const patch = tileFbm2(u * 3, v * 3, 3, 2, 0.5, 107) - 0.5;
+        const fold = tileNoise2(u * 5, 0.5, 5, 106) - 0.5;
+        let m = 1 + weave + patch * 0.14 + fold * 0.12;
+        if (y % 16 === 7) m *= 0.92;
+        put(1, x, y, m, m, m);
+      }
+      { // 2 metal: brushed horizontal banding with hard glint and seam rows.
+        const bn = tileNoise2(v * 7, 0.5, 7, 109) - 0.5;
+        const g1 = tileNoise2(v * 13, 3.5, 13, 111);
+        let m = 1 + bn * 0.12;
+        if (g1 > 0.82) m = 1.32;
+        else if (g1 < 0.12) m = 0.78;
+        put(2, x, y, m, m, m * 1.02);
+      }
+      { // 3 bone: long striations, occasional dark crack.
+        const st = tileNoise2(u * 16, 0.5, 16, 115) - 0.5;
+        const mod = tileFbm2(u * 4, v * 4, 4, 2, 0.5, 116);
+        let m = 1 + st * 0.20 * (0.6 + 0.8 * mod) + (tileFbm2(u * 12, v * 12, 12, 2, 0.5, 118) - 0.5) * 0.07;
+        if (tileNoise2(u * 24, 1.5, 24, 117) > 0.90) m *= 0.80;
+        put(3, x, y, m, m, m * 0.97);
+      }
+      { // 4 wood: strong grain with dark seams.
+        const gr = tileNoise2(u * 10, 0.5, 10, 119) - 0.5;
+        let m = 1 + gr * 0.30 + (tileFbm2(u * 14, v * 14, 14, 2, 0.5, 120) - 0.5) * 0.09;
+        if (tileNoise2(u * 20, 2.5, 20, 121) > 0.88) m *= 0.76;
+        put(4, x, y, m, m * 0.98, m * 0.94);
+      }
+      { // 5 hair: dense streaks.
+        const st = tileNoise2(u * 26, 0.5, 26, 123) - 0.5;
+        const m = 1 + st * 0.34 + (tileFbm2(u * 8, v * 8, 8, 2, 0.5, 124) - 0.5) * 0.10;
+        put(5, x, y, m, m, m);
+      }
+      { // 6 matte: the fallback - just enough value break-up to kill flatness.
+        const m = 1 + (tileFbm2(u * 6, v * 6, 6, 3, 0.5, 125) - 0.5) * 0.13;
+        put(6, x, y, m, m, m);
+      }
+    }
+  }
+  const tex = new THREE.CanvasTexture(p.toCanvas());
+  tex.magFilter = THREE.NearestFilter;
+  tex.minFilter = THREE.NearestFilter;
+  tex.generateMipmaps = false;
+  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.colorSpace = THREE.NoColorSpace;   // it is a multiplier map, not colour
+  // The shader indexes rows top-down; the default flipY would silently hand
+  // every class the wrong row (skin sampled the matte fallback).
+  tex.flipY = false;
+  tex.needsUpdate = true;
+  _matTex = tex;
+  return tex;
+}
 
 const VERT = `
 varying vec3 vN;
@@ -83,14 +174,19 @@ void main() {
 const VERT_VC = `
 attribute vec3 aColor;
 attribute float aEmissive;
+attribute float aMat;
 varying vec3 vN;
+varying vec3 vNo;
 varying vec3 vC;
 varying float vE;
+varying float vM;
 varying vec3 vP;
 void main() {
   vN = normalize(normalMatrix * normal);
+  vNo = normal;
   vC = aColor;
   vE = aEmissive;
+  vM = aMat;
   // Object space, so the surface texture rides with the model through all
   // eight octants instead of crawling across it as the turntable turns.
   vP = position;
@@ -107,26 +203,34 @@ uniform float uFill;
 uniform float uWrap;
 uniform float uBands;
 uniform float uHeight;
+uniform sampler2D uMatTex;
+uniform float uMatN;
+uniform float uMatScale;
 varying vec3 vN;
+varying vec3 vNo;
 varying vec3 vC;
 varying float vE;
+varying float vM;
 varying vec3 vP;
 
-// Surface grain. A pre-rendered MM6 monster was a *textured* model, so no
-// large flat plane on it ever came out as one flat colour - the hide, the
-// mail, the cloth all carried value break-up that the palettiser then banded.
-// Two octaves of object-space value noise put that back without needing UVs.
-float sHash(vec3 p) {
-  return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
-}
-float sNoise(vec3 p) {
-  vec3 i = floor(p), f = fract(p);
-  f = f * f * (3.0 - 2.0 * f);
-  return mix(
-    mix(mix(sHash(i), sHash(i + vec3(1, 0, 0)), f.x),
-        mix(sHash(i + vec3(0, 1, 0)), sHash(i + vec3(1, 1, 0)), f.x), f.y),
-    mix(mix(sHash(i + vec3(0, 0, 1)), sHash(i + vec3(1, 0, 1)), f.x),
-        mix(sHash(i + vec3(0, 1, 1)), sHash(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+// Per-material-class surface texture: skin mottle, cloth weave, metal glint
+// bands, bone striations - one row of uMatTex per class, sampled triplanar in
+// object space so the paint rides the model through all eight octants. A
+// pre-rendered MM6 monster was a *textured* model; no large plane on it was
+// ever one flat colour.
+vec3 matDetail(vec3 p, vec3 n) {
+  float row = clamp(floor(vM + 0.5), 0.0, uMatN - 1.0);
+  vec3 w = abs(n);
+  w = w * w * w;
+  w /= (w.x + w.y + w.z + 1e-5);
+  float pad = 1.5 / 64.0;
+  vec2 ua = fract(p.zy * uMatScale);
+  vec2 ub = fract(p.xz * uMatScale);
+  vec2 uc = fract(p.xy * uMatScale);
+  vec3 c = texture2D(uMatTex, vec2(ua.x, (row + pad + ua.y * (1.0 - 2.0 * pad)) / uMatN)).rgb * w.x
+         + texture2D(uMatTex, vec2(ub.x, (row + pad + ub.y * (1.0 - 2.0 * pad)) / uMatN)).rgb * w.y
+         + texture2D(uMatTex, vec2(uc.x, (row + pad + uc.y * (1.0 - 2.0 * pad)) / uMatN)).rgb * w.z;
+  return c * 2.0;
 }
 
 void main() {
@@ -139,18 +243,17 @@ void main() {
   float k = max(nd, 0.0) * (1.0 - uWrap) + (nd * 0.5 + 0.5) * uWrap;
   float f = max(dot(N, uFillDir), 0.0);
   float s = uAmbient + uKey * k;
-  float grain = sNoise(vP * 0.075) * 0.62 + sNoise(vP * 0.26) * 0.38;
-  s *= 0.86 + grain * 0.28;
   // Height ramp. A turntable render keyed from above puts a bright shoulder and
   // crown on a figure and drops its belly, thighs and the undersides of its
   // limbs into shade. Without it a front-facing torso is one flat plane of one
   // colour, and a green monster on green grass has no silhouette at all.
   float up = clamp(vP.y / max(1.0, uHeight), 0.0, 1.0);
-  s *= 0.68 + 0.40 * up * up * (3.0 - 2.0 * up);
-  // uBands > 0 forces discrete shading; MM6 did not do this, the palette did,
-  // so the default is 0 and the gradient stays smooth until it is palettised.
+  s *= 0.72 + 0.36 * up * up * (3.0 - 2.0 * up);
+  // Quantise the light onto MM6's 32-step ladder (spec §2): the banding IS the
+  // 1998 look, and the 256-colour snap afterwards keeps it.
   if (uBands > 0.5) s = floor(s * uBands + 0.5) / uBands;
-  vec3 c = vC * s + uFillCol * (f * uFill) * (0.35 + vC);
+  vec3 albedo = vC * mix(matDetail(vP, normalize(vNo)), vec3(1.0), vE);
+  vec3 c = albedo * s + uFillCol * (f * uFill) * (0.35 + vC);
   c = mix(c, vC * (1.0 + 0.25 * s), vE);
   gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
 }`;
@@ -178,6 +281,9 @@ function celMaterial(L) {
       uWrap: { value: L.wrap === undefined ? 0.15 : L.wrap },
       uBands: { value: L.bands },
       uHeight: { value: 200 },
+      uMatTex: { value: matDetailTexture() },
+      uMatN: { value: MAT_CLASS_COUNT },
+      uMatScale: { value: 1 / 170 },
     },
     side: THREE.DoubleSide,   // wings, leaves and banners are single quads
     toneMapped: false,
@@ -223,6 +329,7 @@ function flattenModel(root, L) {
     const N = new Float32Array(total * 3);
     const C = new Float32Array(total * 3);
     const E = new Float32Array(total);
+    const M = new Float32Array(total);
     let o = 0;
     for (const part of parts) {
       const { m, geo } = part;
@@ -233,6 +340,7 @@ function flattenModel(root, L) {
       const hex = src.color ? src.color.getHex(THREE.SRGBColorSpace) : 0xffffff;
       const cr = ((hex >> 16) & 255) / 255, cg = ((hex >> 8) & 255) / 255, cb = (hex & 255) / 255;
       const em = (src.userData && src.userData.emissive) || 0;
+      const mc = src.userData && src.userData.mat !== undefined ? src.userData.mat : MAT_CLASS_COUNT - 1;
       const pos = geo.attributes.position, nor = geo.attributes.normal;
       for (let i = 0; i < pos.count; i++, o++) {
         _v3.fromBufferAttribute(pos, i).applyMatrix4(_m4);
@@ -241,6 +349,7 @@ function flattenModel(root, L) {
         N[o * 3] = _v3.x; N[o * 3 + 1] = _v3.y; N[o * 3 + 2] = _v3.z;
         C[o * 3] = cr; C[o * 3 + 1] = cg; C[o * 3 + 2] = cb;
         E[o] = em;
+        M[o] = mc;
       }
       if (part.tmp) geo.dispose();
       m.visible = false;
@@ -251,6 +360,7 @@ function flattenModel(root, L) {
     merged.setAttribute('normal', new THREE.BufferAttribute(N, 3));
     merged.setAttribute('aColor', new THREE.BufferAttribute(C, 3));
     merged.setAttribute('aEmissive', new THREE.BufferAttribute(E, 1));
+    merged.setAttribute('aMat', new THREE.BufferAttribute(M, 1));
     const mesh = new THREE.Mesh(merged, mat);
     mesh.frustumCulled = false;
     g.add(mesh);
@@ -451,8 +561,14 @@ export function bakeSheet(renderer, builderFn, opts = {}) {
 
   // --- render -------------------------------------------------------------
   const flat = flattenModel(model.root, L);
-  // Tell the height ramp how tall this model actually is, in its own units.
-  if (_celMat) _celMat.uniforms.uHeight.value = Math.max(1, m.maxY - Math.min(0, m.minY));
+  // Tell the height ramp how tall this model actually is, in its own units,
+  // and size the material detail so one 64-texel tile spans most of the body
+  // regardless of whether it is a 70-unit rat or a 620-unit dragon.
+  if (_celMat) {
+    const H = Math.max(1, m.maxY - Math.min(0, m.minY));
+    _celMat.uniforms.uHeight.value = H;
+    _celMat.uniforms.uMatScale.value = 1 / (H * 0.85);
+  }
   _pivot.clear();
   _pivot.add(model.root);
   _pivot.rotation.set(0, 0, 0);
@@ -738,9 +854,14 @@ export function bakeFloraSheet(renderer, kind, seed = 1, opts = {}) {
 
 export function bakePropSheet(renderer, kind, seed = 1, opts = {}) {
   const def = PROP_DEFS[kind];
+  // The world generator files some flora under the prop category
+  // ('bush_berry', 'flowers_white' garden dressing); route them to the flora
+  // baker instead of warning and dropping the sprite.
+  if (!def && FLORA_DEFS[kind]) return bakeFloraSheet(renderer, kind, seed, opts);
   return bakeSheet(renderer, (s) => buildProp(kind, s), {
     kind, seed, actions: STATIC_ACTIONS,
-    maxCellH: def && def.item ? 40 : cellBudget(def ? def.h : 100, 48, 112, 0.62),
+    maxCellH: def && def.cell ? def.cell
+      : def && def.item ? 40 : cellBudget(def ? def.h : 100, 48, 112, 0.62),
     maxAtlas: 1024, margin: 1.06, ...opts,
   });
 }

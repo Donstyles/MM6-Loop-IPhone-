@@ -5,7 +5,7 @@ import {
   flattenArea, carveRoad, stampTiles, makeBillboardField, floraTexture,
   getTexture, textureTint, texturesReady, TILE, MAP_TILES, PLAYABLE_EXTENT,
 } from './terrain.js';
-import { buildSky, FAR_CLIP, SHADE_DIST, timeTint, sunTerms, sunDirection, quantiseShade } from './sky.js';
+import { buildSky, FAR_CLIP, SHADE_DIST, timeTint, sunTerms, sunDirection, quantiseShade, daylightFactor } from './sky.js';
 import { generateTown } from './town.js';
 import { monstersInLevelRange, MONSTER_IDS } from '../game/monsters.js';
 import { MeshBuilder, buildRuins, buildHouse, addProp, materialFor, setBuildingLight } from './building.js';
@@ -859,14 +859,14 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
     },
     /** Grey world light at a point, for tinting sprites the same as geometry. */
     lightAt(x, y, z) {
-      const st = sunTerms(sky.state.tod);
+      // One shared curve (sky.daylightFactor): the exact flat-ground factor the
+      // terrain bake uses, so a sprite always matches the ground it stands on.
+      // The shell's post pass owns the global timeTint multiply - folding
+      // sky.state.tint in here as well double-darkened every sprite at night.
       const n = normalAt(hm, x, z);
       const sun = sunDirection(sky.state.tod);
       const ndl = Math.max(0, n.x * sun.x + n.y * sun.y + n.z * sun.z);
-      // Standing on a slope should not darken a sprite, so use a flat-ish
-      // normal blend; MM6 tints billboards by the sector/terrain light only.
-      const s = clamp(st.ambient * 0.75 + clamp(st.diffuse * (0.55 + 0.45 * ndl), 0, 0.85) * 0.68, 0, 1);
-      const g = quantiseShade(s) * sky.state.tint;
+      const g = quantiseShade(clamp(daylightFactor(sky.state.tod) * (0.90 + 0.10 * ndl), 0, 1));
       return { r: g, g, b: g };
     },
     /** Footstep / splash surface class under a point. */
@@ -907,10 +907,11 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
         }
         const f = opts.scene && opts.scene.fog;
         if (f) {
-          // Same curve the terrain and buildings bake with, so billboards sit
-          // in the scene rather than reading as cut-outs. Only night darkens;
-          // the shell owns the daytime multiply.
-          const light = sky.state.night ? Math.pow(0.38, 2.2) : 1;
+          // Same continuous curve the terrain bake uses (sky.daylightFactor),
+          // raised to 2.2 because the batches multiply in linear space. The old
+          // binary night?0.38:1 switch left every tree at full daylight from
+          // 19:00 to 20:59 while the ground dimmed around it.
+          const light = Math.pow(daylightFactor(sky.state.tod), 2.2);
           for (const b of flora.batches) b.mesh.userData.setFog(f.color, f.near, f.far, light);
           for (const t of towns) if (t.trees) t.trees.userData.setFog(f.color, f.near, f.far, light);
         }

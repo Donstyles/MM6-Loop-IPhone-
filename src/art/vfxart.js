@@ -954,19 +954,44 @@ function arrow(p, f, n, a, na) {
 }
 
 function bloodHit(p, f, n) {
+  // A real blood spray: a tight dark-red burst that throws directional
+  // droplet streaks which droop under gravity and land as spatter. Deep reds
+  // only - the top of the blood ramp is orange, and the old version lived
+  // there and dissolved into a checker stipple almost immediately.
   const t = f / (n - 1);
-  const cx = p.w / 2, cy = p.h / 2;
-  const R = p.w * 0.4;
-  blob(p, cx, cy, R * (0.3 + 0.45 * t), (v) => lut(LUT_BLOOD, 0.3 + v * 0.6),
-    { wob: 0.42, lobes: 6, phase: t * 3, bands: 4, seed: 2 });
+  const cx = p.w / 2, cy = p.h * 0.44;
+  const R = p.w * 0.42;
   const rnd = new Rand(5150);
-  for (let i = 0; i < 11; i++) {
-    const a = rnd.float(0, 6.28);
-    const d = R * (0.4 + 0.9 * t) * rnd.float(0.5, 1.2);
-    const x = cx + Math.cos(a) * d, y = cy + Math.sin(a) * d + R * t * t * 0.6;
-    blob(p, x, y, rnd.float(0.9, 2.3) * (1 - t * 0.35), (v) => lut(LUT_BLOOD, 0.35 + v * 0.5), { bands: 2 });
+  // Central splat, brightest at the wound, shrinking as the spray disperses.
+  const coreR = R * (0.30 - 0.17 * t);
+  if (coreR > 0.8) {
+    blob(p, cx, cy, coreR, (v) => lut(LUT_BLOOD, 0.22 + v * 0.34),
+      { wob: 0.5, lobes: 7, phase: 1 + t * 2, bands: 3, seed: 9 });
   }
-  if (t > 0.45) erode(p, 1 - (t - 0.45) / 0.55 * 0.85);
+  // Droplet streaks: radial, thrown further each frame, drooping.
+  for (let i = 0; i < 16; i++) {
+    const a = rnd.float(0, 6.283);
+    const sp = rnd.float(0.5, 1.15);
+    const d0 = R * (0.14 + 0.85 * t) * sp;
+    const d1 = d0 + R * (0.14 + 0.20 * sp) * (1 - t * 0.45);
+    const droop = R * t * t * 1.15 * rnd.float(0.6, 1.2);
+    const x0 = cx + Math.cos(a) * d0, y0 = cy + Math.sin(a) * d0 * 0.8 + droop * 0.7;
+    const x1 = cx + Math.cos(a) * d1, y1 = cy + Math.sin(a) * d1 * 0.8 + droop;
+    const shade = 0.18 + rnd.float(0, 0.26);
+    stroke(p, x0, y0, x1, y1, rnd.float(0.7, 1.5) * (1 - t * 0.35),
+      () => lut(LUT_BLOOD, shade), SET, rnd.float(0.4, 0.9));
+    blob(p, x1, y1, rnd.float(0.8, 1.8) * (1 - t * 0.3),
+      (v) => lut(LUT_BLOOD, shade + 0.10 + v * 0.16), { bands: 2 });
+  }
+  // Fresh-wound glisten on the first frames only.
+  if (t < 0.4) {
+    for (let i = 0; i < 4; i++) {
+      const a = rnd.float(0, 6.283), d = rnd.float(0, coreR * 0.6);
+      disc(p, cx + Math.cos(a) * d, cy + Math.sin(a) * d, 0.9, () => lut(LUT_BLOOD, 0.62), MAX);
+    }
+  }
+  // Light late dissolve - droplets thin out, but never into a checkerboard.
+  if (t > 0.66) erode(p, 1 - (t - 0.66) / 0.34 * 0.55);
 }
 
 function dustPuff(p, f, n) {

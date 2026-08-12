@@ -51,11 +51,11 @@ function faceShade(nx, ny, nz, tintR = 1, tintG = 1, tintB = 1, extra = 1) {
   // agree exactly and neither goes black when the sun is low.
   const up = Math.max(0.30, SUN.y);
   // `extra` is floored: an overhang underside should read as shadow, not as
-  // a hole in the building.
-  // Floors chosen so a wall facing away from the sun still reads as painted
-  // stone rather than a silhouette: MM6's shadowed walls sit around half the
-  // texture value, never a quarter of it.
-  const g = quantiseShade(clamp((0.58 + 0.42 * clamp(ndl / up, 0, 1)) * (DIFFUSE > 0 ? 1 : 0.38) * Math.max(0.80, extra), 0, 1));
+  // a hole in the building. Down-facing faces (soffits, jetty undersides) are
+  // allowed deeper into shadow - the sun is never below them, and a bright
+  // ceiling over the street reads as wrong as a slit did.
+  const floor = ny < -0.5 ? 0.55 : 0.80;
+  const g = quantiseShade(clamp((0.58 + 0.42 * clamp(ndl / up, 0, 1)) * (DIFFUSE > 0 ? 1 : 0.38) * Math.max(floor, extra), 0, 1));
   const l = SRGB_TO_LIN(g);
   return [l * tintR, l * tintG, l * tintB];
 }
@@ -265,8 +265,11 @@ export function buildHouse(spec = {}, rand) {
     const uw = hw + j, ud = hd + j;
     b.box(wallTex, -uw, s * sh, -ud, uw, (s + 1) * sh, ud, { sides: 'nsew' });
     if (j > 0) {
-      // Underside of the overhang, in shadow.
-      b.quad(wallTex, [-uw, s * sh, ud], [uw, s * sh, ud], [uw, s * sh, -ud], [-uw, s * sh, -ud],
+      // Underside of the overhang, in shadow. Wound so the face normal points
+      // *down* - the wrong winding here gave the quad a +Y normal, FrontSide
+      // culling threw it away from below, and every jettied facade had a
+      // see-through slit over the street.
+      b.quad(wallTex, [-uw, s * sh, -ud], [uw, s * sh, -ud], [uw, s * sh, ud], [-uw, s * sh, ud],
         { extra: 0.5 });
     }
     topHW = uw; topHD = ud;
@@ -277,35 +280,78 @@ export function buildHouse(spec = {}, rand) {
   const rh = S.rh;
   const RW = topHW + oh, RD = topHD + oh;
   const ry = bodyTop;
+  // Every sloped roof plane also gets a *soffit* - the same quad wound the
+  // other way, dropped a hair and shaded dark - and every eave a fascia board.
+  // FrontSide materials cull a roof plane seen from below, so without these
+  // the 70-unit overhang was a slit of open sky along every facade.
+  const FH = 46;                      // fascia board height
+  const soffQ = (a, c, d2, e, o2) => b.quad(roofTex, [e[0], e[1] - 2, e[2]], [d2[0], d2[1] - 2, d2[2]], [c[0], c[1] - 2, c[2]], [a[0], a[1] - 2, a[2]], { ...o2, extra: 0.45 });
+  const soffT = (a, c, d2) => b.tri(roofTex, [d2[0], d2[1] - 2, d2[2]], [c[0], c[1] - 2, c[2]], [a[0], a[1] - 2, a[2]], { extra: 0.45 });
+  // A fascia along an eave/rake edge from p0 to p1: a vertical band FH deep,
+  // wound so the outward face survives FrontSide culling.
+  const fascia = (p0, p1) => {
+    b.quad(roofTex, [p0[0], p0[1] - FH, p0[2]], [p1[0], p1[1] - FH, p1[2]],
+      [p1[0], p1[1], p1[2]], [p0[0], p0[1], p0[2]],
+      { uu: Math.max(0.4, Math.hypot(p1[0] - p0[0], p1[2] - p0[2]) / 300), vv: 0.18, extra: 0.9 });
+  };
   if (S.roof === 'pitch') {
     const ridgeAlongX = w >= d;
     if (ridgeAlongX) {
       const ridgeY = ry + rh;
-      b.quad(roofTex, [-RW, ry, RD], [RW, ry, RD], [RW, ridgeY, 0], [-RW, ridgeY, 0], { uu: RW * 2 / 300, vv: Math.hypot(RD, rh) / 260 });
-      b.quad(roofTex, [RW, ry, -RD], [-RW, ry, -RD], [-RW, ridgeY, 0], [RW, ridgeY, 0], { uu: RW * 2 / 300, vv: Math.hypot(RD, rh) / 260 });
+      const uv = { uu: RW * 2 / 300, vv: Math.hypot(RD, rh) / 260 };
+      b.quad(roofTex, [-RW, ry, RD], [RW, ry, RD], [RW, ridgeY, 0], [-RW, ridgeY, 0], uv);
+      b.quad(roofTex, [RW, ry, -RD], [-RW, ry, -RD], [-RW, ridgeY, 0], [RW, ridgeY, 0], uv);
+      soffQ([-RW, ry, RD], [RW, ry, RD], [RW, ridgeY, 0], [-RW, ridgeY, 0], uv);
+      soffQ([RW, ry, -RD], [-RW, ry, -RD], [-RW, ridgeY, 0], [RW, ridgeY, 0], uv);
       // Gable ends in the wall texture, as MM6's timbered houses have.
       b.tri(wallTex, [topHW, ry, topHD], [topHW, ry, -topHD], [topHW, ridgeY, 0], { extra: 1.0 });
       b.tri(wallTex, [-topHW, ry, -topHD], [-topHW, ry, topHD], [-topHW, ridgeY, 0], { extra: 0.8 });
+      // Eaves front/back, rakes up both gable edges.
+      fascia([-RW, ry, RD], [RW, ry, RD]);
+      fascia([RW, ry, -RD], [-RW, ry, -RD]);
+      fascia([RW, ry, RD], [RW, ridgeY, 0]); fascia([RW, ridgeY, 0], [RW, ry, -RD]);
+      fascia([-RW, ridgeY, 0], [-RW, ry, RD]); fascia([-RW, ry, -RD], [-RW, ridgeY, 0]);
     } else {
       const ridgeY = ry + rh;
-      b.quad(roofTex, [RW, ry, -RD], [RW, ry, RD], [0, ridgeY, RD], [0, ridgeY, -RD], { uu: RD * 2 / 300, vv: Math.hypot(RW, rh) / 260 });
-      b.quad(roofTex, [-RW, ry, RD], [-RW, ry, -RD], [0, ridgeY, -RD], [0, ridgeY, RD], { uu: RD * 2 / 300, vv: Math.hypot(RW, rh) / 260 });
+      const uv = { uu: RD * 2 / 300, vv: Math.hypot(RW, rh) / 260 };
+      b.quad(roofTex, [RW, ry, -RD], [RW, ry, RD], [0, ridgeY, RD], [0, ridgeY, -RD], uv);
+      b.quad(roofTex, [-RW, ry, RD], [-RW, ry, -RD], [0, ridgeY, -RD], [0, ridgeY, RD], uv);
+      soffQ([RW, ry, -RD], [RW, ry, RD], [0, ridgeY, RD], [0, ridgeY, -RD], uv);
+      soffQ([-RW, ry, RD], [-RW, ry, -RD], [0, ridgeY, -RD], [0, ridgeY, RD], uv);
       b.tri(wallTex, [-topHW, ry, topHD], [topHW, ry, topHD], [0, ridgeY, topHD]);
       b.tri(wallTex, [topHW, ry, -topHD], [-topHW, ry, -topHD], [0, ridgeY, -topHD], { extra: 0.75 });
+      fascia([RW, ry, -RD], [RW, ry, RD]);
+      fascia([-RW, ry, RD], [-RW, ry, -RD]);
+      fascia([-RW, ry, RD], [0, ridgeY, RD]); fascia([0, ridgeY, RD], [RW, ry, RD]);
+      fascia([RW, ry, -RD], [0, ridgeY, -RD]); fascia([0, ridgeY, -RD], [-RW, ry, -RD]);
     }
   } else if (S.roof === 'hip') {
     const rl = Math.max(0, RW - RD);
     const ridgeY = ry + rh;
-    b.quad(roofTex, [-RW, ry, RD], [RW, ry, RD], [rl, ridgeY, 0], [-rl, ridgeY, 0], { uu: RW * 2 / 300, vv: Math.hypot(RD, rh) / 260 });
-    b.quad(roofTex, [RW, ry, -RD], [-RW, ry, -RD], [-rl, ridgeY, 0], [rl, ridgeY, 0], { uu: RW * 2 / 300, vv: Math.hypot(RD, rh) / 260 });
+    const uv = { uu: RW * 2 / 300, vv: Math.hypot(RD, rh) / 260 };
+    b.quad(roofTex, [-RW, ry, RD], [RW, ry, RD], [rl, ridgeY, 0], [-rl, ridgeY, 0], uv);
+    b.quad(roofTex, [RW, ry, -RD], [-RW, ry, -RD], [-rl, ridgeY, 0], [rl, ridgeY, 0], uv);
     b.tri(roofTex, [RW, ry, RD], [RW, ry, -RD], [rl, ridgeY, 0], { extra: 0.95 });
     b.tri(roofTex, [-RW, ry, -RD], [-RW, ry, RD], [-rl, ridgeY, 0], { extra: 0.8 });
+    soffQ([-RW, ry, RD], [RW, ry, RD], [rl, ridgeY, 0], [-rl, ridgeY, 0], uv);
+    soffQ([RW, ry, -RD], [-RW, ry, -RD], [-rl, ridgeY, 0], [rl, ridgeY, 0], uv);
+    soffT([RW, ry, RD], [RW, ry, -RD], [rl, ridgeY, 0]);
+    soffT([-RW, ry, -RD], [-RW, ry, RD], [-rl, ridgeY, 0]);
+    // A hip roof's eave is the full perimeter.
+    fascia([-RW, ry, RD], [RW, ry, RD]); fascia([RW, ry, RD], [RW, ry, -RD]);
+    fascia([RW, ry, -RD], [-RW, ry, -RD]); fascia([-RW, ry, -RD], [-RW, ry, RD]);
   } else if (S.roof === 'pyramid') {
     const ridgeY = ry + rh;
     b.tri(roofTex, [-RW, ry, RD], [RW, ry, RD], [0, ridgeY, 0]);
     b.tri(roofTex, [RW, ry, -RD], [-RW, ry, -RD], [0, ridgeY, 0], { extra: 0.7 });
     b.tri(roofTex, [RW, ry, RD], [RW, ry, -RD], [0, ridgeY, 0], { extra: 0.95 });
     b.tri(roofTex, [-RW, ry, -RD], [-RW, ry, RD], [0, ridgeY, 0], { extra: 0.8 });
+    soffT([-RW, ry, RD], [RW, ry, RD], [0, ridgeY, 0]);
+    soffT([RW, ry, -RD], [-RW, ry, -RD], [0, ridgeY, 0]);
+    soffT([RW, ry, RD], [RW, ry, -RD], [0, ridgeY, 0]);
+    soffT([-RW, ry, -RD], [-RW, ry, RD], [0, ridgeY, 0]);
+    fascia([-RW, ry, RD], [RW, ry, RD]); fascia([RW, ry, RD], [RW, ry, -RD]);
+    fascia([RW, ry, -RD], [-RW, ry, -RD]); fascia([-RW, ry, -RD], [-RW, ry, RD]);
   } else { // flat, with a parapet
     b.quad(roofTex, [-topHW, ry, topHD], [topHW, ry, topHD], [topHW, ry, -topHD], [-topHW, ry, -topHD], { uu: 3, vv: 3 });
   }
@@ -732,8 +778,10 @@ export function addProp(b, kind, x, y, z, rot = 0, rand) {
         const p1 = [Math.cos(a1) * R, 0, Math.sin(a1) * R];
         sub.quad('wall_stone_block', p0, p1, [p1[0], 200, p1[2]], [p0[0], 200, p0[2]], { uu: 0.5, vv: 0.7 });
       }
-      // Water disc and a shingled canopy on two posts.
-      sub.quad('water', [-R * 0.7, 120, R * 0.7], [R * 0.7, 120, R * 0.7], [R * 0.7, 120, -R * 0.7], [-R * 0.7, 120, -R * 0.7], { uu: 1, vv: 1, extra: 0.5 });
+      // Water disc and a shingled canopy on two posts. The disc stays well
+      // inside the stone ring and clear of the posts at +-130 - at 0.7R its
+      // corners reached 148 and sliced through both.
+      sub.quad('water', [-R * 0.6, 120, R * 0.6], [R * 0.6, 120, R * 0.6], [R * 0.6, 120, -R * 0.6], [-R * 0.6, 120, -R * 0.6], { uu: 1, vv: 1, extra: 0.5 });
       for (const sx of [-1, 1]) sub.box('wall_wood_plank', sx * 130 - 18, 200, -18, sx * 130 + 18, 480, 18, { sides: 'nsew' });
       sub.tri('roof_shingle_red', [-200, 480, 200], [200, 480, 200], [0, 610, 0]);
       sub.tri('roof_shingle_red', [200, 480, -200], [-200, 480, -200], [0, 610, 0], { extra: 0.7 });
