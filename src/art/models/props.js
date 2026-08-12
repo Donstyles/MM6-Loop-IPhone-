@@ -417,6 +417,48 @@ const BUILDERS = {
     }
     return g;
   },
+  // Dungeon exit / travel portal: a weathered stone arch around a glowing
+  // arcane sheet. The spawner asks for this at every dungeon exit and used to
+  // log "no sprite for prop/portal" and mark the way out with nothing at all.
+  portal: (H, rnd) => {
+    const g = new THREE.Group();
+    // Pale dressed stone: a dungeon's lightAt() multiplies the sprite down to
+    // ~0.35, so a mid-grey frame went black and only the emissive sheet
+    // survived - the "floating purple rectangle" of cycle-2.
+    const stone = rampHex('grey', 10);
+    // Two piers of stacked blocks, alternating tone so they read as masonry.
+    for (const sx of [-1, 1]) {
+      for (let i = 0; i < 4; i++) {
+        g.add(box(H * 0.22, H * 0.19, H * 0.22, mulHex(stone, 0.78 + ((i + (sx > 0 ? 1 : 0)) % 2) * 0.28),
+          { pivot: 'bottom', x: sx * H * 0.37, y: H * 0.19 * i }));
+      }
+    }
+    // Lintel and a keystone.
+    g.add(box(H * 1.06, H * 0.16, H * 0.24, mulHex(stone, 1.1), { y: H * 0.84 }));
+    g.add(box(H * 0.20, H * 0.22, H * 0.26, mulHex(stone, 1.25), { y: H * 0.90 }));
+    // The gate itself: concentric arcane sheets stepping rim -> hot core, so
+    // the surface bands like a vortex instead of one flat purple rect. Kept
+    // bright overall: the dungeon's runtime lightAt() multiplies the whole
+    // sprite down to ~0.35, and a dark-biased gradient went black.
+    const rings = [
+      [0.52, 0.72, 4, 0.7], [0.42, 0.62, 5, 0.8], [0.32, 0.50, 6, 0.9],
+      [0.22, 0.36, 7, 1], [0.12, 0.20, 7, 1],
+    ];
+    rings.forEach(([w, h, shade, em], i) => {
+      g.add(plate(H * w, H * h, rampHex('arcane', shade), {
+        y: H * (0.40 - i * 0.01), z: H * 0.012 * i, thick: H * 0.015, emissive: em,
+      }));
+    });
+    // Sparks drifting off the sheet.
+    for (let i = 0; i < 5; i++) {
+      g.add(sph(H * 0.022, rampHex('arcane', 7), {
+        x: rnd.float(-0.3, 0.3) * H, y: H * rnd.float(0.15, 0.75), z: H * 0.09, emissive: 1,
+      }));
+    }
+    // Threshold slab.
+    g.add(box(H * 1.0, H * 0.06, H * 0.44, mulHex(stone, 0.85), { pivot: 'bottom' }));
+    return g;
+  },
   // Wall lever - dungeons export these as interactable props.
   lever: (H, rnd) => {
     const g = new THREE.Group();
@@ -563,6 +605,7 @@ export const PROP_DEFS = {
   chest: { h: 64, aspect: 1.35, cell: 88 },
   chest_open: { h: 64, aspect: 1.35, cell: 88 },
   flowerbed: { h: 56, aspect: 2.2 },
+  portal: { h: 300, aspect: 0.85, cell: 96 },
   dock: { h: 120, aspect: 1.15 },
   lever: { h: 96, aspect: 0.8 },
   barrel: { h: 84, aspect: 0.95 },

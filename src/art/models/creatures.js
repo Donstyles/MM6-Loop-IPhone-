@@ -871,14 +871,14 @@ function poseBiped(r, action, t) {
     case 'die': case 'dead': {
       const u = action === 'dead' ? 1 : ez(t);
       const e = u * u;
-      // Crumple rather than fall like a plank: less rotation, more sink and
-      // squash, so the corpse stays inside a sprite cell sized for a standing
-      // figure.
-      r.root.rotation.x += e * 1.10;
-      r.root.rotation.z += e * 0.26;
-      r.root.scale.y *= 1 - e * 0.22;
-      r.root.scale.z *= 1 - e * 0.16;
-      r.body.position.y += -e * H * 0.16;
+      // Keel over almost flat. The old half-crumple (1.10 rad + heavy squash)
+      // left the corpse an upright green bundle that read as a still-standing
+      // monster; a body on the ground has to *lie down* to read as a kill.
+      r.root.rotation.x += e * 1.42;
+      r.root.rotation.z += e * 0.22;
+      r.root.scale.y *= 1 - e * 0.10;
+      r.root.scale.z *= 1 - e * 0.08;
+      r.body.position.y += -e * H * 0.10;
       r.torso.rotation.x += e * 0.35;
       r.head.rotation.x += e * 0.55;
       r.armL.rotation.x += e * 1.1; r.armL.rotation.z += e * 0.6;
@@ -2657,6 +2657,26 @@ for (const f of FAMILY_LIST) {
 /** Flat list of every monster id, in MONSTERS.TXT order. */
 export const CREATURE_KINDS = Object.keys(CREATURE_TIERS);
 
+/**
+ * Display name -> tier id ('Goblin Shaman' -> 'GoblinB'). Quests, spawn
+ * scripts and the test harness all speak in display names, and the baker used
+ * to throw "unknown creature" at every one of them - which is how bosses and
+ * shamans spawned with no art. First declaration wins for duplicated civilian
+ * names ('Peasant').
+ */
+export const CREATURE_TIER_BY_NAME = {};
+for (const id of CREATURE_KINDS) {
+  const nm = CREATURE_TIERS[id].name;
+  if (!(nm in CREATURE_TIER_BY_NAME)) CREATURE_TIER_BY_NAME[nm] = id;
+}
+
+/** Resolve any spelling a caller uses - tier id, family id, or display name. */
+export function resolveCreatureKind(kind) {
+  if (CREATURE_TIERS[kind] || CREATURE_FAMILIES[kind]) return kind;
+  if (CREATURE_TIER_BY_NAME[kind]) return CREATURE_TIER_BY_NAME[kind];
+  return kind;
+}
+
 /** Family ids, for callers that only want one sheet per model. */
 export const CREATURE_FAMILY_KINDS = Object.keys(CREATURE_FAMILIES);
 
@@ -2713,6 +2733,7 @@ const ARCH_POSE = {
  * @returns {{root:THREE.Group, height:number, pose:Function, dispose:Function, def:object}}
  */
 export function buildCreature(kind, seed = 1) {
+  kind = resolveCreatureKind(kind);
   const tier = CREATURE_TIERS[kind];
   const fam = CREATURE_FAMILIES[tier ? tier.family : kind];
   if (!fam) throw new Error('unknown creature: ' + kind);

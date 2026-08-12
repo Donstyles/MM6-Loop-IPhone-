@@ -534,7 +534,16 @@ function pebble(p, cx, cy, r, base, seed) {
 
 function tDirt() {
   const p = P();
-  groundBase(p, [96, 78, 52], [132, 108, 78], { per: 10, seed: 211, contrast: 1.0, patchCol: [110, 90, 62], patchAmt: 0.22 });
+  groundBase(p, [104, 86, 58], [138, 114, 82], { per: 10, seed: 211, contrast: 1.0, patchCol: [116, 96, 66], patchAmt: 0.22 });
+  // Faint horizontal bedding: dirt is mostly seen on slopes and embankments,
+  // where exposed soil settles in layers. Two or three soft strata per tile
+  // also survive into the small mips, so distant dirt keeps structure instead
+  // of averaging to a near-black slab against pale cobbles.
+  paint(p, (x, y) => {
+    const wob = (nz(x, y, 3, 216, 2, 0.5) - 0.5) * 10;
+    const band = Math.sin(((y + wob) / 64) * TAU * 2.5);
+    return scaleC(p.get(x, y), 1 + band * 0.075);
+  });
   // Clods: little raised lumps of soil with one lit facet and a shadow pooled
   // on their lower-right, laid on a jittered grid so the spacing stays even.
   const rnd = new Rand(217);
@@ -640,9 +649,18 @@ function tRoadCobble() {
   // crisp rounded pebble instead of the 30-60 px smears the old settings
   // blurred into.
   const p = P();
+  // Wider per-stone value spread than before: mortar is one texel and gone by
+  // mip 2, so at mid distance the *stones themselves* have to carry the
+  // variation or a plaza mips into a featureless pale slug.
   cobbleFill(p, {
-    per: 8, seed: 271, colDark: [108, 104, 96], colLite: [162, 156, 142],
-    mortar: [58, 54, 46], jitter: 1.0, gap: 0.24, dome: 0.26, warp: 0.14, rim: 0.34,
+    per: 8, seed: 271, colDark: [88, 84, 76], colLite: [172, 166, 150],
+    mortar: [50, 46, 40], jitter: 1.0, gap: 0.24, dome: 0.26, warp: 0.14, rim: 0.34,
+  });
+  // Low-frequency wear patches - two to three per tile, so they are still
+  // there at mip 3 when individual stones have averaged away.
+  paint(p, (x, y) => {
+    const w = nz(x, y, 2, 285, 3, 0.55) - 0.5;
+    return scaleC(p.get(x, y), 1 + w * 0.22);
   });
   // grit and moss settled in the joints
   paint(p, (x, y) => {
@@ -991,8 +1009,13 @@ function cliffTex(o) {
     // rough broken rock inside every bed
     const n = fbmXY(x, y, 16, 20, seed + 11, 4, 0.55);
     c = scaleC(c, 1 - rough * 0.5 + n * rough);
-    // bed relief: lit shelf on top, shadow under the overhang
-    const kb = b.v < 0.11 ? 1.24 - b.v * 1.0 : b.v > 0.88 ? 0.66 + (1 - b.v) * 1.8 : 1;
+    // Horizontal bedding strata: a slow value drift over each bed's height so
+    // the face reads as deposited layers even after the macro noise mips away
+    // ("one big noise slab" was cycle-2 finding 14).
+    c = scaleC(c, 0.93 + Math.sin((b.i * 2.4 + b.v) * Math.PI) * 0.09);
+    // bed relief: lit shelf on top, shadow under the overhang - deepened so
+    // the strata survive at mid distance.
+    const kb = b.v < 0.11 ? 1.30 - b.v * 1.2 : b.v > 0.86 ? 0.56 + (1 - b.v) * 2.2 : 1;
     // slab relief: fracture gap on the left, lit face, shadow on the right
     const ku = s.u < 0.045 ? 0.55 : s.u < 0.2 ? 1.16 : s.u > 0.93 ? 0.74 : 1;
     c = scaleC(c, kb * ku * (0.92 + tone * 0.16));
@@ -1458,15 +1481,25 @@ function tWallMarble() {
       }
     }
   }
-  // faint block joints so the wall still has architecture
+  // Real coursed ashlar, not a hairline grid: per-course tone steps, an AO
+  // gradient pooling under every bed joint and a lit arris above it. This is
+  // what stops a marble facade reading as one blinding white sheet - the
+  // courses carry shading the palettiser can band.
+  const CH = 16;
   paint(p, (x, y) => {
-    const j = (wrapI(y, 32) < 1) || (wrapI(x + (Math.floor(y / 32) % 2) * 16, 32) < 1);
-    if (!j) return null;
-    return scaleC(p.get(x, y), 0.82);
+    const row = Math.floor(y / CH);
+    const v = (y - row * CH) / CH;
+    // course tone: quarried blocks vary shade slightly
+    let k = 0.94 + hash2(row, Math.floor((x + (row % 2) * 16) / 32), 843) * 0.10;
+    // AO into the bed joint below, lit edge at the course top
+    if (v > 0.80) k *= 0.86 + (1 - v) * 0.45;      // darkening toward the joint
+    if (v < 0.09) k *= 1.07;                        // sun catches the arris
+    return scaleC(p.get(x, y), k);
   });
   paint(p, (x, y) => {
-    const j = (wrapI(y - 1, 32) < 1) || (wrapI(x - 1 + (Math.floor(y / 32) % 2) * 16, 32) < 1);
-    return j ? scaleC(p.get(x, y), 1.08) : null;
+    const j = (wrapI(y, CH) < 1) || (wrapI(x + (Math.floor(y / CH) % 2) * 16, 32) < 1);
+    if (!j) return null;
+    return scaleC(p.get(x, y), 0.72);
   });
   return p;
 }
@@ -2967,7 +3000,9 @@ const TONE = {
   cliff_snow: [96, 202, 0.04, -0.03],
   cliff_volcanic: [32, 102, 0.10, 0.05],
   // man-made: a little more range, still not punchy
-  wall_plaster: [158, 212, 0.14, 0.04],
+  // Pulled down from [158,212]: a facade brighter than the sky reads as a
+  // white card, and the AO/course shading needs range below it to band into.
+  wall_plaster: [138, 202, 0.14, 0.04],
   wall_timber: [58, 216, 0.06, 0.05],
   wall_brick: [72, 168, 0.06, 0.05],
   // §12: stone block #5E5E58-#9A9A90 (joints darker), castle #6A6A60-#A8A89C.
@@ -2979,9 +3014,11 @@ const TONE = {
   // orange and pushes them out of the palette's wood ramp
   wall_wood_plank: [44, 122, 0.10, 0.05],
   wall_log: [42, 132, 0.08, 0.05],
-  wall_marble: [190, 240, 0.10, 0.03],
+  // Spec-range marble: warm off-white with real course shading, not the old
+  // [190,240] floodlight band.
+  wall_marble: [148, 218, 0.10, 0.03],
   wall_sandstone: [110, 200, 0.08, 0.07],
-  wall_temple: [120, 216, 0.08, 0.05],
+  wall_temple: [112, 204, 0.08, 0.05],
   wall_shop_front: [66, 214, 0.08, 0.05],
   roof_shingle_red: [56, 130, 0.09, 0.03],
   // Spec §12: slate roofs run #4A5A62-#76888E - a blue-*grey*, not a blue. The

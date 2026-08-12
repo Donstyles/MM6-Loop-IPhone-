@@ -237,10 +237,29 @@ export class EntityManager {
       }
     } else if (e.state === 'chase') {
       const mdef = e.data || {};
-      const reach = (mdef.reach || 260) + (ctx.playerRadius || 90);
+      // MM6 melee happens nose-to-nose: the attacker closes until it fills the
+      // lower half of the viewport. The old 350u stop (260 reach + 90 player
+      // radius) parked every attacker below the pitch clamp, so whole fights
+      // played out against an empty ground plane. ~180u plus the bodies' own
+      // radii puts a goblin's belt buckle on screen at pitch 0.
+      const reach = 180 + e.radius + (ctx.playerRadius || 90);
       if (dist > e.aggroRange * 2.2) { e.state = 'idle'; e.setAction('stand'); return; }
 
-      if (dist <= reach) {
+      // Downhill terraces drop an attacker below the ±22.5° pitch clamp: its
+      // feet sit far under the party's and the sprite projects off the bottom
+      // of the frustum. The test is *angular*: the camera rides 160u above the
+      // party's feet (player.pos.y is feet) and half the vertical FOV is
+      // ~30°, so a monster's torso clears NDC -0.9 only while
+      // (drop + 85) / dist stays under ~0.5. While too low, keep closing -
+      // stepToward snaps to groundAt, so the monster climbs the terrace edge
+      // and attacks from inside the view. The distance guard is the fallback
+      // that lets it swing anyway once it is bodily against the party (a
+      // wall-top party must still be attackable).
+      const drop = ctx.player.pos.y - e.pos.y;
+      const tooLow = drop > Math.max(40, dist * 0.48 - 85)
+        && dist > e.radius + (ctx.playerRadius || 90) + 20;
+
+      if (dist <= reach && !tooLow) {
         if (!busy && e.recovery <= 0) {
           e.setAction('attack');
           e.recovery = mdef.recoveryTime ? mdef.recoveryTime / 60 : 1.4;
@@ -248,7 +267,7 @@ export class EntityManager {
         } else if (!busy) {
           e.setAction('stand', false);
         }
-      } else if (mdef.ranged && dist < (mdef.ranged.range || 3000) && e.recovery <= 0 && !busy) {
+      } else if (mdef.ranged && dist > reach && dist < (mdef.ranged.range || 3000) && e.recovery <= 0 && !busy) {
         e.setAction('cast');
         e.recovery = 2 + Math.random();
         if (ctx.onMonsterRanged) ctx.onMonsterRanged(e);

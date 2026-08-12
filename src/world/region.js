@@ -4,11 +4,12 @@ import {
   generateHeightmap, paintTiles, buildTerrain, heightAt, slopeAt, normalAt,
   flattenArea, carveRoad, stampTiles, makeBillboardField, floraTexture,
   getTexture, textureTint, texturesReady, TILE, MAP_TILES, PLAYABLE_EXTENT,
+  placeableOnLand,
 } from './terrain.js';
 import { buildSky, FAR_CLIP, SHADE_DIST, timeTint, sunTerms, sunDirection, quantiseShade, daylightFactor } from './sky.js';
 import { generateTown } from './town.js';
 import { monstersInLevelRange, MONSTER_IDS } from '../game/monsters.js';
-import { MeshBuilder, buildRuins, buildHouse, addProp, materialFor, setBuildingLight } from './building.js';
+import { MeshBuilder, buildRuins, buildHouse, addProp, materialFor, setBuildingLight, setWindowsLit } from './building.js';
 
 // ---------------------------------------------------------------------------
 // Regions.
@@ -734,7 +735,8 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
   // A wayside shrine or signpost where two roads meet.
   for (const rd of roads) {
     const p = rd.points[Math.floor(rd.points.length / 2)];
-    const y = heightAt(hm, p.x, p.z);
+    if (!placeableOnLand(hm, p.x + 520, p.z + 520, 100)) continue;
+    const y = heightAt(hm, p.x + 520, p.z + 520);
     addProp(propBuilder, 'signpost', p.x + 520, y, p.z + 520, r.float(0, 6.28), r);
     props.push({ kind: 'signpost', x: p.x + 520, y, z: p.z + 520 });
   }
@@ -905,7 +907,13 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
           bakedHour = sky.state.tod;
           terrain.setTimeOfDay(bakedHour);
         }
-        const f = opts.scene && opts.scene.fog;
+        // Self-wired: the sky owns the one true fog (it writes the host
+        // scene's fog object, or its own if the host never gave us a scene),
+        // so read it back through sky.fog instead of trusting the caller to
+        // pass {scene}. The old `opts.scene && opts.scene.fog` guard was dead
+        // in the shell (bootstrap passes null) and every tree kept its
+        // build-time icy-blue #9ab4cc + frozen uLight=1 forever.
+        const f = (opts.scene && opts.scene.fog) || sky.fog;
         if (f) {
           // Same continuous curve the terrain bake uses (sky.daylightFactor),
           // raised to 2.2 because the batches multiply in linear space. The old
@@ -918,13 +926,23 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
       }
       terrain.update(camera, dt);
       flora.update(camera);
-      for (const t of towns) t.update(camera);
+      // Night dressing: windows light and lanterns halo as the daylight curve
+      // rolls off through dusk, and go dark again at dawn.
+      const nightK = clamp((0.78 - daylightFactor(sky.state.tod)) / 0.28, 0, 1);
+      setWindowsLit(nightK > 0.45);
+      for (const t of towns) {
+        if (t.glow) t.glow.userData.setGlow(nightK);
+        t.update(camera);
+      }
     },
     setTimeOfDay(hours) {
       bakedHour = hours <= 1 ? hours * 24 : hours;
       terrain.setTimeOfDay(bakedHour);
       setBuildingLight(bakedHour);
       sky.update(0, bakedHour);
+      const nightK = clamp((0.78 - daylightFactor(bakedHour)) / 0.28, 0, 1);
+      setWindowsLit(nightK > 0.45);
+      for (const t of towns) if (t.glow) t.glow.userData.setGlow(nightK);
     },
     /** The single grey multiply the whole scene shares. */
     get lightMultiplier() { return sky.state.tint; },

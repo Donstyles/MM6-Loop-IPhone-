@@ -518,5 +518,13 @@ export function buildSky(scene, opts = {}) {
     if (t.y > 0 && t.y !== mat.uniforms.uViewportH.value) setViewport(t.x, t.y);
   };
 
-  return { group, update, setRegion, setViewport, dispose, state, quad, fog: ownFog };
+  return {
+    group, update, setRegion, setViewport, dispose, state, quad,
+    // The *live* fog object. onBeforeRender rebinds `fog` to whatever fog the
+    // host scene actually renders with, so anything that needs "the same fog
+    // the terrain gets" (flora batches, sprite renderers) must read it through
+    // this getter - the ownFog reference goes stale the moment a host scene
+    // brings its own.
+    get fog() { return fog; },
+  };
 }

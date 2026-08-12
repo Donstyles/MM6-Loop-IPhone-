@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { Rand, clamp, smoothstep, lerpN } from '../core/rng.js';
 import {
-  heightAt, flattenArea, carveRoad, stampTiles, makeBillboardField, floraTexture,
+  heightAt, flattenArea, carveRoad, stampTiles, makeBillboardField, makeGlowField,
+  floraTexture, placeableOnLand,
 } from './terrain.js';
 import { buildHouse, buildWall, buildBridge, MeshBuilder, addProp, materialFor } from './building.js';
 
@@ -83,7 +84,9 @@ export function generateTown(spec = {}, seed = 1) {
   // --- road skeleton ------------------------------------------------------
   const roads = [];
   const mainW = size === 'village' ? 620 : 820;
-  const laneW = 520;
+  // Lanes must span >= 1.5 tiles (768u at TILE 512): at 520 the per-tile-centre
+  // stamp caught alternate tiles and every side street was a checkerboard.
+  const laneW = 800;
   const ext = R * 1.02;
   roads.push({ points: [{ x: cx - ext, z: cz }, { x: cx + ext, z: cz }], width: mainW, tex: roadTex, main: true });
   roads.push({ points: [{ x: cx, z: cz - ext }, { x: cx, z: cz + ext }], width: mainW, tex: roadTex, main: true });
@@ -218,6 +221,7 @@ export function generateTown(spec = {}, seed = 1) {
   }
 
   // Lampposts and clutter down the main streets.
+  const lanterns = [];   // glow anchors: every lamppost's flame box
   for (const rd of roads) {
     const a = rd.points[0], b2 = rd.points[1];
     const dx = b2.x - a.x, dz = b2.z - a.z;
@@ -229,9 +233,13 @@ export function generateTown(spec = {}, seed = 1) {
       const x = a.x + dx * t - (dz / len) * (rd.width / 2 + 90);
       const z = a.z + dz * t + (dx / len) * (rd.width / 2 + 90);
       if (Math.hypot(x - cx, z - cz) < plazaR * 0.8) continue;
+      // Coastal main streets run out over the bay; a lamppost standing in
+      // open water was cycle-2 finding 9.
+      if (!placeableOnLand(hm, x, z, 100)) continue;
       const y = hm ? heightAt(hm, x, z) : baseY;
       addProp(master, 'lamppost', x, y, z, 0, r);
       props.push({ kind: 'lamppost', x, y, z });
+      lanterns.push({ x, y: y + 462, z, ground: y, r: 240 });
     }
   }
   for (let i = 0; i < (size === 'city' ? 26 : 14); i++) {
@@ -240,6 +248,7 @@ export function generateTown(spec = {}, seed = 1) {
     let clear = true;
     for (const t of taken) if (Math.hypot(x - t.x, z - t.z) < 620) { clear = false; break; }
     if (!clear) continue;
+    if (!placeableOnLand(hm, x, z, 100)) continue;
     const kind = r.pick(['barrel', 'crate', 'cart', 'haystack', 'flowerbed', 'signpost', 'barrel']);
     const y = hm ? heightAt(hm, x, z) : baseY;
     addProp(master, kind, x, y, z, r.float(0, 6.283), r);
@@ -314,6 +323,7 @@ export function generateTown(spec = {}, seed = 1) {
       x = lerpN(rd.points[0].x, rd.points[1].x, t) + r.float(-160, 160);
       z = lerpN(rd.points[0].z, rd.points[1].z, t) + r.float(-160, 160);
     }
+    if (!placeableOnLand(hm, x, z, 60)) { x = cx; z = cz; }   // never wade
     const y = hm ? heightAt(hm, x, z) : baseY;
     // Short patrol along the nearest street so townsfolk pace rather than wander.
     const patrol = [];
@@ -347,6 +357,7 @@ export function generateTown(spec = {}, seed = 1) {
     let clear = true;
     for (const t of taken) if (Math.hypot(x - t.x, z - t.z) < 700) { clear = false; break; }
     if (!clear) continue;
+    if (!placeableOnLand(hm, x, z, 80)) continue;   // no oaks in the surf
     const s = r.float(700, 1150);
     treeInst.push({ x, y: hm ? heightAt(hm, x, z) : baseY, z, w: s * 0.9, h: s, tint: [r.float(0.86, 1.08), r.float(0.9, 1.06), r.float(0.86, 1.0)] });
   }
@@ -357,17 +368,26 @@ export function generateTown(spec = {}, seed = 1) {
     : null;
   if (trees) group.add(trees);
 
+  // Warm halos over every lantern after dark - one additive draw call for the
+  // whole town. region.update drives the fade with the daylight curve so they
+  // come up through dusk exactly as the windows light.
+  const glow = makeGlowField(lanterns);
+  if (glow) group.add(glow);
+
   return {
     group, name, size,
     x: cx, z: cz, y: baseY, radius: R,
     buildings, props, npcSpawns, shops, roads, colliders, doors,
     entrances, plaza: { x: cx, z: cz, radius: plazaR },
-    trees,
+    trees, glow,
     // The trunks' positions, not just the batch that draws them. A billboard
     // has no collider, so anything deciding where to stand or which way to look
     // has no other way to know one is in the way.
     treeSpots: treeInst,
     bounds: { x: cx, z: cz, radius: R * 1.1, y: baseY },
-    update(camera) { if (trees) trees.userData.updateBillboard(camera); },
+    update(camera) {
+      if (trees) trees.userData.updateBillboard(camera);
+      if (glow && glow.visible) glow.userData.updateBillboard(camera);
+    },
   };
 }

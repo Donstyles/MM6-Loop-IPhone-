@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { PALETTE, nearestIndex } from '../core/palette.js';
 import { makeCanvas, ctx2d, Pix } from './texcanvas.js';
 import { tileFbm2, tileNoise2 } from '../core/rng.js';
-import { ACTIONS, CREATURE_DEFS, CREATURE_FAMILIES, MAT_CLASS_COUNT, buildCreature, buildNPC } from './models/creatures.js';
+import { ACTIONS, CREATURE_DEFS, CREATURE_FAMILIES, MAT_CLASS_COUNT, buildCreature, buildNPC, resolveCreatureKind } from './models/creatures.js';
 import { FLORA_DEFS, buildFlora } from './models/flora.js';
 import { PROP_DEFS, buildProp } from './models/props.js';
 
@@ -455,7 +455,9 @@ const _v = new THREE.Vector3();
 const POSE_WEIGHT = [
   ['stand', 0, 1, 1, 1], ['walk', 0.25, 1, 1, 1], ['bored', 0.25, 1, 0.6, 0.55],
   ['attack_melee', 0.55, 0.55, 0.25, 0.22], ['attack_ranged', 0.5, 0.5, 0.20, 0.20],
-  ['dying', 1, 0.25, 0.30, 0.18],
+  // The corpse frame lies nearly flat, so it needs real radial room or the
+  // keel-over clips at the cell wall and the body vanishes mid-fall.
+  ['dying', 1, 0.25, 0.40, 0.34],
 ];
 
 function measure(model, actionList) {
@@ -823,8 +825,10 @@ function cellBudget(height, lo, hi, k) {
 // of settling for half the resolution the atlas could carry.
 const CREATURE_CELL_K = 0.66;
 
-/** `kind` is a monster id ('GoblinB') or a bare family id ('Goblin'). */
+/** `kind` is a monster id ('GoblinB'), a family id ('Goblin') or a display
+ *  name ('Goblin Shaman') - the bestiary and the quest layer use all three. */
 export function bakeCreatureSheet(renderer, kind, seed = 1, opts = {}) {
+  kind = resolveCreatureKind(kind);
   const def = CREATURE_DEFS[kind] || CREATURE_FAMILIES[kind];
   const h = def ? def.height : 192;
   return bakeSheet(renderer, (s) => buildCreature(kind, s), {
@@ -877,6 +881,8 @@ const SHEETS = new Map();
 
 /** Cached sheet lookup. Category is one of creature | npc | flora | prop. */
 export function getSheet(renderer, category, kind, seed = 1) {
+  // One cache entry per creature no matter which spelling asked for it.
+  if (category === 'creature') kind = resolveCreatureKind(kind);
   const key = `${category}:${kind}:${seed}`;
   let s = SHEETS.get(key);
   if (!s) {

@@ -191,6 +191,32 @@ export class MeshBuilder {
 }
 
 const _matCache = new Map();
+
+// MM6 towns are warm-lit islands after dark: every window in every house
+// lights at dusk. Buildings are baked into one merged mesh, but all their
+// window quads share the cached 'window_dark' material, so swapping that one
+// material's map (and giving it headroom against the global night multiply)
+// lights the whole town in O(1).
+let _windowsLit = null;
+export function setWindowsLit(on) {
+  on = !!on;
+  if (on === _windowsLit) return;
+  const m = _matCache.get('window_dark');
+  if (!m) { _windowsLit = null; return; }   // no town built yet; try again later
+  _windowsLit = on;
+  m.map = getTexture(on ? 'window_lit' : 'window_dark');
+  // The baked face shade sits well under 1.0 and the post pass multiplies the
+  // night frame down to ~15%; without a big overbright boost a "lit" window
+  // reads as mud. 5x saturates the quad to full texture brightness *before*
+  // the night multiply, which is what makes it glow against the dark wall.
+  m.color.setScalar(on ? 5 : 1);
+  m.needsUpdate = true;
+  // Lantern heads (lampposts, the lighthouse lamp) are always-lit quads on
+  // the same merged mesh; give them the same night headroom.
+  const lamp = _matCache.get('window_lit');
+  if (lamp) lamp.color.setScalar(on ? 4 : 1);
+}
+
 export function materialFor(texId, opts = {}) {
   const key = texId + (opts.transparent ? '|t' : '') + (opts.fog === false ? '|nf' : '');
   const hit = _matCache.get(key);

@@ -1116,7 +1116,10 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
       solid: solidGrid, floor: floorGrid, ceil: ceilGrid,
     }].concat(pillarColliders.map((c) => ({ ...c, x: c.x + OX, z: c.z + OZ }))),
     start: startPos, startFloor, startYaw,
-    exits: [{ x: startPos.x, y: startPos.y, z: startPos.z, kind: 'surface', to: spec.exitTo || null }],
+    // Exit marker sits on the FLOOR: startPos carries the party's 160u eye
+    // height, and a portal sprite anchored there hovers a body-length off the
+    // flagstones.
+    exits: [{ x: startPos.x, y: startFloor, z: startPos.z, kind: 'surface', to: spec.exitTo || null }],
     bounds: {
       min: new THREE.Vector3(minX + OX, minY, minZ + OZ),
       max: new THREE.Vector3(maxX + OX, maxY, maxZ + OZ),
