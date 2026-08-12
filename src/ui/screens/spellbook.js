@@ -20,6 +20,7 @@ import {
   spellDamageAvg, spellDuration,
 } from '../../game/spells.js';
 import { MASTERY_NAMES, SCHOOL_TIER_LIMIT } from '../../game/skills.js';
+import { maxHP } from '../../game/stats.js';
 
 /** Bookmark tabs down the right edge, panel-relative - the engine's own list. */
 const TAB_Y = [10, 46, 83, 121, 158, 196, 234, 271, 307];
@@ -55,6 +56,7 @@ export class SpellbookScreen extends Screen {
     this.id = 'spellbook';
     this.school = (opts && opts.school) || 'fire';
     this.selected = null;
+    this.pickFor = null;   // a 'one'-target support spell awaiting an ally choice
   }
 
   onOpen() {
@@ -66,12 +68,13 @@ export class SpellbookScreen extends Screen {
         for (const s of SCHOOLS) if (schoolSkill(ch, s.id).level > 0) { this.school = s.id; break; }
       }
     }
-    this.sound('page');
+    this.sound('page_turn');
   }
 
   onCharChanged() { this.selected = null; this.onOpen(); }
 
   handleKey(code) {
+    if (this.pickFor && code === 'Escape') { this.pickFor = null; return true; }
     if (code === 'Escape' || code === 'KeyC') { this.close(); return true; }
     const i = SCHOOLS.findIndex((s) => s.id === this.school);
     if (code === 'ArrowDown' && i < 8) { this.turnTo(SCHOOLS[i + 1].id); return true; }
@@ -128,7 +131,45 @@ export class SpellbookScreen extends Screen {
       align: 'center', color: hit.hover ? HILITE : CANARY,
     });
     if (hit.click) { this.sound('click'); this.close(); }
+    if (this.pickFor) this.drawTargetPicker(ctx, ch);
     this.pollPartyBar();
+  }
+
+  /**
+   * "Cast on whom?" - single-ally heals and buffs choose a party member here,
+   * so a heal can never be flung at whatever monster happened to be nearest.
+   */
+  drawTargetPicker(ctx, caster) {
+    const sp = this.pickFor;
+    const members = (this.session.party && this.session.party.members) || [];
+    const w = 220, rowH = 26;
+    const h = 58 + members.length * rowH + 30;
+    const x = px(198) - w / 2, y = py(150) - h / 2;
+    M.rct(ctx, x - 2, y - 2, w + 4, h + 4, [24, 16, 8]);
+    M.rct(ctx, x, y, w, h, [58, 42, 20]);
+    M.rct(ctx, x + 3, y + 3, w - 6, h - 6, [172, 146, 96]);
+    F.drawText(ctx, `Cast ${sp.name} on whom?`, x + w / 2, y + 12,
+      { align: 'center', color: '#2e2e2e' });
+    for (let i = 0; i < members.length; i++) {
+      const m = members[i];
+      const ry = y + 34 + i * rowH;
+      const hit = this.ui.region(`${this.id}:pick:${i}`, x + 10, ry - 4, w - 20, rowH - 2,
+        `${m.name} - ${m.hp}/${maxHP(m)} hp`);
+      if (hit.hover) M.stipple(ctx, x + 10, ry - 4, w - 20, rowH - 2, [225, 205, 35], 0.25);
+      F.drawText(ctx, m.name, x + 18, ry, { color: hit.hover ? HILITE : '#2e2e2e' });
+      F.drawText(ctx, `${m.hp}/${maxHP(m)}`, x + w - 18, ry,
+        { align: 'right', color: m.hp <= 0 ? '#8a1a10' : BOOK_INK });
+      if (hit.click) {
+        this.pickFor = null;
+        this.session.castSpell(this.charIndex, sp, { member: i });
+        this.close();
+        return;
+      }
+    }
+    const cy = y + h - 22;
+    const cancel = this.ui.region(`${this.id}:pick:cancel`, x + w / 2 - 40, cy - 4, 80, 20, 'Cancel');
+    F.drawText(ctx, 'Cancel', x + w / 2, cy, { align: 'center', color: cancel.hover ? HILITE : BOOK_INK });
+    if (cancel.click) { this.pickFor = null; this.sound('click'); }
   }
 
   /** Nine painted bookmark tabs, no lettering, at the engine's coordinates. */
@@ -220,11 +261,17 @@ export class SpellbookScreen extends Screen {
   }
 
   cast(ch, sp, able) {
+    if (this.pickFor) return;   // the target picker owns the input
     if (!able.ok) { this.sound('error'); return; }
     const s = this.session;
-    if (typeof s.castSpell === 'function') s.castSpell(this.charIndex, sp.id);
+    // Single-ally support spells go through the portrait picker; a heal must
+    // never be auto-aimed at a monster.
+    const supportOne = sp.target === 'one'
+      && (sp.type === 'heal' || sp.type === 'cure' || sp.type === 'buff');
+    if (supportOne) { this.pickFor = sp; this.sound('click'); return; }
+    // The REAL spell object goes down - castSpell does the cost and the rules.
+    if (typeof s.castSpell === 'function') s.castSpell(this.charIndex, sp);
     else s.pendingCast = { char: this.charIndex, spell: sp.id };
-    this.sound('cast');
     this.close();
   }
 }

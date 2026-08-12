@@ -322,6 +322,102 @@ ok(questCount === 30, 'quest generator returned the wrong count');
 ok(Quests.AWARDS.length >= 15, 'awards list too short');
 say(`main chain of ${chain.length}, ${questCount} side quests generated, ${Quests.AWARDS.length} awards`);
 
+// Full pipeline: accept -> kill event -> complete -> turn-in pays through awardXP.
+{
+  const p = Party.createParty('qp');
+  p.quests = {};
+  const q = Quests.generateQuest(new Rand('qp'), 'kill', 'new_sorpigal', 4, 'New Sorpigal');
+  ok(Quests.giveQuest(p, q), 'giveQuest should accept an available quest');
+  ok(q.state === 'active', 'accepted quest becomes active');
+  const target = q.objectives[0].target;
+  const changed = Quests.dispatchQuestEvent(p, { type: 'kill', monsterId: target, count: 999 });
+  ok(changed.length === 1 && q.state === 'complete', 'kill events drive the quest to complete');
+  const gold0 = p.gold, xp0 = p.members[0].xp;
+  const reward = Quests.turnInQuest(p, q.id, (members, xp) => Combat.awardXP(members, xp));
+  ok(!!reward && p.gold === gold0 + reward.gold, 'turn-in pays the gold');
+  ok(p.members[0].xp > xp0, 'turn-in pays XP through awardXP');
+  ok(q.state === 'rewarded', 'turned-in quest is rewarded');
+  // Escort death fails its quest gracefully.
+  const eq = Quests.generateQuest(new Rand('esc'), 'escort', 'new_sorpigal', 4, 'New Sorpigal');
+  Quests.giveQuest(p, eq);
+  const who = eq.objectives[0].target;
+  const failed = Quests.failEscortOnDeath(p, who);
+  ok(failed.length === 1 && eq.state === 'failed', 'escort death fails the escort quest');
+  // Namespaced dungeon ids still satisfy bare clear objectives.
+  const cq = { state: 'active', objectives: [{ kind: 'clear', target: 'goblinwatch', count: 1, progress: 0, done: false }] };
+  Quests.updateQuestProgress(cq, { type: 'clear', dungeonId: 'new_sorpigal:goblinwatch', dungeonName: 'Goblinwatch' });
+  ok(cq.state === 'complete', 'clear event matches namespaced dungeon ids');
+}
+
+// Learning skill must sit in the XP path: same award, more XP for the learner.
+{
+  const p = Party.createParty('learn');
+  const a = p.members[0], b = p.members[1];
+  a.skills.learning = { level: 10, mastery: Skills.MASTERY.MASTER };
+  const xa = a.xp, xb = b.xp;
+  Combat.awardXP(p.members, 4000);
+  ok((a.xp - xa) > (b.xp - xb), 'Learning multiplies the learner share');
+  ok((b.xp - xb) === Math.max(1, Math.floor(4000 / 4)), 'non-learners get the plain split');
+}
+
+// Multi-bolt reconciliation: resolveSpellAttack and spellDamageAvg agree that
+// bolts are per-bolt damage (a full volley averages to spellDamageAvg).
+{
+  const sparks = Spells.spellById('sparks');
+  const caster = Party.createParty('bolt').members[2];
+  caster.skills.air = { level: 10, mastery: Skills.MASTERY.MASTER };
+  const rand = new Rand('bolt');
+  const expect = Spells.spellDamageAvg(sparks, 10, Skills.MASTERY.MASTER);
+  let total = 0; const trials = 400;
+  for (let i = 0; i < trials; i++) {
+    const dummy = Monsters.spawnMonster('PeasantM1A');
+    dummy.hp = 999999; dummy.maxHP = 999999;
+    dummy.def = { ...dummy.def, resistances: {}, immunities: [] };
+    const e = Combat.resolveSpellAttack(caster, sparks, dummy, 10, Skills.MASTERY.MASTER, rand);
+    total += e.damage;
+    ok(e.hits >= 2, 'sparks should fire multiple bolts');
+  }
+  const avg = total / trials;
+  ok(Math.abs(avg - expect) / expect < 0.2,
+    `multi-bolt: resolved avg ${avg.toFixed(1)} disagrees with spellDamageAvg ${expect}`);
+}
+
+// Charm / Feeblemind lines: the conditions stick and mean something.
+{
+  const rand = new Rand('charm');
+  const m = Monsters.spawnMonster('GoblinB');   // the shaman: has a ranged spell
+  m.def = { ...m.def, resistances: {} };
+  ok(Combat.tryInflict(m, 'charmed', 100, rand), 'charmed can be inflicted');
+  ok(!Combat.canAct(m), 'a charmed monster does not act');
+  delete m.conditions.charmed;
+  ok(Combat.tryInflict(m, 'feebleminded', 100, rand), 'feebleminded can be inflicted');
+  m.hostile = true; m.state = 'engaged';
+  let casts = 0;
+  for (let i = 0; i < 60; i++) {
+    const intent = Combat.monsterAct(m, Party.createParty('fm').members, { partyPos: { x: 0, y: 0, z: 1200 } }, rand);
+    if (intent.type === 'cast') casts++;
+  }
+  ok(casts === 0, 'a feebleminded caster never casts');
+}
+
+// The opening fight: 3 GoblinA vs a fresh party - dangerous but winnable.
+{
+  let wins = 0, dmgFrac = 0;
+  const N = 40;
+  for (let t = 0; t < N; t++) {
+    const rand = new Rand('gob' + t);
+    const p = Party.createParty('fresh' + t);
+    const gs = [Monsters.spawnMonster('GoblinA'), Monsters.spawnMonster('GoblinA'), Monsters.spawnMonster('GoblinA')];
+    const total = p.members.reduce((s, c) => s + c.hp, 0);
+    const r = Combat.simulateFight(p.members, gs, rand, 40, { useSpells: true });
+    if (r.win) wins++;
+    dmgFrac += r.monsterDamage / total;
+  }
+  ok(wins / N >= 0.85, `3 GoblinA vs fresh party: win rate ${(wins / N * 100).toFixed(0)}% - too hard`);
+  ok(dmgFrac / N >= 0.06, `3 GoblinA vs fresh party: only ${(dmgFrac / N * 100).toFixed(0)}% party HP lost - a walkover`);
+  say(`opening fight: ${(wins / N * 100).toFixed(0)}% wins, ${(dmgFrac / N * 100).toFixed(0)}% of party HP paid for it`);
+}
+
 // ---------------------------------------------------------------------------
 // 10. Level a party and gear it up
 // ---------------------------------------------------------------------------

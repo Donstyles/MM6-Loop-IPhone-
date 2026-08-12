@@ -1,5 +1,6 @@
 import { Entity, CATEGORY } from '../ents/entity.js';
-import { Rand } from '../core/rng.js';
+import { Rand, hashStr } from '../core/rng.js';
+import { npcName, profession, rumour, professionTalk } from './npcnames.js';
 
 // ---------------------------------------------------------------------------
 // Turning map data into live sprites.
@@ -56,6 +57,12 @@ export class Spawner {
     const rnd = new Rand(seed ^ 0x5eed);
     const ground = (x, z) => S.map.groundAt(x, z, 0);
 
+    // The world seed is the key to everything reproducible: saves, quest
+    // pools, respawns. Capture it the moment a region is stood up.
+    S.worldSeed = seed;
+    this._npcSeq = 0;
+    if (S.ensureQuestPool) S.ensureQuestPool(region.id || S.mapId, seed);
+
     // Flora is the region's own batched billboard field - see loadRegion. Only
     // place trees here if it did not, so the two can never both plant a wood.
     if (!region.hasFloraField) {
@@ -90,13 +97,22 @@ export class Spawner {
       this.spawnNPC(n, ground);
     }
 
+    // Roaming packs. Each keeps its descriptor so a dead pack can respawn
+    // with the new day once the party has moved on.
+    S._spawnGroups = S._spawnGroups || [];
+    let gid = 0;
     for (const s of region.spawns || []) {
-      this.spawnGroup(s, rnd, ground);
+      const id = gid++;
+      S._spawnGroups.push({ id, desc: s });
+      this.spawnGroup(s, rnd, ground, id);
     }
 
     // Towns are part of the outdoor map in MM6 - you walk up to a shop's door
     // and the establishment opens over the world view.
     for (const town of region.towns || []) this.populateTown(town, ground, rnd);
+
+    // Named townsfolk pick up the region's quests once everyone is standing.
+    if (S.attachQuestNPCs) S.attachQuestNPCs(region.id || S.mapId);
 
     // Dungeon mouths: an invisible marker in the doorway the party activates.
     for (const d of region.dungeons || []) {
@@ -165,6 +181,30 @@ export class Spawner {
     const S = this.session;
     const rnd = new Rand(seed ^ 0xd06);
     const ground = (x, z) => S.map.groundAt(x, z, 0);
+    this._npcSeq = 0;
+
+    // The way back out. The dungeon's own start/exit marker sits where the
+    // party arrived; activating it returns to the overworld at the door the
+    // party came in through (stored by the transition glue).
+    const back = S._dungeonBack || null;
+    const exits = dungeon.exits && dungeon.exits.length
+      ? dungeon.exits
+      : [{ x: dungeon.start?.x || 0, y: (dungeon.startFloor ?? 0), z: dungeon.start?.z || 0 }];
+    for (const ex of exits) {
+      S.entities.add(new Entity({
+        category: CATEGORY.PROP, kind: 'dungeon_exit',
+        sheet: this.sheet('prop', 'portal', 1) || null, static: true,
+        x: ex.x, y: ex.y ?? ground(ex.x, ex.z), z: ex.z,
+        radius: 220, solid: false, scale: 1,
+        interact: {
+          kind: 'transition',
+          toRegion: (back && back.region) || ex.to || dungeon.exitTo || 'new_sorpigal',
+          seed: S.worldSeed || 1,
+          entry: back ? { x: back.x, y: back.y, z: back.z, yaw: back.yaw || 0 } : null,
+        },
+        label: 'Leave the dungeon',
+      }));
+    }
 
     for (const p of dungeon.props || []) {
       const sh = this.sheet('prop', p.kind, p.seed || 1);
@@ -186,29 +226,86 @@ export class Spawner {
         label: 'Chest',
       }));
     }
+    // Monster complement. A themed dungeon overrides the generic table -
+    // Goblinwatch is full of goblins, not a random draw - and the deepest
+    // room's flagged spawn is the boss tier of its family.
+    const nameKey = String(dungeon.id || dungeon.name || '').toLowerCase();
+    const themed = nameKey.includes('goblinwatch') ? ['GoblinA', 'GoblinA', 'GoblinB'] : null;
+    const level = dungeon.difficulty || dungeon.spec?.difficulty || 2;
     for (const s of dungeon.spawns || []) {
-      this.spawnGroup(s, rnd, ground);
+      let kind = themed ? themed[rnd.int(themed.length)] : s.id;
+      if (!kind && this.monsters && this.monsters.rollSpawn) {
+        const roll = this.monsters.rollSpawn(rnd, dungeon.theme || 'cave', s.level || level);
+        kind = roll && roll.id;
+      }
+      if (!kind) continue;
+      if (s.boss) kind = this.bossTierOf(kind);
+      const e = this.spawnMonster(kind, s.x, s.y ?? ground(s.x, s.z), s.z, s);
+      if (e && s.boss) e.label = `${e.label} (leader)`;
     }
+  }
+
+  /** GoblinA -> GoblinC: the top tier of the same sprite family, if it exists. */
+  bossTierOf(kind) {
+    if (!/[AB]$/.test(kind)) return kind;
+    const boss = kind.slice(0, -1) + 'C';
+    const def = this.monsters && this.monsters.monsterById ? this.monsters.monsterById(boss) : null;
+    return def ? boss : kind;
   }
 
   spawnNPC(n, ground) {
     const sh = this.sheet('npc', n.archetype || n.kind || 'peasant_m', n.seed || 1);
     if (!sh) return null;
+    // Townsfolk arrive from the generator as bare {archetype, patrol, speed}
+    // records; give each a seeded name, a trade and something to say, so the
+    // dialogue screen never greets you as "undefined".
+    const npc = this.enrichNPC(n);
     const e = new Entity({
       category: CATEGORY.NPC, kind: n.archetype || n.kind, sheet: sh,
       x: n.x, y: n.y ?? ground(n.x, n.z), z: n.z,
       yaw: n.yaw || 0, radius: 70, solid: false,
       patrol: n.patrol || null, speed: 180,
-      interact: { kind: 'npc', npc: n.npc || n },
-      label: n.name || 'Townsperson',
+      interact: { kind: 'npc', npc },
+      label: npc.name,
     });
-    e.data = n.npc || n;
+    e.data = npc;
     return this.session.entities.add(e);
   }
 
+  /** Build the NPCDef the dialogue screen consumes, deterministically. */
+  enrichNPC(n) {
+    if (n.npc && n.npc.name) return n.npc;
+    const S = this.session;
+    const seq = this._npcSeq = (this._npcSeq || 0) + 1;
+    const rnd = new Rand(hashStr(`${S.worldSeed || 1}:${S.mapId || 'map'}:npc:${seq}`));
+    const arch = String(n.archetype || n.kind || 'peasant');
+    const sex = /_f|woman|matron/.test(arch) ? 'f' : /_m|man\b/.test(arch) ? 'm' : (rnd.bool() ? 'm' : 'f');
+    const prof = n.profession || profession(rnd);
+    const name = n.name || npcName(rnd, sex, { epithet: false, title: false });
+    return Object.assign({
+      name,
+      npcId: name,
+      title: prof,
+      profession: prof,
+      sex,
+      portraitSeed: rnd.int(0, 0x7fffffff),
+      greeting: rnd.pick([
+        `"Well met. I am ${name}, ${prof.toLowerCase()} here."`,
+        `${name} looks up from their work. "Yes? Be quick about it."`,
+        `"A good day to you, travellers." ${name} gives a small nod.`,
+        `"${prof}s see everything that passes through this town," says ${name}.`,
+      ]),
+      talk: professionTalk(rnd, prof),
+      rumours: [rumour(rnd), rumour(rnd)],
+      questRefs: [],
+    }, n.npc || {});
+  }
+
   /** A spawn descriptor may name one monster or a pack. */
-  spawnGroup(s, rnd, ground) {
-    const ids = s.kinds || (s.kind ? [s.kind] : []);
+  spawnGroup(s, rnd, ground, groupId = null) {
+    // Region descriptors say `id`, dungeon descriptors say `id` or nothing,
+    // hand-written ones say `kind`/`kinds` - accept the lot.
+    const ids = s.kinds || (s.kind ? [s.kind] : (s.id ? [s.id] : []));
     if (!ids.length) return;
     const count = s.count || (s.groupSize ? rnd.int(s.groupSize[0], s.groupSize[1]) : 1);
     const spread = s.spread ?? 420;
@@ -216,7 +313,8 @@ export class Spawner {
       const kind = ids[rnd.int(ids.length)];
       const x = s.x + (i === 0 ? 0 : rnd.float(-spread, spread));
       const z = s.z + (i === 0 ? 0 : rnd.float(-spread, spread));
-      this.spawnMonster(kind, x, ground(x, z), z, s);
+      const e = this.spawnMonster(kind, x, ground(x, z), z, s);
+      if (e && groupId !== null) e.spawnGroup = groupId;
     }
   }
 
@@ -224,6 +322,9 @@ export class Spawner {
     const sh = this.sheet('creature', kind, s.seed || 1);
     if (!sh) return null;
     const def = this.monsters && this.monsters.monsterById ? this.monsters.monsterById(kind) : null;
+    // Peasants and other non-hostiles must never chase: the entity AI has no
+    // hostility check, so a zero aggro range is what keeps them civilians.
+    const aggro = def && def.hostile === false ? 0 : (def ? (def.aggroRange || 1800) : 1800);
     // The rules layer works on combatant instances, not definitions.
     const mon = this.monsters && this.monsters.spawnMonster
       ? this.monsters.spawnMonster(kind, { x, y, z })
@@ -233,7 +334,7 @@ export class Spawner {
       x, y, z, yaw: Math.random() * Math.PI * 2,
       radius: def ? Math.max(50, (def.size || 200) * 0.32) : 70,
       solid: true, speed: def ? (def.speed || 260) : 260,
-      aggroRange: def ? (def.aggroRange || 1800) : 1800,
+      aggroRange: aggro,
       hp: mon ? mon.hp : (def ? def.hp : 20),
       maxHp: mon ? mon.maxHP : (def ? def.hp : 20),
       data: def || { name: kind, hp: 20, level: 1 },

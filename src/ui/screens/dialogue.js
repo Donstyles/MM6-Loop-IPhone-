@@ -24,6 +24,10 @@ import { PORTRAIT_W, PORTRAIT_H } from '../../art/portraits.js';
 import { Screen, A, PANEL, portraitOf, wrapLines, drawWrapped } from './screenbase.js';
 import * as MM6 from './mm6art.js';
 import * as Figures from '../../art/figures.js';
+import {
+  giveQuest, turnInQuest, dispatchQuestEvent, questProgressText, updateAwards, refreshGating,
+} from '../../game/quests.js';
+import { awardXP } from '../../game/combat.js';
 
 export { Screen, A, PANEL, portraitOf, wrapLines, drawWrapped };
 export { MM6 };
@@ -1070,20 +1074,52 @@ export class DialogueScreen extends HouseScreen {
     super(session, ui, hud, opts);
     this.id = 'dialogue';
     this.npc = opts.npc || DEFAULT_NPC;
+    // Never greet as "undefined": whatever record arrives gets a name.
+    if (!this.npc.name) this.npc = Object.assign({}, DEFAULT_NPC, this.npc, { name: DEFAULT_NPC.name });
     this.keeper = this.npc;
     this.title = opts.title || this.npc.house || this.npc.name;
     this.optionY = OPTION.npcY;
     this.exitLabel = 'Goodbye';
-    this.body = this.npc.greeting || `${this.npc.name} looks you over.`;
+    this.body = this.npc.greeting
+      || `${this.npc.name}${this.npc.title ? `, ${String(this.npc.title).toLowerCase()},` : ''} looks you over.`;
     this.shown = 0;
     this.expression = 'normal';
     this.teachMode = false;
+    this.offering = null;    // quest whose offer text is on screen
     this.reward = null;
     this.rnd = rngFor(`dlg:${this.npc.name}`);
     this.interior = opts.interior || 'house';
   }
 
-  onOpen() { this.shown = 0; }
+  onOpen() {
+    this.shown = 0;
+    // Talking to somebody IS a quest event: deliver/find quests complete here.
+    const party = this.session && this.session.party;
+    if (party && party.quests && !Array.isArray(party.quests)) {
+      const changed = dispatchQuestEvent(party, {
+        type: 'talk', npcId: this.npc.npcId || this.npc.name,
+      });
+      for (const q of changed) {
+        if (q.state === 'complete') say(this.session, `Quest complete: ${q.title}.`, C_GOLD);
+      }
+    }
+  }
+
+  /**
+   * The live quest this NPC should be talking about, from the real pipeline:
+   * turn-ins first, then in-progress, then fresh offers whose gates are open.
+   */
+  questRef() {
+    const refs = this.npc.questRefs || [];
+    if (!refs.length) return null;
+    const rank = { complete: 0, active: 1, available: 2, rewarded: 3 };
+    let best = null;
+    for (const q of refs) {
+      if (!q || q.state === 'failed' || q.state === 'unavailable') continue;
+      if (!best || (rank[q.state] ?? 9) < (rank[best.state] ?? 9)) best = q;
+    }
+    return best;
+  }
 
   setBody(s, expression) {
     this.body = String(s || '');
@@ -1103,11 +1139,20 @@ export class DialogueScreen extends HouseScreen {
   topics() {
     const n = this.npc;
     const out = [];
+    const q = this.questRef();
+    if (q) {
+      const label = q.state === 'complete' ? 'Reward'
+        : q.state === 'active' ? q.title
+          : q.state === 'available' ? q.title : null;
+      if (label) out.push({ id: 'questref', label });
+    }
+    if (this.offering) out.push({ id: 'accept', label: 'Accept the Task' });
     if (n.quest && this.questState() !== 'done') out.push({ id: 'quest', label: n.quest.topic || 'Quest' });
     if (n.teaches && n.teaches.length) out.push({ id: 'teach', label: 'Learn Skill' });
     if (n.hire) out.push(this.isHired() ? { id: 'dismiss', label: 'Dismiss' } : { id: 'hire', label: 'Hire' });
     if (n.join) out.push({ id: 'join', label: this.isMember() ? 'Membership' : 'Join' });
     for (const t of (n.topics || [])) out.push({ id: t.id, label: t.label });
+    if (n.talk && n.profession) out.push({ id: 'smalltalk', label: n.profession });
     if (n.rumours && n.rumours.length) out.push({ id: 'rumour', label: 'More Information' });
     return out;
   }
@@ -1176,6 +1221,9 @@ export class DialogueScreen extends HouseScreen {
     if (!this.revealed) { this.shown = this.body.length; return; }
     const n = this.npc;
     switch (id) {
+      case 'questref': this.doQuestRef(); return;
+      case 'accept': this.doAccept(); return;
+      case 'smalltalk': this.setBody(n.talk || '...', 'smile'); return;
       case 'quest': this.doQuest(); return;
       case 'teach': this.teachMode = true; this.setBody(this.teachIntro()); return;
       case 'hire': this.doHire(); return;
@@ -1197,6 +1245,57 @@ export class DialogueScreen extends HouseScreen {
         this.setBody(t.text || '...');
       }
     }
+  }
+
+  // --- the real quest pipeline (session.questPool / party.quests) -----------
+
+  doQuestRef() {
+    const q = this.questRef();
+    if (!q) return;
+    const party = this.session && this.session.party;
+    if (q.state === 'available') {
+      // Read the offer; Accept appears as its own option so taking the job is
+      // a deliberate act, not a side effect of listening.
+      this.offering = q;
+      this.setBody(q.text || 'There is work, if you want it.');
+      return;
+    }
+    if (q.state === 'active') {
+      this.setBody(`"Not done yet?"\n${questProgressText(q)}`);
+      return;
+    }
+    if (q.state === 'complete') {
+      const reward = turnInQuest(party, q.id, (members, xp) => awardXP(members, xp));
+      if (!reward) { this.setBody('Something is not right with your claim.'); return; }
+      party.questsDone = (party.questsDone | 0) + 1;
+      if (reward.pendingItem) {
+        const p = this.session.modules && this.session.modules.partyMod;
+        if (p && p.giveItem) p.giveItem(party, reward.pendingItem);
+      }
+      this.reward = { gold: reward.gold || 0, xp: reward.xp || 0 };
+      this.sound('quest_complete');
+      this.setBody(`"Well done." You receive ${gold(reward.gold || 0)} gold and ${gold(reward.xp || 0)} experience`
+        + `${reward.pendingItem ? `, and ${reward.pendingItem.name || 'an item'}` : ''}.`, 'smile');
+      say(this.session, `Quest complete: ${q.title}.`, C_GOLD);
+      // Turning in a beat can open the next one on this same NPC.
+      const pool = this.session.questPool || [];
+      refreshGating(pool.concat(Object.values(party.quests || {})));
+      updateAwards(party, { killsByKind: party.killsByKind || {}, questsDone: party.questsDone | 0 });
+      if (this.session.attachQuestNPCs) this.session.attachQuestNPCs(q.region);
+      return;
+    }
+    this.setBody('You have done all I could ask of you.', 'smile');
+  }
+
+  doAccept() {
+    const q = this.offering;
+    this.offering = null;
+    const party = this.session && this.session.party;
+    if (!q || !party) return;
+    giveQuest(party, q);
+    this.setBody('"Good. Do not dawdle." The task is noted in your log.', 'smile');
+    say(this.session, `Quest accepted: ${q.title}.`, C_GOLD);
+    if (q.type === 'escort' && this.session.spawnEscort) this.session.spawnEscort(q);
   }
 
   teachIntro() {

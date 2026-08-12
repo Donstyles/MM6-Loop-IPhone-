@@ -274,6 +274,41 @@ export function rumour(rand) {
   return rand.pick(RUMOURS).replace('{town}', townName(rand, { canon: rand.bool(0.6) }));
 }
 
+/** A line of shop-floor small talk keyed to the speaker's trade. */
+const PROFESSION_TALK = {
+  Blacksmith: 'Steel is honest work. Swing it enough and it swings true; neglect it and it neglects you.',
+  Fisherman: 'The catch has been thin since spring. Something big moved into the bay, if you ask me.',
+  Innkeeper: 'A warm bed and a hot meal fix more ills than any temple, and cost a good deal less.',
+  Guard: 'Keep your blades sheathed inside the walls and we will get along fine.',
+  Scribe: 'Everything worth knowing is written down somewhere. Finding the somewhere is the trade.',
+  Merchant: 'Buy low, sell dear, and never let a goblin between you and a caravan.',
+  Farmer: 'The soil is good here. It is everything that walks over it after dark that worries me.',
+  Herbalist: 'Yellow flowers for fever, red for wounds. The blue ones you leave well alone.',
+  Sailor: 'The eel-infested waters earn the name. I have seen the eels.',
+  Miner: 'The deep shafts pay double. There is a reason they pay double.',
+  Hunter: 'Wolves keep to the treeline this season. Whatever pushed them out of the hills, I have not met it.',
+  Priest: 'The gods watch over the faithful. The rest of you should buy a good helmet.',
+  Beggar: 'Spare a coin? The town has been hard on honest beggars since the troubles.',
+  Bard: 'Every dungeon is three verses: going in, the terrible middle, and whoever comes out.',
+  Cartographer: 'The old maps stop at the ridge. Nobody who went past it came back to correct them.',
+  Cooper: 'Barrels do not make themselves, and half this town would starve without them.',
+  Tanner: 'You bring me hides, I pay fair coin. Goblin leather is worthless, before you ask.',
+  Baker: 'Up before dawn every day of my life. The smell is the only advertising I need.',
+  Stablehand: 'Horses will not go near the old watchtower road. Horses are sensible that way.',
+  Squire: 'One day I will be knighted. Until then I mostly carry things.',
+  Instructor: 'Practice until the drill is boring, then practice more. Boring drills keep men alive.',
+  Pilgrim: 'I have walked from shrine to shrine across half of Enroth. The roads are worse every year.',
+  Explorer: 'There are doors under this island older than the kingdom. Most are better left shut.',
+  'Gate Guard': 'The gate closes at dusk. Be inside it, or be quick on your feet.',
+  'Torch Bearer': 'Light is a trade like any other. Down in the dark you would pay anything for it.',
+  Guide: 'I know every path in the region - which ones you can walk, and which ones walk you.',
+};
+
+export function professionTalk(rand, prof) {
+  return PROFESSION_TALK[prof]
+    || `"${prof}? It is a living," comes the reply. "Some years better than others."`;
+}
+
 /** All the curated lists, for tooling and tests. */
 export const WORD_LISTS = {
   MALE_FIRST, FEMALE_FIRST, SURNAMES, TITLES_M, TITLES_F, EPITHETS,

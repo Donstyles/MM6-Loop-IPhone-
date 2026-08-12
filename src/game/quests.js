@@ -78,9 +78,16 @@ export function updateQuestProgress(quest, event) {
       case 'talk':
         hit = event.type === 'talk' && o.target === event.npcId;
         break;
-      case 'clear':
-        hit = event.type === 'clear' && o.target === event.dungeonId;
+      case 'clear': {
+        // Generated dungeon ids are namespaced ('new_sorpigal:goblinwatch');
+        // hand-written objectives name the bare dungeon, so match loosely.
+        if (event.type !== 'clear') break;
+        const want = String(o.target).toLowerCase();
+        const got = String(event.dungeonId || '').toLowerCase();
+        const gotName = String(event.dungeonName || '').toLowerCase().replace(/\s+/g, '_');
+        hit = got === want || got.includes(want) || (gotName && gotName.includes(want));
         break;
+      }
       case 'escort':
         hit = event.type === 'escort' && o.target === event.npcId && event.arrived;
         break;
@@ -635,6 +642,23 @@ export function dispatchQuestEvent(party, event) {
   }
   if (changed.some((q) => q.state === 'complete')) refreshGating(Object.values(party.quests));
   return changed;
+}
+
+/**
+ * The escorted NPC is dead: every active quest escorting them fails, cleanly.
+ * Returns the quests that failed so the caller can announce it.
+ */
+export function failEscortOnDeath(party, npcId) {
+  const failed = [];
+  for (const id of Object.keys(party.quests || {})) {
+    const q = party.quests[id];
+    if (!q || q.state !== 'active') continue;
+    if ((q.objectives || []).some((o) => o.kind === 'escort' && o.target === npcId && !o.done)) {
+      q.state = 'failed';
+      failed.push(q);
+    }
+  }
+  return failed;
 }
 
 /** Hand in a quest and pay out. `awardXPFn` is combat.awardXP. */

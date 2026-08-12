@@ -160,6 +160,7 @@ function family(internal, names, levels, t) {
       regen: at(t.regen, i) || 0,
       hostile: at(t.hostile, i) !== false,
       gold: goldForLevel(level, at(t.goldMul, i)),
+      sound: at(t.sound, i) || SOUND_BY_KIND[at(t.kind, i) || 'humanoid'] || 'growl_small',
       desc: at(t.desc, i) || '',
     };
     M.push(def);
@@ -215,6 +216,7 @@ function unique(id, name, level, t) {
     regen: t.regen || 0,
     hostile: true,
     gold: goldForLevel(level, t.goldMul || 2),
+    sound: t.sound || SOUND_BY_KIND[t.kind || 'demon'] || 'growl_large',
     desc: t.desc || '',
     unique: true,
   };
@@ -222,6 +224,16 @@ function unique(id, name, level, t) {
   FAMILY_INDEX[id] = { id, names: [name], tiers: [def], desc: def.desc };
   return def;
 }
+
+// Voice family per biological kind: used for aggro barks, pain vocals on
+// non-lethal hits, and the death cry. Ids must exist in core/audio.js.
+const SOUND_BY_KIND = {
+  human: 'growl_small', humanoid: 'growl_small', undead: 'zombie_moan',
+  beast: 'growl_small', insect: 'insect_chitter', reptile: 'hiss',
+  elemental: 'growl_large', construct: 'golem_step', giant: 'growl_large',
+  dragon: 'roar_dragon', demon: 'growl_large', ooze: 'slime_squelch',
+  avian: 'screech', aberration: 'hiss',
+};
 
 // Shorthand resistance profiles.
 const R_UNDEAD = { mind: 100, body: 100, water: 30 };
@@ -251,7 +263,7 @@ family('Barbarian', ['Magyar', 'Magyar Soldier', 'Magyar Matron'], [14, 25, 37],
 
 family('Bat', ['Bat', 'Giant Bat', 'Vampire Bat'], [3, 6, 9], {
   kind: 'beast', size: [45, 75, 100], speed: 260, moveType: 'long', aiType: 'normal',
-  recovery: 65, groupSize: [3, 8], flying: true, acMul: 1.5, dmgMul: 0.7, goldMul: 0,
+  recovery: 65, groupSize: [3, 8], flying: true, acMul: 1.5, dmgMul: 0.7, goldMul: 0, sound: 'screech',
   aggroRange: 1000, element: [null, null, 'body'],
   inflict: [null, null, { condition: 'diseased_weak', chance: 12 }],
   spawnRegions: ['cave', 'crypt', 'mine', 'sewer', 'new_sorpigal'],
@@ -336,7 +348,7 @@ family('DragonCave', ['Fire Lizard', 'Lightning Lizard', 'Thunder Lizard'], [40,
 
 family('DragonFly', ['Flame Drake', 'Frost Drake', 'Energy Drake'], [24, 28, 32], {
   kind: 'dragon', size: 200, speed: 280, moveType: 'long', aiType: 'aggress',
-  groupSize: [1, 3], flying: true, dmgMul: 1.05,
+  groupSize: [1, 3], flying: true, dmgMul: 1.05, sound: 'screech',
   element: ['fire', 'water', 'air'],
   ranged: [{ spell: 'fire_bolt', element: 'fire', range: 3000 },
     { spell: 'ice_bolt', element: 'water', range: 3000 },
@@ -474,7 +486,10 @@ family('Ghost', ['Ghost', 'Evil Spirit', 'Specter'], [9, 13, 19], {
 
 family('Goblin', ['Goblin', 'Goblin Shaman', 'Goblin King'], [4, 6, 10], {
   kind: 'humanoid', size: [150, 155, 180], speed: 160, moveType: 'med', aiType: 'aggress',
-  recovery: 90, groupSize: [2, 5], aggroRange: 1300,
+  // The base tier hits softer than the level curve suggests: three GoblinA are
+  // the game's opening fight and must be dangerous to a fresh party, not fatal.
+  recovery: [105, 100, 90], groupSize: [2, 5], aggroRange: 1300, sound: 'goblin_yelp',
+  dmgMul: [0.8, 0.85, 1],
   caster: [false, true, false],
   ranged: [null, { spell: 'fire_bolt', element: 'fire', range: 2400 }, null],
   spells: [null, ['fire_bolt'], null],
@@ -696,7 +711,7 @@ family('SeaSerpent', ['Sea Serpent', 'Sea Monster', 'Sea Terror'], [28, 36, 48],
 
 family('Skeleton', ['Skeleton', 'Skeleton Knight', 'Skeleton Lord'], [6, 10, 14], {
   kind: 'undead', undead: true, size: 180, speed: 170, moveType: 'med', aiType: 'normal',
-  groupSize: [2, 5], acMul: [1, 1.2, 1.3], goldMul: 0.7,
+  groupSize: [2, 5], acMul: [1, 1.2, 1.3], goldMul: 0.7, sound: 'skeleton_rattle',
   resistances: R_UNDEAD, immunities: IMM_MINDBODY,
   spawnRegions: ['crypt', 'cave', 'ruins', 'mire_of_the_damned'],
   desc: 'Bones held together by spite. The Lord wears a crown.',
@@ -743,7 +758,7 @@ family('Titan', ['Titan', 'Noble Titan', 'Supreme Titan'], [65, 75, 95], {
 
 family('Werewolf', ['Wolfman', 'Werewolf', 'Greater Werewolf'], [20, 30, 40], {
   kind: 'beast', size: [200, 210, 225], speed: 270, moveType: 'long', aiType: 'aggress',
-  recovery: 80, groupSize: [2, 4], twoAttacks: true, dmgMul: 1.1, goldMul: 0.4,
+  recovery: 80, groupSize: [2, 4], twoAttacks: true, dmgMul: 1.1, goldMul: 0.4, sound: 'wolf_howl',
   resistances: { mind: 40, physical: 20 },
   inflict: [null, { condition: 'diseased_weak', chance: 12 }, { condition: 'diseased_severe', chance: 12 }],
   spawnRegions: ['blackshire', 'mire_of_the_damned', 'white_cap', 'frozen_highlands'],

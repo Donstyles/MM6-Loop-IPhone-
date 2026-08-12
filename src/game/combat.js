@@ -307,16 +307,25 @@ export function applyDamage(target, amount, element, rand, opts) {
   return out;
 }
 
+/** Conditions the spell lines can inflict that stats.CONDITIONS does not track. */
+export const MONSTER_ONLY_CONDITIONS = {
+  charmed: { id: 'charmed', name: 'Charmed', severity: 12, blocksAction: false },
+  feebleminded: { id: 'feebleminded', name: 'Feebleminded', severity: 11, blocksAction: false },
+};
+
 /**
  * Try to inflict a condition. The target resists with the matching resistance;
  * Mind conditions use Mind, everything physical uses Body.
  */
 export function tryInflict(target, conditionId, chance, rand) {
   if (!target || !isAlive(target)) return false;
-  const spec = CONDITIONS[conditionId];
+  // Charm and Feeblemind are monster-side conditions with no character
+  // bookkeeping (no portrait state, no temple price), so they live here rather
+  // than in stats.CONDITIONS - but they still have to pass the save.
+  const spec = CONDITIONS[conditionId] || MONSTER_ONLY_CONDITIONS[conditionId];
   if (!spec) return false;
   if (rand.int(1, 100) > chance) return false;
-  const school = ['afraid', 'insane', 'asleep', 'charmed'].indexOf(conditionId) >= 0 ? 'mind' : 'body';
+  const school = ['afraid', 'insane', 'asleep', 'charmed', 'feebleminded'].indexOf(conditionId) >= 0 ? 'mind' : 'body';
   if (isImmune(target, school)) return false;
   const res = resistanceOf(target, school);
   // A resistance roll that survives even one halving blocks the condition.
@@ -361,7 +370,17 @@ export function resolveAttack(attacker, target, rand, opts) {
 
   const ranged = !!o.ranged;
   const w = isMonster(attacker) ? null : activeWeapon(attacker, ranged);
-  const roll = attackRoll(attacker, target, rand, { ranged, ignoreAC: w ? (w.mods.ignoreAC || 0) : 0 });
+  // ignoreAC belongs on the to-hit roll (it is an accuracy trick, not extra
+  // damage): fold in both the item enchant and the weapon skill's Master
+  // bonus, which used to be computed after the roll and thrown away.
+  let ignoreAC = w ? (w.mods.ignoreAC || 0) : 0;
+  if (w && w.skill) {
+    const s = (attacker.skills || {})[w.skill];
+    if (s && s.level > 0 && s.mastery >= MASTERY.MASTER) {
+      ignoreAC += (skillEffect(w.skill, s.level, s.mastery).special || {}).ignoreAC || 0;
+    }
+  }
+  const roll = attackRoll(attacker, target, rand, { ranged, ignoreAC });
   entry.chance = roll.chance;
   if (!roll.hit) return entry;
   entry.hit = true;
@@ -397,6 +416,11 @@ export function resolveAttack(attacker, target, rand, opts) {
   if (dmg.notes.indexOf('paralyze') >= 0) tryInflict(target, 'paralyzed', 100, rand);
   if (dmg.inflict) tryInflict(target, dmg.inflict.condition, dmg.inflict.chance, rand);
 
+  // Riders the presentation layer consumes: an exploding weapon bursts at the
+  // victim, knockback shoves the sprite.
+  if (dmg.explodes && entry.damage > 0) entry.explodes = true;
+  if (dmg.knockback && entry.damage > 0) entry.knockback = dmg.knockback;
+
   if (dmg.vampiric && entry.damage > 0) {
     const heal = Math.round(entry.damage * dmg.vampiric);
     attacker.hp = Math.min(maxHP(attacker), attacker.hp + heal);
@@ -410,19 +434,30 @@ export function resolveAttack(attacker, target, rand, opts) {
   return entry;
 }
 
-/** Cast an offensive spell at one target. */
+/**
+ * Cast an offensive spell at one target.
+ *
+ * Multi-bolt contract (Sparks, Shrapmetal): the `dmg` spec is *per bolt* and
+ * every bolt rolls its own dice, so a cast that lands all its bolts deals
+ * roughly `spellDamageAvg` in total - the same convention spells.js uses for
+ * the book page and the balance harness. One roll divided across the bolts
+ * (the old behaviour) silently disagreed with both.
+ */
 export function resolveSpellAttack(caster, spell, target, skillLevel, mastery, rand) {
   const entry = { attacker: combatantName(caster), target: combatantName(target), spell: spell.id, damage: 0, killed: false, notes: [] };
-  const roll = spellDamage(spell, skillLevel, mastery, rand, isMonster(target) ? { maxHP: target.maxHP, hp: target.hp } : { maxHP: maxHP(target), hp: target.hp });
+  const tinfo = isMonster(target) ? { maxHP: target.maxHP, hp: target.hp } : { maxHP: maxHP(target), hp: target.hp };
   if (spell.vsUndeadOnly && !(isMonster(target) && target.def.undead)) {
     entry.notes.push('unaffected');
     return entry;
   }
+  let roll = spellDamage(spell, skillLevel, mastery, rand, tinfo);
   const hits = roll.hits || 1;
+  entry.hits = hits;
   for (let i = 0; i < hits; i++) {
-    const res = applyDamage(target, Math.max(1, Math.round(roll.amount / (hits > 1 ? hits : 1))), roll.element, rand, {});
+    if (i > 0) roll = spellDamage(spell, skillLevel, mastery, rand, tinfo);
+    const res = applyDamage(target, Math.max(1, Math.round(roll.amount)), roll.element, rand, {});
     entry.damage += res.dealt;
-    if (res.killed) entry.killed = true;
+    if (res.killed) { entry.killed = true; break; }
     if (res.immune) { entry.notes.push('immune'); break; }
   }
   if (spell.inflict) tryInflict(target, spell.inflict.condition, spell.inflict.chance, rand);
@@ -576,7 +611,9 @@ export function monsterAct(monster, party, world, rand) {
   if (d <= MELEE_RANGE) { out.type = 'melee'; out.reason = 'in reach'; return out; }
 
   const r = monster.def.ranged;
-  if (r && d <= (r.range || 3000)) {
+  // Feeblemind takes the spell away but not the bow.
+  const spellBlocked = r && r.spell && conds.feebleminded;
+  if (r && !spellBlocked && d <= (r.range || 3000)) {
     // Casters prefer their spell; archers loose an arrow. A wary monster shoots
     // whenever it can rather than closing; a suicidal one never bothers.
     const p = ai === 'wary' ? 0.9 : ai === 'suicide' ? 0.1 : monster.def.caster ? 0.7 : 0.55;
@@ -617,16 +654,23 @@ export function performMonsterAction(monster, intent, rand) {
       break;
     }
     case 'cast': {
+      // A monster spell is an attack, not an entitlement: it rolls to hit
+      // (with a bonus - spells are hard to dodge) and the target's elemental
+      // resistance then applies its save inside applyDamage.
       const r = monster.def.ranged;
-      const amount = rand.dice(r.damage.n, r.damage.s) + (r.bonus || 0);
-      const res = applyDamage(intent.target, amount, r.element || 'magic', rand, {});
+      const roll = attackRoll(monster, intent.target, rand, { ranged: true, attackBonus: Math.round(monster.level * 0.5) + 5 });
       const e = {
-        attacker: monster.def.name, target: intent.target.name, hit: true,
-        damage: res.dealt, killed: res.killed, spell: r.spell, notes: ['spell'],
+        attacker: monster.def.name, target: intent.target.name, hit: roll.hit,
+        damage: 0, killed: false, spell: r.spell, notes: ['spell'],
       };
-      const sp = spellById(r.spell);
-      if (sp && sp.inflict) tryInflict(intent.target, sp.inflict.condition, sp.inflict.chance, rand);
-      if (monster.def.inflict) tryInflict(intent.target, monster.def.inflict.condition, Math.round(monster.def.inflict.chance / 2), rand);
+      if (roll.hit) {
+        const amount = rand.dice(r.damage.n, r.damage.s) + (r.bonus || 0);
+        const res = applyDamage(intent.target, amount, r.element || 'magic', rand, {});
+        e.damage = res.dealt; e.killed = res.killed;
+        const sp = spellById(r.spell);
+        if (sp && sp.inflict) tryInflict(intent.target, sp.inflict.condition, sp.inflict.chance, rand);
+        if (monster.def.inflict) tryInflict(intent.target, monster.def.inflict.condition, Math.round(monster.def.inflict.chance / 2), rand);
+      }
       entries.push(e);
       break;
     }
