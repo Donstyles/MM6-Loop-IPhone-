@@ -11,10 +11,13 @@ import { rampCss } from '../../core/palette.js';
 import { clamp, hash2 } from '../../core/rng.js';
 import * as F from '../../art/font.js';
 import * as M from './mm6art.js';
-import { xpForLevel, trainingCost, maxHP, maxSP, CLASSES } from '../../game/stats.js';
+import { xpForLevel, trainingCost, CLASSES } from '../../game/stats.js';
 import {
-  HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, paintWall, paintFloor,
-  paintShelf, paintClutter, vignette, members, charName, partyGold, spend, contactShadow, poseSeed,
+  canTrain as canTrainRules, levelUp, advanceTime, MINUTES_PER_DAY,
+} from '../../game/party.js';
+import {
+  HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, rngFor, paintWall, paintFloor,
+  paintShelf, paintClutter, vignette, members, charName, partyGold, spend, earn, contactShadow, poseSeed,
   C_WHITE, C_GOLD, C_CANARY, C_DIM, C_RED, C_GREEN,
 } from './dialogue.js';
 import { LevelUpScreen } from './levelup.js';
@@ -153,7 +156,7 @@ export class TrainingScreen extends HouseScreen {
 
   canTrain(ch) {
     if (this.levelOf(ch) >= this.maxLevel) return 'cap';
-    if (this.xpOf(ch) < this.needFor(ch)) return 'xp';
+    if (!canTrainRules(ch).ok) return 'xp';
     if (partyGold(this.session) < this.costFor(ch)) return 'gold';
     return 'ok';
   }
@@ -168,25 +171,25 @@ export class TrainingScreen extends HouseScreen {
     const cost = this.costFor(ch);
     if (!spend(this.session, cost)) { this.say(`Training costs ${gold(cost)} gold.`); return; }
 
-    const hpBefore = this.safe(() => maxHP(ch), ch.maxHP || 0);
-    const spBefore = this.safe(() => maxSP(ch), ch.maxSP || 0);
-    ch.level = this.levelOf(ch) + 1;
-    ch.skillPoints = (ch.skillPoints | 0) + 5;
-    const hpAfter = this.safe(() => maxHP(ch), hpBefore + 5);
-    const spAfter = this.safe(() => maxSP(ch), spBefore);
-    ch.maxHP = hpAfter;
-    ch.maxSP = spAfter;
-    ch.hp = hpAfter;
-    ch.sp = spAfter;
+    // The rules engine owns the level: every-4th-level stat gain, skill
+    // points, recompute. Stale ch.maxHP/maxSP data fields written by an older
+    // build are cleared so nothing reads them ahead of the real derivations.
+    const rnd = rngFor(`train:${ch.id}:${ch.level}:${this.session.party && this.session.party.seed}`);
+    const report = levelUp(ch, rnd);
+    if (!report) { earn(this.session, cost); this.say(`${charName(ch)} is not ready.`); return; }
+    delete ch.maxHP;
+    delete ch.maxSP;
+    // MM6 charges time as well as gold: a level is a day in the yard.
+    advanceTime(this.session.party, MINUTES_PER_DAY, rnd);
 
     this.say(`${charName(ch)} is now level ${ch.level}.`);
-    this.sound('levelup');
+    this.sound('level_up');
     this.push(new LevelUpScreen(this.session, this.ui, this.hud, {
       character: ch,
-      level: ch.level,
-      hp: Math.max(0, hpAfter - hpBefore),
-      sp: Math.max(0, spAfter - spBefore),
-      skillPoints: 5,
+      level: report.level,
+      hp: Math.max(0, report.hpGained),
+      sp: Math.max(0, report.spGained),
+      skillPoints: report.skillPoints,
     }));
   }
 

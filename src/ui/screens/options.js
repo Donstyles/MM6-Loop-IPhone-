@@ -135,8 +135,22 @@ export class OptionsScreen extends Screen {
     return s.settings;
   }
 
+  /** The live mixer, when the audio system exposes one. Probed per call - the
+   *  volume API may not exist in every build, and the screen must not care. */
+  mixer() {
+    const a = this.session && this.session.audio;
+    if (a && typeof a.setMusicVolume === 'function' && typeof a.setSfxVolume === 'function') return a;
+    return null;
+  }
+
   apply() {
     if (typeof this.session.applySettings === 'function') this.session.applySettings();
+    const s = this.settings();
+    const a = this.mixer();
+    if (a) {
+      a.setMusicVolume(s.musicVolume);
+      a.setSfxVolume(s.soundVolume);
+    }
   }
 
   handleKey(code) {
@@ -169,7 +183,9 @@ export class OptionsScreen extends Screen {
     // its six buttons; the lozenge chain that used to sit either side of the
     // cartouche read as a row of literal "- - - -" dashes and is gone.
 
-    F.drawText(ctx, this.session.saveName || '', px(PANEL.w / 2), py(110),
+    this.drawVolumeRows(ctx);
+
+    F.drawText(ctx, this.session.saveName || '', px(PANEL.w / 2), py(134),
       { face: 'small', align: 'center', color: DIM });
 
     for (const [id, label, bx, by] of BUTTONS) {
@@ -190,13 +206,60 @@ export class OptionsScreen extends Screen {
     this.pollPartyBar();
   }
 
+  /**
+   * The Music / Sound rows on the panel face, shown only when the audio
+   * system actually has a mixer to drive - a slider wired to nothing is a lie.
+   */
+  drawVolumeRows(ctx) {
+    const a = this.mixer();
+    if (!a) return;
+    const s = this.settings();
+    // Adopt the mixer's own levels the first time, so the knobs tell the truth.
+    if (!this._volSynced && typeof a.getVolumes === 'function') {
+      const v = a.getVolumes() || {};
+      if (Number.isFinite(v.music)) s.musicVolume = v.music;
+      if (Number.isFinite(v.sfx)) s.soundVolume = v.sfx;
+      this._volSynced = true;
+    }
+    const rows = [['musicVolume', 'Music'], ['soundVolume', 'Sound']];
+    const tx = px(170), tw = 180;
+    rows.forEach(([key, label], i) => {
+      const ry = py(78 + i * 24);
+      F.drawText(ctx, label, px(110), ry, { face: 'small', color: WHITE });
+      const hit = this.ui.region(`${this.id}:vol:${key}`, tx - 4, ry - 6, tw + 8, 20, `${label} volume`);
+      if (hit.down) this.drag = key;
+      if (this.drag === key && this.ui.mouse.down) {
+        const t = Math.max(0, Math.min(1, (this.ui.mouse.x - tx) / tw));
+        if (Math.abs(t - s[key]) > 0.001) { s[key] = Math.round(t * 16) / 16; this.apply(); }
+      }
+      A.slider(ctx, tx, ry - 3, tw, s[key], hit.hover || this.drag === key);
+    });
+  }
+
   press(id) {
     this.sound('click');
     const s = this.session;
     switch (id) {
       case 'return': this.close(); break;
-      case 'save': if (s.saveGame) s.saveGame(); this.status = 'Game saved.'; break;
-      case 'load': if (s.loadGame) s.loadGame(); break;
+      case 'save': {
+        // Honesty first: only claim a save when a save system exists and did
+        // not report failure.
+        if (typeof s.saveGame === 'function') {
+          let ok = false;
+          try { ok = s.saveGame() !== false; } catch { ok = false; }
+          this.status = ok ? 'Game saved.' : 'The save failed.';
+        } else this.status = 'Saving is not available yet.';
+        break;
+      }
+      case 'load': {
+        if (typeof s.loadGame === 'function') {
+          let ok = false;
+          try { ok = s.loadGame() !== false; } catch { ok = false; }
+          this.status = ok ? 'Game loaded.' : 'Nothing to load.';
+          if (ok) this.close();
+        } else this.status = 'Loading is not available yet.';
+        break;
+      }
       case 'controls': this.sub = 'controls'; break;
       case 'new': this.confirm = { text: 'Start a new game? Unsaved progress is lost.', act: 'new' }; break;
       case 'quit': this.confirm = { text: 'Quit to the title screen?', act: 'quit' }; break;

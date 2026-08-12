@@ -39,7 +39,7 @@ export class QuestLogScreen extends Screen {
     this.scroll = [0, 0, 0, 0];
   }
 
-  onOpen() { this.sound('page'); }
+  onOpen() { this.sound('page_turn'); }
 
   handleKey(code) {
     if (code === 'Escape' || code === 'KeyQ') { this.close(); return true; }
@@ -51,14 +51,21 @@ export class QuestLogScreen extends Screen {
   // --- content --------------------------------------------------------------
 
   quests() {
-    const q = (this.session && this.session.quests) || {};
-    const list = q.active || this.party.quests || [];
-    return list.filter((e) => e && !e.done);
+    // The quest container has shipped in several shapes - a bare array on the
+    // session, an {active: []} wrapper, or a uid-keyed map on the party - and
+    // the log must read all of them without crashing every frame.
+    const q = (this.session && this.session.quests) || null;
+    const raw = (q && (Array.isArray(q) ? q : q.active)) || this.party.quests || [];
+    const list = Array.isArray(raw) ? raw
+      : (raw && typeof raw === 'object') ? Object.values(raw) : [];
+    return list.filter((e) => e && typeof e === 'object' && !e.done
+      && ['rewarded', 'failed', 'unavailable'].indexOf(e.state || e.status || '') < 0);
   }
 
   notes() {
     const q = (this.session && this.session.quests) || {};
-    return q.notes || this.party.autonotes || [];
+    const raw = (!Array.isArray(q) && q.notes) || this.party.autonotes || [];
+    return Array.isArray(raw) ? raw : Object.values(raw || {});
   }
 
   awards() {
@@ -73,7 +80,8 @@ export class QuestLogScreen extends Screen {
 
   history() {
     const q = (this.session && this.session.quests) || {};
-    return q.history || this.party.history || [];
+    const raw = (!Array.isArray(q) && q.history) || this.party.history || [];
+    return Array.isArray(raw) ? raw : Object.values(raw || {});
   }
 
   /** Flatten the active page into coloured lines so it can flow over 2 pages. */
@@ -88,7 +96,7 @@ export class QuestLogScreen extends Screen {
 
     if (this.page === 0) {
       const list = this.quests();
-      if (!list.length) add('You have no quests. Ask in the taverns.', INK_NOTE);
+      if (!list.length) add('No quests yet. Ask in the taverns.', INK_NOTE);
       for (const q of list) {
         add(q.title || q.name || 'Quest', INK_TITLE, 'small', 0);
         // Never print a raw map id: quests carry the engine id, the page prints the
@@ -96,7 +104,16 @@ export class QuestLogScreen extends Screen {
         const from = [q.giver, q.region ? regionName(q.region) : ''].filter(Boolean).join(', ');
         if (from) add(from, INK_NOTE, 'small', 6);
         if (q.objective || q.text) add(q.objective || q.text, INK_BODY, 'small', 6);
-        if (q.progress !== undefined && q.goal !== undefined) {
+        // Objectives, in the quests.js shape; older fixtures carried a flat
+        // progress/goal pair instead, so both are honoured.
+        if (Array.isArray(q.objectives)) {
+          for (const o of q.objectives) {
+            if (!o || !o.text) continue;
+            const count = o.count > 1 ? ` (${o.progress | 0}/${o.count})` : '';
+            add(`[${o.done ? 'x' : ' '}] ${o.text}${count}`,
+              o.done ? '#1d6b1d' : INK_BODY, 'small', 6);
+          }
+        } else if (q.progress !== undefined && q.goal !== undefined) {
           add(`Progress: ${q.progress} of ${q.goal}`,
             q.progress >= q.goal ? '#1d6b1d' : INK_BODY, 'small', 6);
         }

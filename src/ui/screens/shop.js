@@ -18,6 +18,9 @@ import { clamp } from '../../core/rng.js';
 import * as F from '../../art/font.js';
 import { priceMultipliers } from '../../game/stats.js';
 import { itemName, itemValue, itemDescription, itemDef, shopStock } from '../../game/items.js';
+import { makeInventory, invAdd, invRemove, giveItem } from '../../game/party.js';
+import { classSkillMax, skillById } from '../../game/skills.js';
+import { npcName } from '../../game/npcnames.js';
 import {
   HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, rngFor, paintWall,
   paintFloor, paintShelf, paintCounter, paintClutter, vignette, activeMember, charName,
@@ -115,9 +118,12 @@ export function drawItemIcon(ctx, item, cx, cy, s = 28) {
 // ---------------------------------------------------------------------------
 
 const KIND_TITLE = {
-  weapon: 'Weapon Smith', armor: 'Armourer', magic: 'Magic Shop',
+  weapon: 'Weapon Smith', armor: 'Armorer', magic: 'Magic Shop',
   alchemy: 'Alchemist', general: 'General Store',
 };
+
+/** The town generator speaks British and singular; the screen's kinds do not. */
+const KIND_ALIAS = { armour: 'armor', alchemist: 'alchemy', smith: 'weapon', store: 'general' };
 
 /** Painted interior per trade. Baked once, blitted thereafter. */
 export function paintShopInterior(g, w, h, kind) {
@@ -611,14 +617,29 @@ export class ShopScreen extends HouseScreen {
    */
   constructor(session, ui, hud, opts = {}) {
     super(session, ui, hud, opts);
-    this.kind = opts.kind || 'weapon';
+    const rawKind = (opts.shop && opts.shop.kind) || opts.kind || 'weapon';
+    this.kind = KIND_TITLE[rawKind] ? rawKind : (KIND_ALIAS[rawKind] || 'general');
     this.id = `shop:${this.kind}`;
-    this.tier = opts.tier || 2;
-    this.shopId = opts.id || `${this.kind}_shop`;
-    this.title = opts.title || KIND_TITLE[this.kind] || 'Shop';
-    this.town = opts.town || 1;
+    this.tier = opts.tier || (opts.shop && opts.shop.tier) || 2;
+    this.shopId = opts.id || (opts.shop && opts.shop.id)
+      || `${this.kind}_shop:${(opts.shop && opts.shop.name) || ''}`;
+    // The establishment's painted name from the town generator, when it has one.
+    this.title = (opts.shop && opts.shop.name) || opts.title || KIND_TITLE[this.kind] || 'Shop';
+    this.town = opts.town || null;
+    // priceMultipliers wants a *number*; the activation payload hands the whole
+    // town record here, and multiplying by an object is where the NaN gold came
+    // from. Reduce whatever arrived to a sane factor.
+    const t = opts.townFactor !== undefined ? opts.townFactor : opts.town;
+    this.townFactor = typeof t === 'number' && Number.isFinite(t) ? t
+      : (t && Number.isFinite(t.priceFactor)) ? t.priceFactor
+        : ({ village: 1.1, town: 1, city: 0.9 })[(t && t.size) || ''] || 1;
+    const krand = rngFor(`keeper:${this.shopId}`);
+    const keeperSex = krand.bool() ? 'm' : 'f';
     this.keeper = opts.keeper || {
-      name: 'Shopkeeper', title: KIND_TITLE[this.kind], portraitSeed: 41, sex: 'm',
+      name: npcName(krand, keeperSex, { epithet: false }),
+      title: KIND_TITLE[this.kind],
+      portraitSeed: krand.int(0, 0x7fffffff),
+      sex: keeperSex,
     };
     this.mode = 'buy';
     this.special = false;
@@ -660,7 +681,7 @@ export class ShopScreen extends HouseScreen {
 
   get merchant() {
     const ch = this.character || activeMember(this.session);
-    return priceMultipliers(ch || {}, this.town);
+    return priceMultipliers(ch || {}, this.townFactor);
   }
 
   buyPrice(item) { return Math.max(1, Math.round(itemValue(item) * this.merchant.buy)); }
@@ -673,24 +694,30 @@ export class ShopScreen extends HouseScreen {
 
   // --- inventory access ----------------------------------------------------
 
+  /** The character's bag in party.js's grid form; a legacy array is rebuilt. */
   inventoryOf(ch) {
-    if (!ch) return [];
-    if (!ch.inventory) ch.inventory = ch.items || [];
-    return ch.inventory;
+    if (!ch) return null;
+    let inv = ch.inventory;
+    if (!inv || !Array.isArray(inv.cells) || !Array.isArray(inv.items)) {
+      const items = Array.isArray(inv) ? inv : (inv && Array.isArray(inv.items)) ? inv.items : [];
+      inv = makeInventory();
+      for (const it of items) invAdd(inv, it);
+      ch.inventory = inv;
+    }
+    return inv;
   }
 
+  /** Deliver a bought item; the active pack first, then anyone with room. */
   give(item) {
     const ch = this.character || activeMember(this.session);
-    if (!ch) return false;
-    this.inventoryOf(ch).push(item);
-    return true;
+    if (ch && invAdd(this.inventoryOf(ch), item)) return true;
+    return !!giveItem(this.session.party, item);
   }
 
   take(item) {
     const ch = this.character || activeMember(this.session);
-    const inv = this.inventoryOf(ch);
-    const i = inv.indexOf(item);
-    if (i >= 0) inv.splice(i, 1);
+    if (!ch) return null;
+    return invRemove(this.inventoryOf(ch), item.uid);
   }
 
   // --- options -------------------------------------------------------------
@@ -706,15 +733,14 @@ export class ShopScreen extends HouseScreen {
     ];
   }
 
-  teachSkillName() {
-    return {
-      weapon: 'Repair Item', armor: 'Armsmaster', magic: 'Identify Item',
-      alchemy: 'Alchemy', general: 'Merchant',
-    }[this.kind] || 'Merchant';
-  }
-
   teachSkillId() {
     return { weapon: 'repair', armor: 'leather', magic: 'identify', alchemy: 'perception', general: 'merchant' }[this.kind] || 'merchant';
+  }
+
+  /** The taught skill's real name, so the option never promises a skill that is not the one taught. */
+  teachSkillName() {
+    const def = skillById(this.teachSkillId());
+    return def ? def.name : 'Merchant';
   }
 
   onOption(id) {
@@ -730,6 +756,11 @@ export class ShopScreen extends HouseScreen {
     const price = 100 * this.tier;
     if (!ch.skills) ch.skills = {};
     if (ch.skills[skill]) { this.say(`${charName(ch)} already knows ${this.teachSkillName()}.`); return; }
+    // The class gate is the rules engine's, not the shopkeeper's generosity.
+    if (classSkillMax(ch.class, skill) <= 0) {
+      this.say(`${charName(ch)} could never learn ${this.teachSkillName()}.`);
+      return;
+    }
     if (!spend(this.session, price)) { this.say(`${this.teachSkillName()} costs ${gold(price)} gold to learn.`); return; }
     ch.skills[skill] = { level: 1, mastery: 1 };
     this.say(`${charName(ch)} has learned ${this.teachSkillName()}.`);
@@ -788,6 +819,9 @@ export class ShopScreen extends HouseScreen {
       }
     }
     F.drawText(ctx, heading, gx - 4, gy - 18, { color: C_CANARY });
+    // The establishment's own name, engraved along the top of the room.
+    F.drawText(ctx, this.title, gx + GRID.cols * GRID.cw + 4, gy - 18,
+      { align: 'right', color: C_GOLD, maxWidth: 220 });
 
     if (!list.length) {
       F.drawText(ctx, this.emptyText(), gx + (GRID.cols * GRID.cw) / 2, gy + 40,
@@ -841,9 +875,10 @@ export class ShopScreen extends HouseScreen {
     const st = this.shop;
     if (this.mode === 'buy') return (this.special ? st.specials : st.stock) || [];
     const inv = this.inventoryOf(this.character || activeMember(this.session));
-    if (this.mode === 'sell') return inv;
-    if (this.mode === 'identify') return inv.filter((i) => i.identified === false);
-    if (this.mode === 'repair') return inv.filter((i) => i.broken);
+    const items = (inv && inv.items) || [];
+    if (this.mode === 'sell') return items;
+    if (this.mode === 'identify') return items.filter((i) => i.identified === false);
+    if (this.mode === 'repair') return items.filter((i) => i.broken);
     return [];
   }
 
@@ -862,21 +897,26 @@ export class ShopScreen extends HouseScreen {
     switch (this.mode) {
       case 'buy': {
         const price = this.buyPrice(item);
-        if (!spend(this.session, price)) { this.say('You cannot afford that.'); return; }
+        if (!Number.isFinite(price) || price <= 0) { this.say('The keeper cannot price that.'); return; }
+        if (partyGold(this.session) < price) { this.say('You cannot afford that.'); return; }
+        // Deliver first, pay second: gold only leaves the purse for an item
+        // that actually made it into a pack.
+        if (!this.give(item)) { this.say('Your packs are full.'); return; }
+        spend(this.session, price);
         const list = this.special ? this.shop.specials : this.shop.stock;
         const i = list.indexOf(item);
         if (i >= 0) list.splice(i, 1);
-        this.give(item);
         this.say(`Bought ${itemName(item)} for ${gold(price)} gold.`);
         this.sound('buy');
         return;
       }
       case 'sell': {
         const price = this.sellPrice(item);
-        this.take(item);
+        if (!this.take(item)) { this.say('That is not yours to sell.'); return; }
         earn(this.session, price);
         this.shop.stock.push(item);
         this.say(`Sold ${itemName(item)} for ${gold(price)} gold.`);
+        this.sound('sell');
         return;
       }
       case 'identify': {

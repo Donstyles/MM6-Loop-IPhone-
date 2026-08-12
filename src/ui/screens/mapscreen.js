@@ -17,6 +17,7 @@ import {
   MAP_NAVY, MAP_WALL, MAP_FRIEND, MAP_HOSTILE, MAP_CORPSE, MAP_DECOR, MAP_TREASURE,
 } from './screenbase.js';
 import * as M from './mm6art.js';
+import * as HC from '../../art/hudchrome.js';
 
 /** Keep sketch features clear of the sea: bias samples toward the land side. */
 function coastPad(t) { return 0.18 + t * 0.80; }
@@ -48,7 +49,7 @@ export class MapScreen extends Screen {
     this.pan.x = 0; this.pan.z = 0;
     // The book opens at its closest zoom - 1536 outdoors, 3072 indoors.
     this.zoom = this.session.map && this.session.map.indoor ? 3 : 2;
-    this.sound('page');
+    this.sound('page_turn');
   }
 
   handleKey(code) {
@@ -155,12 +156,6 @@ export class MapScreen extends Screen {
     this.drawZoomButtons(ctx, rect);
     this.drawLegend(ctx, map);
 
-    // Only what the pointer is over: MM6 never prints its own key bindings.
-    const tip = this.ui.hoverText;
-    if (tip) {
-      F.drawText(ctx, tip, rect.x + 4, rect.y + rect.h + 4,
-        { face: 'small', color: '#3a2a10', shadow: '#ece0c2', maxWidth: rect.w - 8 });
-    }
     const r = { x: px(EXIT_X), y: py(TAB_Y), w: EXIT_W, h: TAB_H };
     const hit = this.ui.region(`${this.id}:exit`, r.x, r.y, r.w, r.h, 'Close the map');
     const d = A.button(ctx, r.x, r.y, r.w, r.h, null,
@@ -299,6 +294,15 @@ export class MapScreen extends Screen {
         if (d && isFinite(d.x)) marks.push({ x: d.x, z: d.z, name: d.name, kind: 'dungeon' });
       }
     }
+    // A place may arrive from two sources (the region list and the map's own
+    // markers); one label per name per kind, never the town printed twice.
+    const seen = new Set();
+    marks = marks.filter((m) => {
+      const k = `${m.kind || 'town'}|${m.name || `${m.x},${m.z}`}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
     this._marks = marks; this._marksKey = key;
     return marks;
   }
@@ -355,37 +359,70 @@ export class MapScreen extends Screen {
       tri[2][0], tri[2][1], tri[3][0], tri[3][1]], CANARY);
   }
 
-  /** Zoom keys live below the chart, clear of the drawing. */
+  /**
+   * Zoom keys below the chart - the same brass keys the sidebar minimap
+   * carries, from hudchrome, so the book does not invent a third widget style.
+   */
   drawZoomButtons(ctx, rect) {
     const by = py(VIEW.y + VIEW.h + 22);
     const bx = px(VIEW.x);
-    const mk = (id, label, x, tip, off) => {
-      const hit = this.ui.region(`${this.id}:${id}`, x, by, 24, 18, tip);
-      const d = A.button(ctx, x, by, 24, 18, null,
-        off ? 'disabled' : hit.down ? 'down' : hit.hover ? 'hot' : 'up',
-        { material: 'wood', seed: 31 });
-      F.drawText(ctx, label, x + 12 + d, by + 4 + d, {
-        align: 'center', color: off ? DIM : hit.hover ? HILITE : CANARY,
-      });
+    const KW = 18, KH = HC.COMPASS_H || 18;
+    const mk = (id, sign, x, tip, off) => {
+      const hit = this.ui.region(`${this.id}:${id}`, x, by, KW, KH, tip);
+      HC.drawZoomKey(ctx, x, by, KW, KH, sign, hit.down && !off);
       return hit.click && !off;
     };
     const maxZ = this.session.map && this.session.map.indoor ? 3 : 2;
-    if (mk('zin', '+', bx, 'Zoom in', this.zoom === maxZ)) this.setZoom(this.zoom + 1);
-    if (mk('zout', '-', bx + 28, 'Zoom out', this.zoom === 0)) this.setZoom(this.zoom - 1);
+    if (mk('zin', 1, bx, 'Zoom in', this.zoom === maxZ)) this.setZoom(this.zoom + 1);
+    if (mk('zout', -1, bx + KW + 6, 'Zoom out', this.zoom === 0)) this.setZoom(this.zoom - 1);
     // No numeric zoom readout: MM6 changes the scale and shows you the result.
   }
 
   /**
-   * The region's name, ruled onto the page under the chart. MM6 prints the
-   * place and nothing else - there is no coloured-square key anywhere in the
-   * map book, so there is none here.
+   * The band under the chart: the region's name, a symbol key and the party's
+   * position - a cartographer's margin, not a strip of dead parchment.
    */
   drawLegend(ctx, map) {
     const y = VIEW.y + VIEW.h + 8;
     const name = (map && (map.name || map.id)) || 'Unknown Region';
     A.rule(ctx, px(VIEW.x), py(y - 2), VIEW.w, '#6b5636', 0.5);
-    F.drawText(ctx, String(name).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
-      px(VIEW.x), py(y + 4), { color: '#2a1a06', shadow: '#ece0c2', maxWidth: 220 });
+    const INKC = '#2a1a06', DIMC = '#5a4626', EMBC = '#ece0c2';
+    // Whatever the pointer is over takes the name's spot; otherwise the place.
+    const head = this.ui.hoverText
+      || String(name).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+    F.drawText(ctx, head, px(VIEW.x), py(y + 4), { color: INKC, shadow: EMBC, maxWidth: 200 });
+
+    // The party's place and facing, in whole tiles - what a chart is for.
+    const p = this.player;
+    const dir = ['N', 'NW', 'W', 'SW', 'S', 'SE', 'E', 'NE'][
+      ((Math.round((p.yaw / (Math.PI * 2)) * 8) % 8) + 8) % 8];
+    F.drawText(ctx, `${Math.round(p.x / TILE)}, ${Math.round(p.z / TILE)}  facing ${dir}`,
+      px(VIEW.x + VIEW.w), py(y + 4), { align: 'right', color: INKC, shadow: EMBC });
+
+    // Symbol key, beside the zoom keys.
+    let lx = px(VIEW.x + 64);
+    const ly = py(y + 18);
+    ctx.fillStyle = MAP_DECOR;
+    ctx.fillRect(lx, ly + 2, 7, 7);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(lx + 2, ly + 4, 3, 3);
+    F.drawText(ctx, 'Town', lx + 11, ly + 1, { face: 'small', color: DIMC, shadow: EMBC });
+    lx += 52;
+    ctx.fillStyle = MAP_HOSTILE;
+    ctx.fillRect(lx, ly + 2, 7, 2);
+    ctx.fillRect(lx, ly + 2, 2, 7);
+    ctx.fillRect(lx + 5, ly + 2, 2, 7);
+    F.drawText(ctx, 'Dungeon', lx + 11, ly + 1, { face: 'small', color: DIMC, shadow: EMBC });
+    lx += 72;
+    M.polyH(ctx, [lx + 4, ly + 1, lx, ly + 9, lx + 4, ly + 6, lx + 8, ly + 9], CANARY);
+    F.drawText(ctx, 'You', lx + 12, ly + 1, { face: 'small', color: DIMC, shadow: EMBC });
+
+    // The date, on the far right of the margin row.
+    const clock = this.session.clock;
+    if (clock && clock.format) {
+      F.drawText(ctx, clock.format(), px(VIEW.x + VIEW.w), py(y + 19),
+        { face: 'small', align: 'right', color: DIMC, shadow: EMBC });
+    }
   }
 }
 

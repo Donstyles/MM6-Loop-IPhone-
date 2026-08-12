@@ -158,7 +158,21 @@ export class GuildScreen extends HouseScreen {
 
   // --- spells --------------------------------------------------------------
 
-  spells() { return SPELLS_BY_SCHOOL[this.school] || []; }
+  /**
+   * The shelf, skewed toward what the active member could actually walk out
+   * with: unknown, rank-reachable tomes stand at the front, locked ones behind
+   * them, and books already copied out go to the back of the shelf. A new
+   * member should see spells to buy, not their own starter book re-sold.
+   */
+  spells() {
+    const ch = this.character || activeMember(this.session);
+    const rank = (sp) => {
+      if (this.knows(ch, sp.id)) return 2;
+      return this.blockedReason(ch, sp) ? 1 : 0;
+    };
+    return (SPELLS_BY_SCHOOL[this.school] || []).slice()
+      .sort((a, b) => rank(a) - rank(b) || a.tier - b.tier);
+  }
 
   knows(ch, id) {
     if (!ch) return false;
@@ -205,7 +219,7 @@ export class GuildScreen extends HouseScreen {
     if (!spend(this.session, price)) { this.say(`${spell.name} costs ${gold(price)} gold.`); return; }
     this.learn(ch, spell);
     this.say(`${charName(ch)} copies ${spell.name} into their book.`);
-    this.sound('page');
+    this.sound('page_turn');
   }
 
   // --- skill teaching ------------------------------------------------------

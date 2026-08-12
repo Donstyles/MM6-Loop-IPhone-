@@ -25,6 +25,8 @@ import {
   skillDescription, classSkillMax,
 } from '../../game/skills.js';
 import { spellById } from '../../game/spells.js';
+import { spendSkillPoint } from '../../game/party.js';
+import { MASTERY } from '../../game/skills.js';
 import { InventoryScreen, drawPaperdoll } from './inventory.js';
 
 // The sheet is #C8B48C parchment, so it is written in ink, not in the HUD's
@@ -68,10 +70,10 @@ export class CharSheetScreen extends Screen {
     this.awardScroll = 0;
   }
 
-  onOpen() { this.sound('page'); }
+  onOpen() { this.sound('page_turn'); }
 
   openInventory() {
-    this.sound('page');
+    this.sound('page_turn');
     this.push(new InventoryScreen(this.session, this.ui, this.hud,
       Object.assign({}, this.opts, { sheet: this })));
   }
@@ -121,7 +123,7 @@ export class CharSheetScreen extends Screen {
       this.tab === 3 ? 3 : this.tab);
     if (clicked >= 0) {
       if (clicked === 2) this.openInventory();
-      else if (clicked !== this.tab) { this.tab = clicked; this.sound('page'); }
+      else if (clicked !== this.tab) { this.tab = clicked; this.sound('page_turn'); }
     }
     this.drawExit(ctx);
     this.pollPartyBar();
@@ -139,7 +141,7 @@ export class CharSheetScreen extends Screen {
       const col = cur > base ? INK_GOOD : cur < base ? INK_BAD : INK;
       const hit = this.ui.region(`${this.id}:st:${st.id}`, px(LX), py(y - 2), LW, 13,
         `${st.name}: ${st.desc}`);
-      leaderRow(ctx, st.name, `${cur} (${base})`, px(LX), py(y), LW, {
+      leaderRow(ctx, st.name, `${cur} / ${base}`, px(LX), py(y), LW, {
         color: hit.hover ? LABEL : INK, valueColor: col, shadow: EMB,
       });
       y += 14;
@@ -154,7 +156,7 @@ export class CharSheetScreen extends Screen {
       ['Hit Points', `${ch.hp | 0} / ${hp}`, (ch.hp | 0) <= hp * 0.25 ? INK_RED : (ch.hp | 0) < hp ? INK_BAD : INK,
         'Hit points. At zero the character falls unconscious.'],
       ['Spell Points', `${ch.sp | 0} / ${sp}`, INK, 'Spell points, spent to cast spells.'],
-      ['Armour Class', String(armorClass(ch)), INK, 'How hard the character is to hit.'],
+      ['Armor Class', String(armorClass(ch)), INK, 'How hard the character is to hit.'],
       ['Condition', cond.name, conditionColor(cond.id), cond.desc || ''],
       ['Quick Spell', qs ? qs.name : 'None', qs ? INK_LEARN : INK_DIM,
         'The spell cast by the quick-spell button. Set it in the spellbook.'],
@@ -215,20 +217,15 @@ export class CharSheetScreen extends Screen {
     return out;
   }
 
+  /**
+   * All spending goes through party.js's spendSkillPoint, which enforces the
+   * mastery caps (Normal 4, Expert 8) and recomputes the derived stats.
+   * Returns true when a point was actually spent.
+   */
   spend(ch, skillId) {
-    const party = this.session.party;
-    if (party && typeof party.spendSkillPoint === 'function') {
-      party.spendSkillPoint(this.charIndex, skillId);
-      return;
-    }
-    // Fallback while party.js is still being written: MM6's own rule, N -> N+1
-    // costs N+1 points.
-    const rec = ch.skills && ch.skills[skillId];
-    if (!rec) return;
-    const cost = skillPointCost(rec.level | 0);
-    if ((ch.skillPoints | 0) < cost) return;
-    ch.skillPoints -= cost;
-    rec.level = (rec.level | 0) + 1;
+    const r = spendSkillPoint(ch, skillId);
+    if (!r.ok) { this.status = r.reason || 'Cannot raise that skill.'; return false; }
+    return true;
   }
 
   drawSkills(ctx, ch) {
@@ -254,12 +251,16 @@ export class CharSheetScreen extends Screen {
         for (const s of list) {
           const cost = skillPointCost(s.level);
           const cap = classSkillMax(ch.class, s.def.id);
-          const affordable = points >= cost;
+          // The mastery ceiling: Normal stops at 4, Expert at 8. A skill at
+          // its ceiling needs a teacher, not points, so it is never painted
+          // as raisable no matter how many points are in hand.
+          const rankCap = s.mastery === MASTERY.NORMAL ? 4 : s.mastery === MASTERY.EXPERT ? 8 : 60;
+          const raisable = points >= cost && s.level < rankCap;
           const hit = this.ui.region(`${this.id}:sk:${s.def.id}`, px(col.x), py(y - 2), col.w, 13,
             `${skillDescription(s.def.id, s.level, s.mastery)}  [${cost} points to raise]`);
-          if (hit.click && affordable) { this.spend(ch, s.def.id); this.sound('click'); }
+          if (hit.click) { if (this.spend(ch, s.def.id)) this.sound('click'); else this.sound('error'); }
           // MM6 paints a raisable skill bolt blue and everything else red.
-          const c = hit.hover ? LABEL : affordable ? INK_LEARN : INK_RED;
+          const c = hit.hover ? LABEL : raisable ? INK_LEARN : INK_RED;
           T(ctx, s.def.name, px(col.x), py(y), { face: 'small', color: c });
           T(ctx, `(${s.level})`, px(col.x + col.w - 52), py(y), {
             face: 'small', color: c, align: 'right',

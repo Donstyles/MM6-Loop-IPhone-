@@ -17,7 +17,9 @@ import {
   clearCondition, conditionIds, contactShadow, poseSeed, MM6, C_WHITE, C_CANARY, C_DIM, C_RED, C_GREEN,
 } from './dialogue.js';
 
-const GODS = ['The Sun', 'The Moon', 'The Sky', 'The Forge', 'The Deep'];
+// Lower-case article: these read mid-sentence ("Temple of the Sun", "the
+// blessing of the Sun") and "of The Sky" is a typesetting error, not reverence.
+const GODS = ['the Sun', 'the Moon', 'the Sky', 'the Forge', 'the Deep'];
 
 /** Stained glass, altar, candles: the one interior with coloured light. */
 export function paintTempleInterior(g, w, h, tint = '#e1cd23') {
@@ -214,7 +216,7 @@ export class TempleScreen extends HouseScreen {
       const base = healCost(ch, this.factor);
       return Math.round(base * (1 + this.partyLevel() * 0.05));
     } catch {
-      const missing = Math.max(0, (ch.maxHP || 30) - (ch.hp || 0));
+      const missing = Math.max(0, this.maxHPOf(ch) - (ch.hp || 0));
       return Math.max(1, Math.round((missing * 0.5 + 10) * this.factor));
     }
   }
@@ -269,7 +271,7 @@ export class TempleScreen extends HouseScreen {
       ch.sp = this.maxSPOf(ch);
     }
     this.say('You are made whole. Go with the blessing of ' + this.god + '.');
-    this.sound('heal');
+    this.sound('heal_chime');
   }
 
   doResurrect() {
@@ -353,12 +355,16 @@ export class TempleScreen extends HouseScreen {
   drawContent(ctx) {
     const x = PANEL.x + 16, y = PANEL.y + 18, w = PANEL.w - 32;
     const rows = members(this.session);
-    const h = 34 + rows.length * 20;
+    // One extra row: the ledger's total, which is exactly the Heal price on
+    // the option list - one price system, added up in front of the customer.
+    const h = 34 + rows.length * 20 + 18;
     // The rose window sits directly behind this table, so the plate is taken
     // down further than a shop's - at 0.62 the jewel glass reads through the
     // dither as coloured speckle across the figures.
     plate(ctx, x, y, w, h, 0.80);
     F.drawText(ctx, `The Temple of ${this.god}`, x + 10, y + 6, { color: C_CANARY });
+    F.drawText(ctx, this.keeper && this.keeper.name ? this.keeper.name : '', x + w - 12, y + 6,
+      { face: 'small', align: 'right', color: C_DIM });
     A.rule(ctx, x + 8, y + 20, w - 16, '#7a6a4a');
     F.drawText(ctx, 'Condition', x + 150, y + 22, { face: 'small', color: C_DIM });
     F.drawText(ctx, 'Cost', x + w - 12, y + 22, { face: 'small', align: 'right', color: C_DIM });
@@ -374,6 +380,13 @@ export class TempleScreen extends HouseScreen {
       F.drawText(ctx, `${gold(this.healPriceFor(ch))}g`, x + w - 12, ry,
         { align: 'right', color: bad || (ch.hp | 0) < this.maxHPOf(ch) ? C_CANARY : C_DIM });
     });
+
+    // Total: the same figure the Heal option quotes.
+    const ty = y + 34 + rows.length * 20;
+    A.rule(ctx, x + 8, ty - 4, w - 16, '#7a6a4a');
+    F.drawText(ctx, 'Healing for the party', x + 12, ty + 2, { face: 'small', color: C_DIM });
+    F.drawText(ctx, `${gold(this.healPrice())}g`, x + w - 12, ty + 2,
+      { align: 'right', color: C_CANARY });
   }
 
   conditionName(ch) {

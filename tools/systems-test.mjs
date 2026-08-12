@@ -415,6 +415,35 @@ function spendPoints(c) {
   }
 }
 
+// Equipment-derived caches: a weapon's attack/damage enchants must NOT land in
+// the cached attackMods/damageMods - combat.js re-adds w.mods per swing, so
+// caching them too would double-count every enchant. Non-weapon slots keep
+// contributing to the caches as before.
+{
+  const rand = new Rand('dblcount');
+  const c = Party.createCharacter(rand, 'knight', { name: 'Cache' });
+  ok(c.recovery === 0, 'createCharacter must init recovery to 0 (HUD gem reads it)');
+  const sword = Items.makeItem('longsword', { identified: true, bonus: 3 });
+  Party.invAdd(c.inventory, sword);
+  const before = { atk: c.attackMods, dmg: c.damageMods, ac: c.acMods };
+  Party.equip(c, sword, 'mainhand');
+  ok(c.attackMods === before.atk && c.damageMods === before.dmg && c.acMods === before.ac,
+    'weapon +N must not be cached into attackMods/damageMods/acMods');
+  const ring = Items.makeItem('ring', { identified: true, suffix: 'of_might' });
+  Party.invAdd(c.inventory, ring);
+  Party.equip(c, ring, 'ring1');
+  ok(c.statMods.might === 10, 'non-weapon enchants still feed the caches');
+  // levelUp adds the new dice to the pools but is not a heal and never revives.
+  c.hp = 1;
+  c.conditions.unconscious = true;
+  c.xp = Stats.xpForLevel(2);
+  const rep = Party.levelUp(c, rand);
+  ok(!!rep && c.level === 2, 'levelUp fired');
+  ok(c.hp < Stats.maxHP(c) || rep.hpGained >= Stats.maxHP(c) - 1,
+    'levelUp must not fully heal a wounded character');
+  ok(c.conditions.unconscious === true, 'levelUp must not silently revive the unconscious');
+}
+
 {
   const p20 = buildParty(20);
   for (const c of p20.members) {

@@ -9,20 +9,29 @@
 // hand. The paperdoll lives in the right-hand column, where MM6 draws it on
 // every tab of the sheet.
 //
-// Item icons are procedural. `itemIcon()` composes a small painted pixel icon
-// from the item's type plus its material/enchantment colour and caches it, so
-// no art files are needed and a new item type costs a dozen lines.
+// The bag itself is party.js's canonical grid - { w, h, cells, items } built
+// by makeInventory - and every move goes through invAdd / invRemove so the
+// cell stamps never drift from the item list. This screen never replaces or
+// reshapes that object; the same bag the loot and shop code fills is the one
+// drawn here.
+//
+// Item icons are procedural. `itemIcon()` sizes mm6art's painted item bitmaps
+// to the item's grid footprint and caches them, so no art files are needed.
 // ---------------------------------------------------------------------------
 
 import * as F from '../../art/font.js';
-import { rampCss } from '../../core/palette.js';
 import {
   Screen, A, PANEL, SIDE, TAB_X, TAB_Y, TAB_W, TAB_H, px, py,
   WHITE, CANARY, HILITE, drawTabs, drawWrapped,
 } from './screenbase.js';
 import * as M from './mm6art.js';
 import { CLASSES } from '../../game/stats.js';
-import { itemDef } from '../../game/items.js';
+import {
+  itemDef, itemName, itemDescription, TYPE_SLOT,
+} from '../../game/items.js';
+import {
+  makeInventory, invAdd, invRemove, equip, recompute, useItem,
+} from '../../game/party.js';
 
 // --- item model -------------------------------------------------------------
 
@@ -32,39 +41,20 @@ export const SLOTS = [
   'mainhand', 'offhand', 'bow', 'ring1', 'ring2',
 ];
 
-/** Default grid footprint (in cells) and accepted slot per item type. */
+/** Fallback grid footprint per item type, for items with no definition. */
 const TYPES = {
-  sword: { w: 1, h: 3, slot: 'mainhand', icon: 'blade' },
-  dagger: { w: 1, h: 2, slot: 'mainhand', icon: 'blade' },
-  axe: { w: 2, h: 3, slot: 'mainhand', icon: 'axe' },
-  mace: { w: 1, h: 3, slot: 'mainhand', icon: 'mace' },
-  spear: { w: 1, h: 4, slot: 'mainhand', icon: 'spear' },
-  staff: { w: 1, h: 4, slot: 'mainhand', icon: 'staff' },
-  club: { w: 1, h: 3, slot: 'mainhand', icon: 'mace' },
-  bow: { w: 2, h: 3, slot: 'bow', icon: 'bow' },
-  blaster: { w: 1, h: 3, slot: 'mainhand', icon: 'wand' },
-  shield: { w: 2, h: 2, slot: 'offhand', icon: 'shield' },
-  helm: { w: 2, h: 2, slot: 'helm', icon: 'helm' },
-  armor: { w: 2, h: 3, slot: 'armor', icon: 'armor' },
-  boots: { w: 2, h: 2, slot: 'boots', icon: 'boots' },
-  gauntlets: { w: 2, h: 2, slot: 'gauntlets', icon: 'gauntlets' },
-  belt: { w: 2, h: 1, slot: 'belt', icon: 'belt' },
-  cloak: { w: 2, h: 3, slot: 'cloak', icon: 'cloak' },
-  amulet: { w: 1, h: 1, slot: 'amulet', icon: 'amulet' },
-  ring: { w: 1, h: 1, slot: 'ring1', icon: 'ring' },
-  potion: { w: 1, h: 2, slot: null, icon: 'potion' },
-  scroll: { w: 2, h: 1, slot: null, icon: 'scroll' },
-  wand: { w: 1, h: 3, slot: 'mainhand', icon: 'wand' },
-  book: { w: 2, h: 2, slot: null, icon: 'book' },
-  gem: { w: 1, h: 1, slot: null, icon: 'gem' },
-  gold: { w: 1, h: 1, slot: null, icon: 'gold' },
-  reagent: { w: 1, h: 1, slot: null, icon: 'reagent' },
-  misc: { w: 1, h: 1, slot: null, icon: 'reagent' },
+  weapon: { w: 1, h: 3 }, bow: { w: 2, h: 4 }, shield: { w: 2, h: 2 },
+  helm: { w: 2, h: 2 }, armor: { w: 2, h: 3 }, boots: { w: 2, h: 2 },
+  gauntlets: { w: 1, h: 2 }, belt: { w: 2, h: 1 }, cloak: { w: 2, h: 2 },
+  amulet: { w: 1, h: 1 }, ring: { w: 1, h: 1 }, potion: { w: 1, h: 1 },
+  scroll: { w: 1, h: 2 }, wand: { w: 1, h: 3 }, spellbook: { w: 2, h: 2 },
+  gem: { w: 1, h: 1 }, gold: { w: 1, h: 1 }, reagent: { w: 1, h: 1 },
+  food: { w: 1, h: 1 }, misc: { w: 1, h: 1 },
 };
 
 function typeOf(item) { return TYPES[item && item.type] || TYPES.misc; }
-export function itemW(item) { return (item && (item.w || item.gw)) || typeOf(item).w; }
-export function itemH(item) { return (item && (item.h || item.gh)) || typeOf(item).h; }
+export function itemW(item) { return (item && (item.gw || item.w)) || typeOf(item).w; }
+export function itemH(item) { return (item && (item.gh || item.h)) || typeOf(item).h; }
 
 // --- what a thing is made of ------------------------------------------------
 //
@@ -75,10 +65,20 @@ export function itemH(item) { return (item && (item.h || item.gh)) || typeOf(ite
 
 const WEAPON_KIND = {
   dagger: 'dagger', sword: 'sword', axe: 'axe', spear: 'spear',
-  mace: 'mace', staff: 'staff', bow: 'bow',
+  mace: 'mace', staff: 'staff', bow: 'bow', blaster: 'wand',
 };
 /** Body armour takes its material from the skill it trains. */
 const ARMOR_MAT = { plate: 'steel', chain: 'iron', leather: 'leather' };
+
+/** Potion liquid, keyed off the definition's colour word. */
+const POTION_CSS = {
+  red: '#c02818', blue: '#2848d8', yellow: '#e0d020', purple: '#9038c8',
+  orange: '#e08018', green: '#28c828', white: '#f0f0e0', black: '#302838',
+  grey: '#a0a0a8', cyan: '#40d8d8', pink: '#f090b0', gold: '#e1cd23',
+  crimson: '#e02040', azure: '#4090f0', violet: '#a060e0', emerald: '#20c070',
+  amber: '#e0a020', silver: '#d0d0e0', opal: '#e0d0f0', clear: '#c8d8e0',
+  radiant: '#fff0c0', radiant_blue: '#c0e0ff', radiant_gold: '#ffe080', stone: '#a09080',
+};
 
 export function gearInfo(item) {
   const def = (item && item.def && itemDef(item.def)) || null;
@@ -87,7 +87,7 @@ export function gearInfo(item) {
   const name = (def && def.name) || (item && item.name) || '';
   const heavy = /plate|gothic|tower/i.test(name);
   const soft = /leather|cloth|coif|fur/i.test(name);
-  let kind = type, mat = 'steel', cloth = null;
+  let kind = type, mat = 'steel', cloth = null, accent = null;
   switch (type) {
     case 'weapon': kind = WEAPON_KIND[skill] || 'sword'; mat = skill === 'staff' ? 'wood' : 'steel'; break;
     case 'bow': kind = 'bow'; mat = 'wood'; break;
@@ -105,27 +105,39 @@ export function gearInfo(item) {
       break;
     case 'amulet': case 'ring': kind = type; mat = 'gold'; break;
     case 'wand': kind = 'wand'; mat = 'wood'; break;
-    default: break;
+    case 'potion': kind = 'potion'; mat = 'crystal';
+      accent = POTION_CSS[def && def.color] || '#c02818';
+      break;
+    case 'scroll': kind = 'scroll'; mat = 'bone'; break;
+    case 'spellbook': kind = 'spellbook'; mat = 'leather'; break;
+    case 'gem': kind = 'gem'; mat = 'crystal';
+      accent = { gem_quartz: '#e8e8f0', gem_amber: '#e0a020', gem_garnet: '#a02040', gem_sapphire: '#3050d0', gem_ruby: '#d02030', gem_diamond: '#e8f4ff' }[item && item.def] || '#40d8d8';
+      break;
+    case 'gold': kind = 'gold'; mat = 'gold'; break;
+    case 'food': kind = 'reagent'; mat = 'leather'; accent = '#c09040'; break;
+    default: kind = 'reagent'; mat = 'wood'; break;
   }
   return {
     name, icon: kind, material: mat, skill, cloth,
     armor: (def && def.ac) | 0,
-    // Only an artifact carries a colour of its own; everything else would turn
-    // the doll into a paintbox.
-    tint: item && item.artifactId ? '#b8962a' : null,
+    // An artifact carries gilt of its own; a potion its liquid. Everything
+    // else stays material-coloured or the doll turns into a paintbox.
+    tint: item && item.artifactId ? '#b8962a' : accent,
   };
 }
 
-/** Which body slot (if any) this item may be dropped on. */
+/** The body slot this item may be dropped on (`target`), or null. */
 export function slotFor(item, target) {
-  const base = (item && item.slot) || typeOf(item).slot;
+  const def = itemDef(item && item.def);
+  const type = (def && def.type) || (item && item.type);
+  const base = TYPE_SLOT[type] || null;
   if (!base) return null;
   if (!target) return base;
   if (base === target) return target;
   // Rings go on either hand; a one-hander may be held in the off hand.
-  if (base === 'ring1' && (target === 'ring1' || target === 'ring2')) return target;
-  if (base === 'mainhand' && target === 'offhand' && !item.twoHanded
-      && (item.type === 'sword' || item.type === 'dagger' || item.type === 'mace')) return target;
+  if (base === 'ring1' && target === 'ring2') return target;
+  if (base === 'mainhand' && target === 'offhand' && def && !def.twoHanded
+      && ['sword', 'dagger', 'mace'].indexOf(def.skill) >= 0) return target;
   return null;
 }
 
@@ -141,18 +153,15 @@ const CELL = 32;
  * sized to the item's grid footprint here.
  */
 export function itemIcon(item, cell = CELL) {
-  const t = typeOf(item);
   const g = gearInfo(item);
-  const kind = item.icon || (t === TYPES.misc ? g.icon : t.icon);
-  const mat = item.material || g.material || 'steel';
+  const kind = g.icon;
+  const mat = g.material || 'steel';
   const w = itemW(item) * cell - 8;
   const h = itemH(item) * cell - 8;
-  const key = `${kind}|${mat}|${item.tint || ''}|${w}x${h}`;
+  const key = `${kind}|${mat}|${g.tint || ''}|${w}x${h}`;
   let c = ICON_CACHE.get(key);
   if (c) return c;
-  c = M.itemArt(kind === 'blade' ? 'sword' : kind, Math.max(6, w), Math.max(8, h), {
-    mat, accent: item.tint || null,
-  });
+  c = M.itemArt(kind, Math.max(6, w), Math.max(8, h), { mat, accent: g.tint || null });
   ICON_CACHE.set(key, c);
   return c;
 }
@@ -252,12 +261,12 @@ export function drawPaperdoll(ctx, screen, ch) {
     else if (hit.click && screen.slotClick) screen.slotClick(ch, slot, item || null);
   }
 
-  // Gold and food, where MM6 keeps them: the lower right panel.
+  // Food and gold, in the HUD's order - food on the left, gold on the right.
   const gy = r.y + r.h + 6;
-  A.icon(ctx, 'gold', r.x + 6, gy, 14);
-  F.drawText(ctx, String(screen.party.gold | 0), r.x + 24, gy + 2, { face: 'small', color: CANARY });
-  A.icon(ctx, 'food', r.x + 86, gy, 14);
-  F.drawText(ctx, String(screen.party.food | 0), r.x + 104, gy + 2, { face: 'small', color: WHITE });
+  A.icon(ctx, 'food', r.x + 6, gy, 14);
+  F.drawText(ctx, String(screen.party.food | 0), r.x + 24, gy + 2, { face: 'small', color: WHITE });
+  A.icon(ctx, 'gold', r.x + 86, gy, 14);
+  F.drawText(ctx, String(screen.party.gold | 0), r.x + 104, gy + 2, { face: 'small', color: CANARY });
   F.drawText(ctx, ch.name || '', r.x + r.w / 2, gy + 18, { face: 'small', align: 'center', color: WHITE });
 }
 
@@ -301,7 +310,7 @@ function lookOf(ch) {
 // --- the screen -------------------------------------------------------------
 
 /** Engine geometry: 14 x 9 cells of 32 px with the top-left at (14, 17). */
-const GRID_X = 14, GRID_Y = 17, COLS = 14, ROWS = 9;
+const GRID_X = 14, GRID_Y = 17;
 
 export class InventoryScreen extends Screen {
   constructor(session, ui, hud, opts) {
@@ -311,8 +320,8 @@ export class InventoryScreen extends Screen {
     this.sheet = (opts && opts.sheet) || null;
   }
 
-  onOpen() { this.sound('page'); this.pack(); }
-  onCharChanged() { this.popup = null; this.pack(); }
+  onOpen() { this.sound('page_turn'); }
+  onCharChanged() { this.popup = null; }
 
   handleKey(code) {
     if (code === 'KeyI' || code === 'Escape') {
@@ -324,76 +333,72 @@ export class InventoryScreen extends Screen {
 
   showPopup(item) { this.popup = { item, x: this.ui.mouse.x, y: this.ui.mouse.y }; }
 
-  bagOf(ch) {
-    if (!ch) return [];
-    if (!Array.isArray(ch.inventory)) ch.inventory = [];
-    return ch.inventory;
-  }
-
-  /** Give every loose item a grid position the first time we see this bag. */
-  pack() {
-    const ch = this.character;
-    if (!ch) return;
-    const bag = this.bagOf(ch);
-    for (const it of bag) {
-      // `makeItem` stamps -1/-1 for "not placed yet", so a negative coordinate
-      // is unplaced, not a position - otherwise the whole bag piles up off the
-      // top-left corner of the grid.
-      if (Number.isInteger(it.x) && Number.isInteger(it.y) && it.x >= 0 && it.y >= 0) continue;
-      const spot = this.findSpot(bag, it, it);
-      if (spot) { it.x = spot.x; it.y = spot.y; } else { it.x = 0; it.y = 0; }
+  /**
+   * The character's bag, in party.js's canonical grid form. A bag that arrived
+   * in a legacy shape (a plain array, or a grid with mangled cells) is rebuilt
+   * through makeInventory/invAdd, never clobbered to [].
+   */
+  invOf(ch) {
+    if (!ch) return null;
+    let inv = ch.inventory;
+    if (!inv || !Array.isArray(inv.cells) || !Array.isArray(inv.items)) {
+      const items = Array.isArray(inv) ? inv : (inv && Array.isArray(inv.items)) ? inv.items : [];
+      inv = makeInventory();
+      for (const it of items) invAdd(inv, it);
+      ch.inventory = inv;
     }
+    return inv;
   }
 
-  occupied(bag, skip) {
-    const grid = new Array(COLS * ROWS).fill(null);
-    for (const it of bag) {
-      if (it === skip || !Number.isInteger(it.x) || it.x < 0) continue;
-      for (let y = 0; y < itemH(it); y++) {
-        for (let x = 0; x < itemW(it); x++) {
-          const gx = it.x + x, gy = it.y + y;
-          if (gx < COLS && gy < ROWS) grid[gy * COLS + gx] = it;
-        }
-      }
-    }
-    return grid;
-  }
-
-  fits(bag, item, cx, cy, skip) {
+  /** True when the gw x gh rectangle at (cx, cy) is inside the grid and empty. */
+  fitsAt(inv, item, cx, cy) {
     const w = itemW(item), h = itemH(item);
-    if (cx < 0 || cy < 0 || cx + w > COLS || cy + h > ROWS) return false;
-    const grid = this.occupied(bag, skip || item);
+    if (cx < 0 || cy < 0 || cx + w > inv.w || cy + h > inv.h) return false;
     for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) if (grid[(cy + y) * COLS + cx + x]) return false;
+      for (let x = 0; x < w; x++) {
+        if (inv.cells[(cy + y) * inv.w + (cx + x)] !== 0) return false;
+      }
     }
     return true;
   }
 
-  findSpot(bag, item, skip) {
-    for (let y = 0; y < ROWS; y++) {
-      for (let x = 0; x < COLS; x++) if (this.fits(bag, item, x, y, skip)) return { x, y };
-    }
-    return null;
-  }
-
   // --- interaction ---------------------------------------------------------
 
+  /** Drink / eat / read a consumable through the real rules. */
+  useConsumable(ch, item) {
+    const inv = this.invOf(ch);
+    const r = useItem(ch, item, this.party);
+    this.status = r.reason || '';
+    if (r.consumed) invRemove(inv, item.uid);
+    if (r.ok) this.sound(item.type === 'potion' ? 'potion_drink' : item.type === 'food' ? 'eat' : 'item_pickup');
+    else this.sound('error');
+  }
+
   slotClick(ch, slot, item) {
-    const eq = equipOf(ch);
     const carried = this.ui.cursorItem;
     if (carried) {
       if (!slotFor(carried, slot)) { this.status = 'That does not go there.'; return; }
-      const bag = this.bagOf(ch);
-      const i = bag.indexOf(carried);
-      if (i >= 0) bag.splice(i, 1);
-      eq[slot] = carried;
-      this.ui.cursorItem = item || null;
-      if (item) { item.x = null; item.y = null; }
-      this.sound('equip');
+      // Route through party.equip so two-handers, shields and swaps follow the
+      // real rules and every derived stat is recomputed. equip() pulls the item
+      // out of the pack, so the carried item is parked there first.
+      const inv = this.invOf(ch);
+      if (!invAdd(inv, carried)) { this.status = 'No room in the pack to make the swap.'; return; }
+      const r = equip(ch, carried, slot);
+      if (!r.ok) {
+        invRemove(inv, carried.uid);
+        this.status = r.reason || 'It will not go there.';
+        return;
+      }
+      this.ui.cursorItem = null;
+      this.status = '';
+      this.sound('item_pickup');
     } else if (item) {
-      eq[slot] = null;
+      // Taking a piece off goes to the hand, not the pack - but the stats
+      // must not keep counting it.
+      delete ch.equipment[slot];
+      recompute(ch);
       this.ui.cursorItem = item;
-      this.sound('pickup');
+      this.sound('item_pickup');
     }
   }
 
@@ -415,7 +420,7 @@ export class InventoryScreen extends Screen {
       ['Stats', 'Skills', 'Inventory', 'Awards'], 2);
     if (clicked >= 0 && clicked !== 2) {
       if (this.sheet) this.sheet.tab = clicked === 3 ? 3 : clicked;
-      this.sound('page');
+      this.sound('page_turn');
       this.close();
     }
     this.drawExit(ctx);
@@ -427,13 +432,13 @@ export class InventoryScreen extends Screen {
   }
 
   drawGrid(ctx, ch) {
-    const bag = this.bagOf(ch);
+    const inv = this.invOf(ch);
     const gx = px(GRID_X), gy = py(GRID_Y);
-    const w = COLS * CELL, h = ROWS * CELL;
+    const w = inv.w * CELL, h = inv.h * CELL;
     // `fr_inven` is a painted hide panel with the cells pressed into it: grain,
     // mottling and a worn rim, and every cell rule a dark crease with a
     // burnished lip below it - never a black wireframe on a flat field.
-    M.hideGrid(ctx, gx, gy, COLS, ROWS, CELL, 71);
+    M.hideGrid(ctx, gx, gy, inv.w, inv.h, CELL, 71);
 
     const carried = this.ui.cursorItem;
     let hoverCell = null;
@@ -445,39 +450,40 @@ export class InventoryScreen extends Screen {
       };
     }
 
-    for (const it of bag) {
+    for (const it of inv.items.slice()) {
       if (!Number.isInteger(it.x) || it.x < 0) continue;
       const ix = gx + it.x * CELL, iy = gy + it.y * CELL;
       const iw = itemW(it) * CELL, ih = itemH(it) * CELL;
-      const hit = this.ui.region(`${this.id}:it:${it.uid || it.id || it.name}:${it.x},${it.y}`,
+      const hit = this.ui.region(`${this.id}:it:${it.uid}:${it.x},${it.y}`,
         ix, iy, iw, ih, itemLabel(it));
       if (hit.hover) M.stipple(ctx, ix + 1, iy + 1, iw - 1, ih - 1, [255, 240, 190], 0.22);
       const ic = itemIcon(it);
       ctx.drawImage(ic, (ix + (iw - ic.width) / 2) | 0, (iy + (ih - ic.height) / 2) | 0);
       if (it.broken) tint(ctx, ix + 1, iy + 1, iw - 1, ih - 1, 'rgba(255,0,0,0.35)');
       else if (it.identified === false) tint(ctx, ix + 1, iy + 1, iw - 1, ih - 1, 'rgba(0,225,0,0.28)');
-      else if (it.enchant) tint(ctx, ix + 1, iy + 1, iw - 1, ih - 1, 'rgba(120,120,255,0.20)');
+      else if (it.prefix || it.suffix || it.bonus) tint(ctx, ix + 1, iy + 1, iw - 1, ih - 1, 'rgba(120,120,255,0.20)');
       if (hit.rightClick) this.showPopup(it);
       else if (hit.click && !carried) {
-        this.ui.cursorItem = it;
-        it.x = null; it.y = null;
-        this.sound('pickup');
+        // A consumable is used where it lies; anything else goes to the hand.
+        if (it.type === 'potion' || it.type === 'food') this.useConsumable(ch, it);
+        else {
+          invRemove(inv, it.uid);
+          this.ui.cursorItem = it;
+          this.sound('item_pickup');
+        }
       }
     }
 
     if (carried && hoverCell) {
-      const ok = this.fits(bag, carried, hoverCell.x, hoverCell.y, carried);
+      const ok = this.fitsAt(inv, carried, hoverCell.x, hoverCell.y);
       const fw = itemW(carried) * CELL, fh = itemH(carried) * CELL;
       ctx.fillStyle = ok ? 'rgba(96,96,96,0.5)' : 'rgba(160,32,16,0.5)';
       ctx.fillRect(gx + hoverCell.x * CELL + 1, gy + hoverCell.y * CELL + 1, fw - 1, fh - 1);
       const hit = this.ui.region(`${this.id}:drop`, gx, gy, w, h, ok ? 'Put it here' : 'It will not fit there');
       if (hit.click && ok) {
-        carried.x = hoverCell.x; carried.y = hoverCell.y;
-        if (bag.indexOf(carried) < 0) bag.push(carried);
-        const eq = equipOf(ch);
-        for (const s of SLOTS) if (eq[s] === carried) eq[s] = null;
+        invAdd(inv, carried, hoverCell.x, hoverCell.y);
         this.ui.cursorItem = null;
-        this.sound('drop');
+        this.sound('item_pickup');
       }
     }
   }
@@ -492,19 +498,20 @@ export class InventoryScreen extends Screen {
   drawPopup(ctx) {
     const it = this.popup.item;
     const w = 186;
-    const lines = [['title', it.name || 'Unknown item']];
-    const t = typeOf(it);
-    lines.push(['dim', `${capitalise(it.type || 'item')}${it.material ? ', ' + it.material : ''}`]);
-    if (it.damage) lines.push(['body', `Damage: ${it.damage}`]);
-    if (it.armor) lines.push(['body', `Armour: +${it.armor}`]);
-    if (it.attack) lines.push(['body', `Attack: +${it.attack}`]);
-    if (it.enchant) lines.push(['good', String(it.enchant)]);
-    if (it.charges !== undefined) lines.push(['body', `Charges: ${it.charges}`]);
-    if (it.broken) lines.push(['bad', 'Broken - a smith must repair it.']);
-    if (it.identified === false) lines.push(['bad', 'Unidentified.']);
-    if (it.value) lines.push(['body', `Value: ${it.value} gold`]);
-    if (t.slot) lines.push(['dim', `Worn: ${slotLabel(t.slot)}`]);
-    if (it.desc) lines.push(['wrap', it.desc]);
+    // items.js owns the honest description - name, dice, mods, value - so the
+    // popup is a straight rendering of it, first line as the title.
+    const descLines = String(itemDescription(it) || '').split('\n');
+    const lines = [];
+    descLines.forEach((s, i) => {
+      if (!s) return;
+      if (i === 0) lines.push(['title', s]);
+      else if (/^BROKEN|^Unidentified|cannot tell/i.test(s)) lines.push(['bad', s]);
+      else if (/^Value:/.test(s)) lines.push(['dim', s]);
+      else lines.push(s.length > 34 ? ['wrap', s] : ['body', s]);
+    });
+    const slot = slotFor(it, null);
+    if (slot) lines.push(['dim', `Worn: ${slotLabel(slot)}`]);
+    if (it.type === 'potion' || it.type === 'food') lines.push(['good', 'Click it in the pack to use it.']);
 
     let h = 12;
     for (const [k, s] of lines) {
@@ -544,9 +551,10 @@ function slotLabel(slot) {
 }
 
 function itemLabel(it) {
-  const bits = [it.name || 'Item'];
-  if (it.damage) bits.push(`(${it.damage})`);
-  if (it.armor) bits.push(`(AC +${it.armor})`);
+  const bits = [itemName(it) || 'Item'];
+  const def = itemDef(it && it.def);
+  if (def && def.dice) bits.push(`(${def.dice.n}d${def.dice.s}${def.dice.plus ? `+${def.dice.plus}` : ''})`);
+  if (def && def.ac) bits.push(`(AC +${def.ac})`);
   if (it.broken) bits.push('- broken');
   return bits.join(' ');
 }

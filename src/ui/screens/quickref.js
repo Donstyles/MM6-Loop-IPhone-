@@ -34,7 +34,12 @@ const LABEL_W = 84;
 const COL_X = 102;
 const COL_W = 86;
 const ROW_H = 13;
-const TOP = 50;
+// The first data row. The names print at y=38 and the serif face descends to
+// about y=49, so the header rule sits at 52 and the table starts at 56 -
+// nothing may rule *through* the names.
+const TOP = 56;
+const NAME_Y = 38;
+const HEAD_RULE_Y = 52;
 
 function fmt(n) { return String(Math.round(n || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
 
@@ -52,7 +57,7 @@ export class QuickRefScreen extends Screen {
     this.id = 'quickref';
   }
 
-  onOpen() { this.sound('page'); }
+  onOpen() { this.sound('page_turn'); }
 
   handleKey(code) {
     if (code === 'Escape' || code === 'KeyQ') { this.close(); return true; }
@@ -72,7 +77,7 @@ export class QuickRefScreen extends Screen {
       ['Next Level', fmt(Math.max(0, xpForLevel((ch.level | 0) + 1) - xp)), INK_DIM],
       ['Hit Points', `${ch.hp | 0}/${hp}`, (ch.hp | 0) <= hp * 0.25 ? INK_RED : (ch.hp | 0) < hp ? INK_BAD : INK],
       ['Spell Points', sp ? `${ch.sp | 0}/${sp}` : '-', sp ? INK : INK_DIM],
-      ['Armour Class', String(armorClass(ch)), INK],
+      ['Armor Class', String(armorClass(ch)), INK],
     ];
     for (const st of STATS) {
       const base = (ch.stats && ch.stats[st.id]) | 0;
@@ -100,17 +105,17 @@ export class QuickRefScreen extends Screen {
       const hit = this.ui.region(`${this.id}:col${i}`, x, py(36), COL_W, PANEL.h - 60,
         ch ? `${ch.name}` : 'Empty slot');
       if (hit.click && ch) { this.session.activeChar = i; this.sound('click'); }
-      // The active column is marked with a ruled underline beneath its name,
-      // not with a wash over the figures: a stipple laid across a column of
-      // numbers is a screen door over the one thing the page exists to show.
+      // The active column is marked with a gilded underline *below* the name's
+      // descenders, not a wash over the figures - and the name itself keeps
+      // full ink so the marked column is the easiest to read, not the hardest.
       if (i === this.charIndex) {
-        A.rule(ctx, x + 6, py(50 - 5), COL_W - 12, HEAD, 0.9);
+        A.rule(ctx, x + 6, py(HEAD_RULE_Y - 2), COL_W - 12, HEAD, 0.9);
       }
-      T(ctx, ch ? ch.name : '-', x + COL_W / 2, py(38), {
-        align: 'center', color: !ch ? INK_DIM : i === this.charIndex ? HEAD : hit.hover ? LABEL : INK,
+      T(ctx, ch ? ch.name : '-', x + COL_W / 2, py(NAME_Y), {
+        align: 'center', color: !ch ? INK_DIM : hit.hover ? LABEL : INK,
       });
     }
-    A.rule(ctx, px(LABEL_X), py(TOP - 6), PANEL.w - LABEL_X * 2, RULE, 0.35);
+    A.rule(ctx, px(LABEL_X), py(HEAD_RULE_Y), PANEL.w - LABEL_X * 2, RULE, 0.35);
 
     // Rows: labels down the left, one value per character.
     const template = this.rows(members[0] || null);
@@ -134,9 +139,10 @@ export class QuickRefScreen extends Screen {
     const fy = TOP + rowCount * ROW_H + 6;
     A.rule(ctx, px(LABEL_X), py(fy - 4), PANEL.w - LABEL_X * 2, RULE, 0.35);
     const clock = this.session.clock;
+    // Food before gold: the HUD's order, kept everywhere.
     const parts = [
-      ['Gold', fmt(this.party.gold), HEAD],
       ['Food', fmt(this.party.food), INK],
+      ['Gold', fmt(this.party.gold), HEAD],
       ['Day', clock ? `${clock.day}` : '-', INK],
       ['Time', clock && clock.format ? clock.format() : '-', INK],
     ];

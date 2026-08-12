@@ -20,7 +20,7 @@ export const SLOTS = [
 ];
 
 export const SLOT_NAMES = {
-  mainhand: 'Weapon', offhand: 'Off hand', bow: 'Missile', armor: 'Armour',
+  mainhand: 'Weapon', offhand: 'Off hand', bow: 'Missile', armor: 'Armor',
   helm: 'Helm', boots: 'Boots', gauntlets: 'Gauntlets', belt: 'Belt',
   cloak: 'Cloak', amulet: 'Amulet', ring1: 'Ring', ring2: 'Ring',
 };
@@ -146,14 +146,14 @@ function armor(id, name, type, skill, ac, recovery, value, tier, opts) {
 }
 
 // Body armour. `recovery` is the penalty an unskilled wearer suffers.
-armor('leather_armor', 'Leather Armour', 'armor', 'leather', 4, 0, 60, 1, { gw: 2, gh: 3 });
+armor('leather_armor', 'Leather Armor', 'armor', 'leather', 4, 0, 60, 1, { gw: 2, gh: 3 });
 armor('studded_leather', 'Studded Leather', 'armor', 'leather', 6, 0, 180, 2, { gw: 2, gh: 3 });
-armor('scale_armor', 'Scale Armour', 'armor', 'leather', 8, 5, 400, 3, { gw: 2, gh: 3 });
+armor('scale_armor', 'Scale Armor', 'armor', 'leather', 8, 5, 400, 3, { gw: 2, gh: 3 });
 armor('ring_mail', 'Ring Mail', 'armor', 'chain', 8, 15, 350, 2, { gw: 2, gh: 3 });
 armor('chain_mail', 'Chain Mail', 'armor', 'chain', 11, 20, 700, 3, { gw: 2, gh: 3 });
 armor('splint_mail', 'Splint Mail', 'armor', 'chain', 13, 25, 1200, 4, { gw: 2, gh: 3 });
 armor('banded_mail', 'Banded Mail', 'armor', 'chain', 15, 25, 1800, 5, { gw: 2, gh: 3 });
-armor('plate_armor', 'Plate Armour', 'armor', 'plate', 17, 40, 2500, 4, { gw: 2, gh: 3 });
+armor('plate_armor', 'Plate Armor', 'armor', 'plate', 17, 40, 2500, 4, { gw: 2, gh: 3 });
 armor('field_plate', 'Field Plate', 'armor', 'plate', 20, 40, 4000, 5, { gw: 2, gh: 3 });
 armor('gothic_plate', 'Gothic Plate', 'armor', 'plate', 23, 45, 7000, 6, { gw: 2, gh: 3 });
 armor('full_plate', 'Full Plate', 'armor', 'plate', 26, 50, 12000, 6, { gw: 2, gh: 3 });
@@ -276,7 +276,7 @@ ench('of_earth_ward', 'of Earth Ward', 'suffix', 3, WORN.concat(JEWEL), { resist
 ench('of_the_mind', 'of the Mind', 'suffix', 3, WORN.concat(JEWEL), { resist: { mind: 25 } }, { desc: '+25 Mind resistance.' });
 ench('of_the_body', 'of the Body', 'suffix', 3, WORN.concat(JEWEL), { resist: { body: 25 } }, { desc: '+25 Body resistance.' });
 ench('of_the_spirit', 'of the Spirit', 'suffix', 3, WORN.concat(JEWEL), { resist: { magic: 25 } }, { desc: '+25 Magic resistance.' });
-ench('of_protection', 'of Protection', 'suffix', 4, WORN, { ac: 10 }, { desc: '+10 Armour Class.' });
+ench('of_protection', 'of Protection', 'suffix', 4, WORN, { ac: 10 }, { desc: '+10 Armor Class.' });
 
 // -- Skill suffixes.
 ench('of_the_stealer', 'of the Stealer', 'suffix', 3, JEWEL, { skill: { disarm: 5, perception: 5 } }, { desc: '+5 Disarm Trap and Perception.' });
@@ -294,8 +294,8 @@ ench('poisonous', 'Poisonous', 'prefix', 3, ANY_WEAPON, { elemental: { element: 
 ench('lucky', 'Lucky', 'prefix', 2, ANY, { luck: 8 }, { desc: '+8 Luck.' });
 ench('antique', 'Antique', 'prefix', 4, ANY, { value: 3 }, { desc: 'Worth three times as much to a collector.' });
 ench('elven', 'Elven', 'prefix', 4, ANY_WEAPON.concat(WORN), { speed: 10, accuracy: 10 }, { desc: '+10 Speed and Accuracy.' });
-ench('dwarven', 'Dwarven', 'prefix', 4, ANY_WEAPON.concat(WORN), { endurance: 15, ac: 3 }, { desc: '+15 Endurance and +3 Armour Class.' });
-ench('monks', "Monk's", 'prefix', 4, WORN, { speed: 10, ac: 5, recovery: 10 }, { desc: '+10 Speed, +5 Armour Class, faster recovery.' });
+ench('dwarven', 'Dwarven', 'prefix', 4, ANY_WEAPON.concat(WORN), { endurance: 15, ac: 3 }, { desc: '+15 Endurance and +3 Armor Class.' });
+ench('monks', "Monk's", 'prefix', 4, WORN, { speed: 10, ac: 5, recovery: 10 }, { desc: '+10 Speed, +5 Armor Class, faster recovery.' });
 ench('thiefs', "Thief's", 'prefix', 4, WORN, { accuracy: 10, skill: { disarm: 8 } }, { desc: '+10 Accuracy and +8 Disarm Trap.' });
 ench('assassins', "Assassin's", 'prefix', 5, MELEE, { damage: 8, accuracy: 15 }, { desc: '+8 damage and +15 Accuracy.' });
 ench('rogues', "Rogue's", 'prefix', 4, MELEE, { damage: 5, speed: 10 }, { desc: '+5 damage and +10 Speed.' });
@@ -690,7 +690,7 @@ export function itemDescription(item) {
     lines.push(`Damage: ${d.n}d${d.s}${d.plus ? `+${d.plus}` : ''}   Recovery: ${itemRecovery(item)}`);
     if (def.skill) lines.push(`Skill: ${def.skill}`);
   }
-  if (def && def.ac) lines.push(`Armour Class: +${def.ac}${def.recovery ? `   Recovery penalty: ${def.recovery}` : ''}`);
+  if (def && def.ac) lines.push(`Armor Class: +${def.ac}${def.recovery ? `   Recovery penalty: ${def.recovery}` : ''}`);
   const mods = itemMods(item);
   const bits = [];
   for (const k of ['might', 'intellect', 'personality', 'endurance', 'accuracy', 'speed', 'luck', 'hp', 'sp', 'attack', 'damage']) {

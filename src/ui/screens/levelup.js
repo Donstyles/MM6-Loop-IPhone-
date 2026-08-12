@@ -55,7 +55,7 @@ export class LevelUpScreen extends Screen {
 
   onOpen() {
     if (this.ch) this.ch.justLeveled = true;
-    this.sound('levelup');
+    this.sound('level_up');
   }
 
   onClose() { if (this.ch) this.ch.justLeveled = false; }
@@ -111,8 +111,8 @@ export class LevelUpScreen extends Screen {
     // Totals along the bottom of the box.
     const by = y + BOX.h - 52;
     A.rule(ctx, x + 22, by - 6, BOX.w - 44, '#8a6e46');
-    const hpNow = this.safe(() => maxHP(this.ch), this.ch && this.ch.maxHP);
-    const spNow = this.safe(() => maxSP(this.ch), this.ch && this.ch.maxSP);
+    const hpNow = this.safe(() => maxHP(this.ch), 0);
+    const spNow = this.safe(() => maxSP(this.ch), 0);
     const next = this.safe(() => xpForLevel(this.level + 1), 0);
     F.drawText(ctx, `Hit Points ${hpNow}`, x + 22, by, { face: 'small', color: C_DIM });
     F.drawText(ctx, `Spell Points ${spNow}`, x + 22 + 110, by, { face: 'small', color: C_DIM });

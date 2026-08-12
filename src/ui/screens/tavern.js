@@ -323,7 +323,7 @@ export class TavernScreen extends HouseScreen {
         enabled: food < this.foodMax },
       { id: 'room', label: 'Rent a Room', note: `${gold(this.roomPrice * members(this.session).length)} gold` },
       { id: 'drink', label: 'Buy Drinks', note: `${gold(this.drinkPrice * members(this.session).length)} gold` },
-      { id: 'rumour', label: 'Listen to Rumours' },
+      { id: 'rumour', label: 'Listen to Rumors' },
       { id: 'game', label: 'Arm Wrestling', note: `stake ${gold(this.stake)} gold` },
       { id: 'hire', label: 'Hire', note: `${this.patrons.length} looking for work` },
     ];

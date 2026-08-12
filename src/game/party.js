@@ -193,6 +193,9 @@ export function createCharacter(rand, classId, opts) {
     conditions: {},
     buffs: {},
     hp: 1, sp: 0,
+    // Ticks down in real time after acting; the HUD gem reads it every frame,
+    // so it must exist from birth (undefined <= 0 is false and the gem sticks red).
+    recovery: 0,
     skillPoints: 0,
     equipment: {},
     inventory: makeInventory(),
@@ -255,13 +258,13 @@ export function recompute(c) {
     for (const id of STAT_IDS) c.statMods[id] += mods[id] || 0;
     for (const r of RESIST_IDS) c.resistMods[r] += (mods.resist[r] || 0);
     for (const s of Object.keys(mods.skill)) c.skillMods[s] = (c.skillMods[s] || 0) + mods.skill[s];
-    // A weapon's own "+N" is an attack/damage bonus, not armour class.
+    // A weapon's attack/damage riders are NOT cached here: combat.js adds
+    // w.mods.attack / w.mods.damage per swing (attackRoll / weaponDamage), so
+    // caching them too would count every enchant twice. A weapon's "+N" also
+    // never grants armour class.
     const def = itemDef(item.def);
     const isWeapon = def && (def.type === 'weapon' || def.type === 'bow');
-    if (isWeapon) {
-      c.attackMods += mods.attack || 0;
-      c.damageMods += mods.damage || 0;
-    } else {
+    if (!isWeapon) {
       c.acMods += mods.ac || 0;
       c.attackMods += mods.attack || 0;
       c.damageMods += mods.damage || 0;
@@ -321,9 +324,11 @@ export function levelUp(c, rand) {
     spGained: maxSP(c) - beforeSP,
     skillPoints: SKILL_POINTS_PER_LEVEL,
   };
-  // Levelling restores the character, as a night at the trainer's would.
-  c.hp = maxHP(c);
-  c.sp = maxSP(c);
+  // The new level's dice are added to the pools, but training is not a heal:
+  // wounds keep their depth and an unconscious trainee stays down until
+  // someone actually treats them.
+  c.hp = Math.min(maxHP(c), c.hp + Math.max(0, report.hpGained));
+  c.sp = Math.min(maxSP(c), c.sp + Math.max(0, report.spGained));
   return report;
 }
 
