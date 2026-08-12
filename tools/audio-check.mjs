@@ -167,7 +167,12 @@ async function main() {
       }[def.scale];
       const key = ((def.key % 12) + 12) % 12;
       const pitched = evs.filter((e) => e.midi != null);
-      const inKey = pitched.filter((e) => SC.includes((((e.midi - key) % 12) + 12) % 12)).length;
+      // A note is legal if it's in the scale OR a tone of the bar's chord -
+      // dominant chords in minor keys carry a chromatic leading tone, bII
+      // chords a chromatic root, and those are written notes, not bugs.
+      const inKey = pitched.filter((e) =>
+        SC.includes((((e.midi - key) % 12) + 12) % 12) ||
+        (e.chordPcs && e.chordPcs.includes(((e.midi % 12) + 12) % 12))).length;
 
       // Melody-only measurements: one line, so its span is a real musical fact.
       const mel = evs.filter((e) => e.layer === 'melody');
@@ -225,6 +230,80 @@ async function main() {
     if (bad) fails++;
     console.log(`  ${id.padEnd(8)} i=${inten}    peak voices ${String(r.peakVoices).padStart(2)} (cap ${LIMITS.musicVoiceCap}), scheduler ${r.avgSchedMs} ms/tick  ${bad ? 'FAIL' : 'ok'}`);
   }
+
+  // Unknown sound ids must not fail silently (that cost 18 broken call sites)
+  // but must warn exactly once per id, and never throw.
+  const warnRes = await page.evaluate(() => {
+    let hits = 0;
+    const orig = console.warn;
+    console.warn = function (...args) {
+      if (String(args[0]).includes('unknown sfx')) hits++;
+      return orig.apply(console, args);
+    };
+    try {
+      window.__audio.play('__no_such_sound__');
+      window.__audio.play('__no_such_sound__');                          // same id: no second warn
+      window.__audio.play('__no_such_sound_2__', { pos: { x: 0, y: 0, z: 0 } }); // positional path warns too
+    } finally { console.warn = orig; }
+    return hits;
+  });
+  const warnBad = warnRes !== 2;
+  if (warnBad) fails++;
+  console.log(`  unknown-id warns  ${warnRes} for 3 bad plays of 2 ids (want 2, once per id)  ${warnBad ? 'FAIL' : 'ok'}`);
+
+  console.log('\nMASTER SAFETY  (worst-case combat pileup through the real master chain)');
+  console.log('-'.repeat(72));
+  const clipRes = await page.evaluate(async () => {
+    const A = await import('/src/core/audio.js');
+    const M = await import('/src/core/music.js');
+    const a = window.__audio;
+    const ids = ['explosion', 'lightning_crack', 'crit', 'hit_flesh', 'monster_die'];
+    const bufs = [];
+    for (const id of ids) bufs.push(await a.renderToBuffer(id));
+    const sr = a.ctx.sampleRate;
+    const musicBuf = await M.renderTrackOffline('combat', 4, sr, 1);
+    const dur = Math.max(musicBuf.duration, ...bufs.map((b) => b.duration)) + 0.2;
+    const render = async (limited) => {
+      const off = new OfflineAudioContext(2, Math.ceil(dur * sr), sr);
+      const master = off.createGain();
+      master.gain.value = a.vol.master;
+      if (limited) {
+        const lim = A.makeSafetyLimiter(off);
+        master.connect(lim.input);
+        lim.output.connect(off.destination);
+      } else {
+        master.connect(off.destination);
+      }
+      const feed = (buf, gain) => {
+        const src = off.createBufferSource();
+        src.buffer = buf;
+        const g = off.createGain();
+        g.gain.value = gain;
+        src.connect(g); g.connect(master);
+        src.start(0);
+      };
+      for (const b of bufs) feed(b, a.vol.sfx);       // all SFX on the same frame
+      feed(musicBuf, a.vol.music);                    // plus combat music at i=1
+      const out = await off.startRendering();
+      let peak = 0, sq = 0, n = 0;
+      for (let c = 0; c < out.numberOfChannels; c++) {
+        const d = out.getChannelData(c);
+        for (let i = 0; i < d.length; i++) {
+          const v = d[i] < 0 ? -d[i] : d[i];
+          if (v > peak) peak = v;
+          sq += d[i] * d[i]; n++;
+        }
+      }
+      return { peak: +peak.toFixed(4), rms: +Math.sqrt(sq / Math.max(1, n)).toFixed(5) };
+    };
+    const raw = await render(false);
+    const lim = await render(true);
+    return { raw, lim, ids };
+  });
+  const clipBad = clipRes.lim.peak > 1.0;
+  if (clipBad) fails++;
+  console.log(`  ${clipRes.ids.join('+')}+combat(i=1)`);
+  console.log(`  unlimited peak ${clipRes.raw.peak} rms ${clipRes.raw.rms}  ->  limited peak ${clipRes.lim.peak} rms ${clipRes.lim.rms}  ${clipBad ? 'FAIL (>1.0)' : 'ok (<=1.0)'}`);
 
   if (WANT_EVENTS) {
     mkdirSync('shots', { recursive: true });

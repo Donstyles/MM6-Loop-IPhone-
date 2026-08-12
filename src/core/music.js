@@ -70,6 +70,27 @@ function nearestIn(notes, pcs, target) {
   return best;
 }
 
+/**
+ * Midi note nearest `target` whose pitch class is in `pcs` - chromatic, not
+ * limited to the diatonic set. Chords are allowed notes from outside the key:
+ * a V chord in a minor key *is* its raised leading tone (C# in D minor), and
+ * nearestIn() above silently dropped it because the scale never contains it.
+ * Harmony layers (pad, bass, arp, accents) place their tones through this;
+ * the melody stays diatonic-biased via nearestIn. Returns -1 if out of range.
+ */
+function nearestChordNote(pcs, target, lo = 21, hi = 108) {
+  let best = -1, bestD = 1e9;
+  for (const pc of pcs) {
+    const base = Math.round((target - pc) / 12) * 12 + pc;
+    for (const m of [base - 12, base, base + 12]) {
+      if (m < lo || m > hi) continue;
+      const d = Math.abs(m - target);
+      if (d < bestD) { bestD = d; best = m; }
+    }
+  }
+  return best;
+}
+
 /** Index of the note nearest `target`, chord tone or not. */
 function nearestIdx(notes, target) {
   let best = 0, bestD = 1e9;
@@ -499,13 +520,15 @@ export function buildSong(def) {
       const rootPc = (((def.key + chord[0]) % 12) + 12) % 12;
       const ev = [];
 
-      // -- pad: the chord itself, held.
+      // -- pad: the chord itself, held. Chromatic placement: the pad plays the
+      // real chord even when a tone (V's leading tone, bII's root) sits
+      // outside the diatonic set.
       if (P.pad) {
         const c = P.pad.center;
         const voicing = [];
         for (let k = 0; k < pcs.length; k++) {
-          const idx = nearestIn(notes, [pcs[k]], c + k * 3);
-          if (idx >= 0) voicing.push(notes[idx]);
+          const m = nearestChordNote([pcs[k]], c + k * 3);
+          if (m >= 0) voicing.push(m);
         }
         const half = P.pad.drone ? 1 : (b % 2 === 0 ? 1 : 2);
         for (let h = 0; h < half; h++) {
@@ -513,22 +536,23 @@ export function buildSong(def) {
         }
       }
 
-      // -- bass.
+      // -- bass. Chromatic: a bII bar must not fall silent because its root is
+      // not in the scale.
       if (P.bass) {
         const pat = BASS_PATTERNS[P.bass.pattern](spb);
         for (const n of pat) {
           const pc = pcs[Math.min(n.tone, pcs.length - 1)];
-          const idx = nearestIn(notes, [pc], P.bass.center);
-          if (idx >= 0) ev.push({ s: n.s, len: n.len, m: notes[idx], v: P.bass.v, layer: 'bass', vel: P.bass.gain });
+          const m = nearestChordNote([pc], P.bass.center);
+          if (m >= 0) ev.push({ s: n.s, len: n.len, m, v: P.bass.v, layer: 'bass', vel: P.bass.gain });
         }
       }
 
-      // -- arpeggio / ostinato over the chord tones.
+      // -- arpeggio / ostinato over the chord tones (chromatic, same reason).
       if (P.arp) {
         const tones = [];
         for (let k = 0; k < 4; k++) {
-          const idx = nearestIn(notes, [pcs[k % pcs.length]], P.arp.center + Math.floor(k / pcs.length) * 12 + k * 2);
-          if (idx >= 0) tones.push(notes[idx]);
+          const m = nearestChordNote([pcs[k % pcs.length]], P.arp.center + Math.floor(k / pcs.length) * 12 + k * 2);
+          if (m >= 0) tones.push(m);
         }
         const pat = P.arp.pattern;
         let k = 0;
@@ -572,7 +596,8 @@ export function buildSong(def) {
         }
       }
 
-      // -- accents: only heard when the intensity comes up.
+      // -- accents: only heard when the intensity comes up. Stabs are chords,
+      // so they take the chromatic path too.
       if (P.accent) {
         const mode = P.accent.mode;
         if (mode === 'stabs') {
@@ -580,21 +605,21 @@ export function buildSong(def) {
           for (const s of hits) {
             if (s !== 0 && !(b % 2 === 1)) continue;
             for (let k = 0; k < Math.min(3, pcs.length); k++) {
-              const idx = nearestIn(notes, [pcs[k]], P.accent.center + k * 4);
-              if (idx >= 0) ev.push({ s, len: 2, m: notes[idx], v: P.accent.v, layer: 'accent', vel: P.accent.gain * (s === 0 ? 1 : 0.7) });
+              const m = nearestChordNote([pcs[k]], P.accent.center + k * 4);
+              if (m >= 0) ev.push({ s, len: 2, m, v: P.accent.v, layer: 'accent', vel: P.accent.gain * (s === 0 ? 1 : 0.7) });
             }
           }
         } else if (mode === 'toll' && b % 4 === 0) {
-          const idx = nearestIn(notes, [rootPc], P.accent.center);
-          if (idx >= 0) ev.push({ s: 0, len: spb, m: notes[idx], v: P.accent.v, layer: 'accent', vel: P.accent.gain });
+          const m = nearestChordNote([rootPc], P.accent.center);
+          if (m >= 0) ev.push({ s: 0, len: spb, m, v: P.accent.v, layer: 'accent', vel: P.accent.gain });
         } else if (mode === 'swell' && b % 2 === 1) {
           for (let k = 0; k < Math.min(2, pcs.length); k++) {
-            const idx = nearestIn(notes, [pcs[k]], P.accent.center + k * 5);
-            if (idx >= 0) ev.push({ s: spb / 2, len: spb / 2, m: notes[idx], v: P.accent.v, layer: 'accent', vel: P.accent.gain });
+            const m = nearestChordNote([pcs[k]], P.accent.center + k * 5);
+            if (m >= 0) ev.push({ s: spb / 2, len: spb / 2, m, v: P.accent.v, layer: 'accent', vel: P.accent.gain });
           }
         } else if (mode === 'echo' && b % 2 === 1) {
-          const idx = nearestIn(notes, pcs, P.accent.center);
-          if (idx >= 0) ev.push({ s: spb - 4, len: 4, m: notes[idx], v: P.accent.v, layer: 'accent', vel: P.accent.gain });
+          const m = nearestChordNote(pcs, P.accent.center);
+          if (m >= 0) ev.push({ s: spb - 4, len: 4, m, v: P.accent.v, layer: 'accent', vel: P.accent.gain });
         }
       }
 
@@ -631,6 +656,7 @@ export function debugEvents(trackId, barCount = 16) {
   const out = [];
   for (let b = 0; b < barCount; b++) {
     const bar = song.bars[b % song.bars.length];
+    const pcs = chordPcs(song.def.key, bar.chord);
     for (const e of bar.events) {
       out.push({
         bar: b, step: e.s, beat: +(e.s / 4).toFixed(2), len: e.len,
@@ -638,6 +664,10 @@ export function debugEvents(trackId, barCount = 16) {
         midi: e.m ?? null, note: e.m != null ? midiName(e.m) : e.drum,
         vel: +(e.vel || 0).toFixed(3),
         chord: `${midiName(song.def.key + bar.chord[0]).replace(/\d/, '')}${bar.chord[1]}`,
+        // Absolute pitch classes of the bar's chord: chromatic chord tones
+        // (V's leading tone, bII's root) are legal notes the scale test alone
+        // would flag, so the audit needs them.
+        chordPcs: pcs,
       });
     }
   }
@@ -944,11 +974,26 @@ export class Music {
   }
 
   _tick() {
-    if (!this.ok || this.ctx.state === 'suspended') return;
+    if (!this.ok || this.ctx.state !== 'running') return;
     const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     const now = this.ctx.currentTime;
     for (const deck of this.decks) {
+      // A deck that is fading out schedules nothing new: its already-queued
+      // tail rides the gain ramp down, and the voice budget goes to the
+      // incoming track instead of a dying one.
+      if (deck.dead) continue;
       const song = deck.song;
+      // Stall recovery: after a hitch (GC pause, interruption, hidden tab that
+      // dodged suspend) the deck can be many steps behind `now`. Scheduling
+      // the backlog at the current time machine-guns every missed note, so
+      // skip the counters ahead and re-anchor just in front of the clock.
+      if (deck.nextTime && now - deck.nextTime > LOOKAHEAD) {
+        const missed = Math.ceil((now - deck.nextTime) / song.stepSec);
+        const total = deck.bar * song.spb + deck.step + missed;
+        deck.bar = Math.floor(total / song.spb) % song.bars.length;
+        deck.step = total % song.spb;
+        deck.nextTime = now + 0.02;
+      }
       let guard = 0;
       while (deck.nextTime < now + LOOKAHEAD && guard++ < 256) {
         this._scheduleStep(deck, deck.bar, deck.step, deck.nextTime);
@@ -996,11 +1041,19 @@ export class Music {
     }
   }
 
-  _track(node, extra) {
+  _track(node, extra, detunes) {
     this.voices++;
     node.onended = () => {
       this.voices--;
       try { node.disconnect(); if (extra) for (const n of extra) n.disconnect(); } catch (err) { /* gone */ }
+      // The shared vibrato fans out to per-note detune params. Disconnecting
+      // the oscillator only severs its *outputs*, so without this the
+      // vibDepth->param edges accumulate one per note, forever.
+      if (detunes) {
+        for (const p of detunes) {
+          try { this.vibDepth.disconnect(p); } catch (err) { /* gone */ }
+        }
+      }
     };
   }
 
@@ -1039,7 +1092,7 @@ export class Music {
     o1.connect(lp); o2.connect(lp); lp.connect(g); g.connect(bus);
     o1.start(t); o2.start(t);
     o1.stop(t + dur + rel + 0.02); o2.stop(t + dur + rel + 0.02);
-    this._track(o1, [o2, lp, g]);
+    this._track(o1, [o2, lp, g], [o1.detune, o2.detune]);
   }
 
   _brass(f, t, dur, vel, bus) {
@@ -1078,7 +1131,7 @@ export class Music {
     o1.connect(g); o2.connect(mix); mix.connect(g); g.connect(bus);
     o1.start(t); o2.start(t);
     o1.stop(t + dur + rel + 0.02); o2.stop(t + dur + rel + 0.02);
-    this._track(o1, [o2, mix, g]);
+    this._track(o1, [o2, mix, g], [o1.detune]);
   }
 
   _choir(f, t, dur, vel, bus) {
@@ -1098,7 +1151,7 @@ export class Music {
     o1.connect(bp); o2.connect(bp); bp.connect(g); g.connect(bus);
     o1.start(t); o2.start(t);
     o1.stop(t + dur + rel + 0.02); o2.stop(t + dur + rel + 0.02);
-    this._track(o1, [o2, bp, g]);
+    this._track(o1, [o2, bp, g], [o1.detune]);
   }
 
   _bell(f, t, dur, vel, bus) {

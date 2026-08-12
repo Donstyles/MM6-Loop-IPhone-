@@ -134,6 +134,45 @@ const HARD_DRIVE = (() => {
 })();
 
 /**
+ * Soft-knee ceiling for the master bus: unity below 0.7, tanh above it into an
+ * asymptotic ceiling just under full scale. A WaveShaper clamps input outside
+ * [-1, 1] to the curve endpoints, so nothing downstream can ever see > ~0.93 -
+ * this is the hard guarantee behind the limiter in front of it.
+ */
+const MASTER_CEIL = (() => {
+  const n = 2048, c = new Float32Array(n), knee = 0.7;
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * 2 - 1;
+    const a = Math.abs(x);
+    const y = a <= knee ? a : knee + (1 - knee) * Math.tanh((a - knee) / (1 - knee));
+    c[i] = x < 0 ? -y : y;
+  }
+  return c;
+})();
+
+/**
+ * Master safety stage: a DynamicsCompressor set up as a fast limiter
+ * (threshold -3 dB, 20:1, 2 ms attack) followed by the soft-knee ceiling
+ * above. Per-buffer normalisation keeps each *individual* sound clean; this is
+ * what keeps six of them landing on the same frame from tearing the DAC.
+ * Exported so the offline audit can render the exact chain the player hears
+ * and prove the worst combat pileup stays inside full scale.
+ */
+export function makeSafetyLimiter(ctx) {
+  const comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -3;
+  comp.knee.value = 0;
+  comp.ratio.value = 20;
+  comp.attack.value = 0.002;
+  comp.release.value = 0.15;
+  const ceil = ctx.createWaveShaper();
+  ceil.curve = MASTER_CEIL;
+  ceil.oversample = '2x';
+  comp.connect(ceil);
+  return { input: comp, output: ceil };
+}
+
+/**
  * A per-render helper bundle. Recipes get one of these and never touch the
  * raw context, which keeps them short enough to read as sound design.
  */
@@ -910,8 +949,9 @@ def('lever', 0.5, 0.62, (r) => {
 
 def('secret_found', 1.7, 0.68, (r) => {
   const v = r.verb(1.7, 2.2, 0.42);
-  // A little four-note motif so it reads as a reward, not an alarm.
-  [523.25, 622.25, 783.99, 1046.5].forEach((f, i) => {
+  // A little four-note major arpeggio (C E G C) so it reads as a reward,
+  // not an alarm - the minor third read as a warning.
+  [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => {
     r.bell({ t: i * 0.15, f, dur: 1.0, g: 0.2, ratio: 2.0, index: 2 });
     r.bell({ t: i * 0.15, f: f * 2, dur: 0.7, g: 0.06, ratio: 2.0, index: 2, dest: v });
   });
@@ -1408,6 +1448,26 @@ function finish(ctx, buf, spec) {
 
 const MAX_VOICES = 24;
 
+// Big impacts and explosions dip the score a few dB for a beat so they land at
+// full size instead of fighting the brass section (see _maybeDuck).
+const DUCK_IDS = new Set([
+  'explosion', 'lightning_crack', 'ice_shatter', 'crit',
+  'death_player', 'monster_die', 'roar_dragon',
+]);
+const DUCK_GAIN = 0.56;   // about -5 dB
+
+// A silent fail on a typo'd sound id cost 18 broken call sites once. Stay
+// tolerant (the game must not throw over a missing click) but say so - once
+// per id, so a footstep typo cannot flood the console.
+const _warnedIds = new Set();
+function warnUnknown(id) {
+  if (_warnedIds.has(id)) return;
+  _warnedIds.add(id);
+  if (typeof console !== 'undefined' && console.warn) {
+    console.warn(`[audio] unknown sfx id '${id}' (known ids: SFX_IDS in core/audio.js)`);
+  }
+}
+
 export class Audio {
   constructor() {
     this.ctx = null;
@@ -1447,7 +1507,12 @@ export class Audio {
     const ctx = this.ctx;
     this.master = ctx.createGain();
     this.master.gain.value = this.vol.master * (this._enabled ? 1 : 0);
-    this.master.connect(ctx.destination);
+    // Overlapping combat SFX sum well past full scale (a fireball + lightning
+    // + crit pileup measures ~2x); the safety stage turns that into gain
+    // reduction instead of clipping at the DAC.
+    this.limiter = makeSafetyLimiter(ctx);
+    this.master.connect(this.limiter.input);
+    this.limiter.output.connect(ctx.destination);
 
     this.sfxBus = ctx.createGain();
     this.sfxBus.gain.value = this.vol.sfx;
@@ -1461,7 +1526,12 @@ export class Audio {
     // everything.
     this.musicBus = ctx.createGain();
     this.musicBus.gain.value = this.vol.music;
-    this.musicBus.connect(this.master);
+    // The duck lives on its own node so the volume slider and the automation
+    // never fight over one gain param.
+    this.musicDuck = ctx.createGain();
+    this.musicDuck.gain.value = 1;
+    this.musicBus.connect(this.musicDuck);
+    this.musicDuck.connect(this.master);
 
     this.ok = true;
     const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -1484,7 +1554,44 @@ export class Audio {
         if (document.hidden) this.suspend(); else this.resume();
       });
     }
+    this._bindStateWatch();
     return true;
+  }
+
+  /**
+   * iOS pulls the context out from under us on phone calls, Siri, and route
+   * changes: state goes to 'interrupted' (or 'suspended') with no gesture in
+   * flight, and playback never comes back on its own. Watch for it, try a
+   * silent resume, and arm a one-shot tap listener for the cases that demand
+   * a user gesture.
+   */
+  _bindStateWatch() {
+    const ctx = this.ctx;
+    if (!ctx || this._stateBound) return;
+    this._stateBound = true;
+    const onChange = () => {
+      const st = ctx.state;
+      if (st === 'running' || st === 'closed') return;
+      // Deliberate park while the tab is hidden - visibilitychange resumes it.
+      if (typeof document !== 'undefined' && document.hidden) return;
+      this.resume();
+      this._armResumeGesture();
+    };
+    if (typeof ctx.addEventListener === 'function') ctx.addEventListener('statechange', onChange);
+    else ctx.onstatechange = onChange;
+  }
+
+  _armResumeGesture() {
+    if (this._resumeArmed || typeof window === 'undefined') return;
+    this._resumeArmed = true;
+    const kick = () => {
+      this._resumeArmed = false;
+      window.removeEventListener('pointerdown', kick, true);
+      window.removeEventListener('touchend', kick, true);
+      this.resume();
+    };
+    window.addEventListener('pointerdown', kick, true);
+    window.addEventListener('touchend', kick, true);
   }
 
   get enabled() { return this._enabled; }
@@ -1508,6 +1615,28 @@ export class Audio {
     this.sfxBus.gain.setTargetAtTime(this.vol.sfx, t, 0.03);
     this.ambBus.gain.setTargetAtTime(this.vol.sfx * 0.8, t, 0.05);
     this.musicBus.gain.setTargetAtTime(this.vol.music, t, 0.05);
+  }
+
+  /** Music level only, 0..1. Fixed public API for the options screen. */
+  setMusicVolume(v01) { this.setVolume(null, null, v01); }
+  /** SFX (and ambience) level only, 0..1. */
+  setSfxVolume(v01) { this.setVolume(null, v01, null); }
+  /** Current mix levels as plain numbers. */
+  getVolumes() { return { music: this.vol.music, sfx: this.vol.sfx }; }
+
+  /**
+   * Gentle automatic ducking: a loud impact dips the music bus ~5 dB with a
+   * 50 ms attack and lets it drift back over ~400 ms. Retriggering just
+   * restarts the ramp, so a barrage holds the dip instead of pumping.
+   */
+  _maybeDuck(id) {
+    if (!this.ok || !this.musicDuck || !DUCK_IDS.has(id)) return;
+    const t = this.ctx.currentTime;
+    const g = this.musicDuck.gain;
+    g.cancelScheduledValues(t);
+    g.setValueAtTime(g.value, t);
+    g.linearRampToValueAtTime(DUCK_GAIN, t + 0.05);
+    g.setTargetAtTime(1, t + 0.15, 0.13);
   }
 
   // -- rendering ------------------------------------------------------------
@@ -1664,8 +1793,10 @@ export class Audio {
    * run of footsteps or sword swings does not machine-gun.
    */
   play(id, opts = {}) {
+    if (!SFX_META[id]) warnUnknown(id);
     if (!this.ok || !this._enabled) return null;
     if (opts.pos) return this.playAt(id, opts.pos.x, opts.pos.y, opts.pos.z, null, opts);
+    this._maybeDuck(id);
     const buf = this.buffers.get(id);
     if (buf) return this._spawn(buf, opts, opts.bus);
     // Not baked yet: bake now and fire when it lands (a few ms).
@@ -1675,6 +1806,7 @@ export class Audio {
 
   /** Distance attenuation plus stereo placement relative to the listener. */
   playAt(id, x, y, z, listener, opts = {}) {
+    if (!SFX_META[id]) warnUnknown(id);
     if (!this.ok || !this._enabled) return null;
     const L = listener || this.listener;
     const dx = x - L.x, dy = y - L.y, dz = z - L.z;
@@ -1693,6 +1825,9 @@ export class Audio {
     o.pan = pan;
     delete o.pos;
     if (o.volume < 0.004) return null;
+    // A distant explosion is a rumble; only duck the score when the impact is
+    // close enough to actually dominate the mix.
+    if (o.volume >= 0.25) this._maybeDuck(id);
     const buf = this.buffers.get(id);
     if (buf) return this._spawn(buf, o, o.bus);
     this._ensure(id).then((b) => { if (b && this._enabled) this._spawn(b, o, o.bus); });
@@ -1701,6 +1836,7 @@ export class Audio {
 
   /** Looping one-off (torches, waterfalls). Returns a handle. */
   loop(id, opts = {}) {
+    if (!SFX_META[id]) warnUnknown(id);
     const handle = {
       src: null, gain: null, stopped: false,
       stop: (fade = 0.15) => {
@@ -1789,8 +1925,13 @@ export class Audio {
     if (this.ctx && this.ctx.state === 'running') return this.ctx.suspend();
   }
   resume() {
+    // Idempotent and safe pre-init: callable from any gesture handler at any
+    // time, including before init() and while already running.
     if (!this.ctx) return Promise.resolve();
-    const done = this.ctx.state === 'suspended' ? this.ctx.resume().catch(() => {}) : Promise.resolve();
+    const st = this.ctx.state;
+    const done = (st === 'suspended' || st === 'interrupted')
+      ? this.ctx.resume().catch(() => { /* still needs a gesture; the armed tap retries */ })
+      : Promise.resolve();
     return done.then(() => { if (this.music) this.music.resume(); });
   }
 
