@@ -21,6 +21,10 @@ const engine = new Engine(glCanvas);
 const input = new Input(document.getElementById('stage'));
 const ui = new UIContext();
 const screens = new ScreenStack();
+// Screen.close() resolves its stack through session.screens or ui.stack;
+// wiring the real stack here (and onto the session below) is what lets every
+// panel actually close itself.
+ui.stack = screens;
 const uiCtx = uiCanvas.getContext('2d', { alpha: true });
 uiCtx.imageSmoothingEnabled = false;
 
@@ -29,6 +33,8 @@ let session = null;
 let hud = null;
 let state = 'loading';
 let boot = null;
+/** screenbase module, loaded with the game; paints the wide-view backdrop. */
+let screenChrome = null;
 
 /**
  * The box the game is drawn into.
@@ -94,7 +100,16 @@ function frame(now) {
     frames = 0; fpsAccum = 0;
   }
 
+  // Routing state for this frame: while a modal screen is up, the UI owns
+  // every pointer event across the whole window (input stops capturing
+  // look/stick), touch input grows every hot rect a little, and the HUD's own
+  // hot regions go inert so they cannot steal clicks from a panel.
+  input.uiModal = screens.isOpen;
+  ui.touchSlop = input.hasTouch ? 8 : 0;
+  if (hud) hud.modal = screens.isOpen;
+
   ui.beginFrame(uiCtx, input.pointer, input.takeUiEvents());
+  ui.mouse.wheel = input.takeWheel();
 
   // One bad frame must never end the game. An exception escaping here would
   // stop the requestAnimationFrame chain and freeze on the last image drawn,
@@ -167,6 +182,18 @@ function tickGame(dt) {
     if (top.fullFrame) {
       top.draw(uiCtx);
     } else {
+      // On a widened frame the live view is wider than the 461-px page every
+      // panel paints, and raw frozen 3D showed through the difference. Fill
+      // the whole live view with panel backdrop first.
+      if (screenChrome && screenChrome.fillWideView) screenChrome.fillWideView(uiCtx);
+      // House screens' own Exit plate historically sat below the clip line;
+      // until each one paints an in-panel plate (hasVisibleExit), the shell
+      // guarantees a visible way out on the tab baseline. Its hot rect is
+      // registered BEFORE the screen's own so the topmost visual hears the
+      // click. Screen ids may carry a subkind suffix ('shop:weapon').
+      const baseId = String(top.id || '').split(':')[0];
+      const wantShellExit = screenChrome && screenChrome.pollShellExit && HOUSE_SCREEN_IDS.has(baseId);
+      if (wantShellExit) screenChrome.pollShellExit(ui, top);
       // Panels own everything above the party bar: the character sheet's
       // paperdoll and a shop's dialogue column both legitimately paint over the
       // right-hand panel, so only the bottom bar is protected.
@@ -176,33 +203,82 @@ function tickGame(dt) {
       uiCtx.clip();
       top.draw(uiCtx);
       uiCtx.restore();
+      if (wantShellExit) {
+        screenChrome.drawShellExit(uiCtx, ui, top, baseId === 'dialogue' ? 'Goodbye' : 'Exit');
+      }
     }
     if (hud && !top.fullFrame) handleHudButtons();
   } else if (hud) {
     hud.showTouch = input.hasTouch;
     hud.showReticle = input.hasTouch || input.mouseLook || input.pointer.inView;
     hud.stickDX = input.stick.dx; hud.stickDY = input.stick.dy;
+    // Live geometry for the touch controls (portrait control zone or the
+    // in-view stick), so the HUD draws them exactly where input listens.
+    hud.touchGeom = {
+      stick: input.stickRect,
+      lookPad: input.lookPadRect,
+      buttons: input.touchButtonRects,
+      pressed: {
+        attack: input.touchButtons.attack >= 0,
+        interact: input.touchButtons.interact >= 0,
+      },
+    };
     hud.draw(uiCtx, dt);
     handleWorldInput();
     handleHudButtons();
   }
 
   handleKeys();
+  if (session && session.tickAudioDirector) {
+    session.tickAudioDirector(dt, screens.top ? screens.top.id : null);
+  }
 }
 
 // --- input routing ---------------------------------------------------------
 
+/** Screens whose painted Exit plate lives in dialogue.js's off-panel strip. */
+const HOUSE_SCREEN_IDS = new Set([
+  'dialogue', 'shop', 'temple', 'tavern', 'training', 'bank', 'guild', 'transfer',
+]);
+
+/** Panel hotkeys: pressing one while its panel is open closes it again. */
+const TOGGLE_KEYS = {
+  KeyC: 'charsheet', KeyI: 'inventory', KeyB: 'spellbook',
+  KeyQ: 'questlog', KeyM: 'mapscreen', KeyZ: 'quickref',
+};
+
 function handleKeys() {
   const top = screens.top;
-  if (top && top.handleKey) {
-    for (const code of input.justPressed) if (top.handleKey(code)) return;
-  }
-  if (input.justPressed.has('Escape')) {
-    if (screens.isOpen) screens.pop();
-    else openScreen('options');
+
+  if (top) {
+    // A panel's own hotkey toggles it shut - unless the screen is capturing
+    // text (chargen's name field must be able to type a C).
+    const typing = !!(top.editing || top.keyboard || top.capturesText);
+    if (!typing) {
+      for (const [code, id] of Object.entries(TOGGLE_KEYS)) {
+        if (top.id === id && input.justPressed.has(code)) { screens.pop(); return; }
+      }
+    }
+    // Every key except Escape goes to the screen first.
+    for (const code of input.justPressed) {
+      if (code === 'Escape') continue;
+      if (top.handleKey && top.handleKey(code)) return;
+    }
+    // Escape ALWAYS closes something. The screen gets first refusal so it can
+    // fold a sub-panel or a keyboard, but if it declines - or claims the key
+    // while doing nothing - the shell closes the top panel itself. The title
+    // screen is the one place there is nothing sensible to close into.
+    if (input.justPressed.has('Escape')) {
+      const before = screens.stack.length;
+      const took = top.handleKey ? top.handleKey('Escape') === true : false;
+      const unchanged = screens.top === top && screens.stack.length === before;
+      if (!took && unchanged && top.id !== 'title') screens.pop();
+    }
     return;
   }
-  if (!session || screens.isOpen) return;
+
+  if (input.justPressed.has('Escape')) { openScreen('options'); return; }
+  if (!session) return;
 
   if (input.justPressed.has('KeyC')) openScreen('charsheet');
   if (input.justPressed.has('KeyI')) openScreen('inventory');
@@ -220,13 +296,41 @@ function handleKeys() {
 
 function handleWorldInput() {
   for (const e of input.takeWorldEvents()) {
-    if (e.type === 'tap') {
-      // A tap in the world attacks what is under it, or interacts if it is
-      // something you can talk to or open.
-      const target = session.hoverEntity;
-      if (target && target.interact) doActivate();
-      else doAttack();
+    if (e.type === 'button') {
+      // The portrait-mode on-screen action keys.
+      if (e.id === 'attack') doAttack();
+      else if (e.id === 'interact') doActivate();
+    } else if (e.type === 'tap') {
+      tapWorld(e);
     }
+  }
+}
+
+/**
+ * A tap in the world targets what is under the FINGER, not the reticle. When
+ * the session exposes a screen-point raycast (pickEntityAt takes NDC), use it
+ * with a small fat-finger search around the tap point; otherwise fall back to
+ * whatever the centre reticle is hovering.
+ */
+function tapWorld(e) {
+  const v = layout.view;
+  let target = null;
+  if (session && typeof session.pickEntityAt === 'function' && v.w > 0 && v.h > 0) {
+    const nx = ((e.x - v.x) / v.w) * 2 - 1;
+    const ny = -(((e.y - v.y) / v.h) * 2 - 1);
+    const offs = [[0, 0], [0.05, 0], [-0.05, 0], [0, 0.06], [0, -0.06], [0.05, 0.05], [-0.05, 0.05]];
+    for (const [ox, oy] of offs) {
+      try { target = session.pickEntityAt(nx + ox, ny + oy); } catch { target = null; }
+      if (target) break;
+    }
+  }
+  if (!target) target = session ? session.hoverEntity : null;
+  if (target && target.interact) {
+    // Route through activate() so range and line-of-sight rules still apply.
+    session.hoverEntity = target;
+    doActivate();
+  } else {
+    doAttack();
   }
 }
 
@@ -245,7 +349,21 @@ function handleHudButtons() {
       const tab = b.id.slice(4);
       if (tab === 'maps') openScreen('mapscreen');
       else openScreen('questlog', { tab });
-    } else if (b.id.startsWith('char')) session.activeChar = parseInt(b.id.slice(4), 10);
+    } else if (b.id.startsWith('char')) {
+      const i = parseInt(b.id.slice(4), 10);
+      const now = performance.now();
+      const last = handleHudButtons._lastChar;
+      if (last && last.i === i && now - last.t < 400) {
+        // Double-tap on a portrait opens that character's sheet, as MM6 does.
+        session.activeChar = i;
+        openScreen('charsheet');
+        handleHudButtons._lastChar = null;
+      } else {
+        session.activeChar = i;
+        if (hud.showCharStatus) hud.showCharStatus(i);
+        handleHudButtons._lastChar = { i, t: now };
+      }
+    }
   }
 }
 
@@ -273,10 +391,16 @@ window.__openScreen = openScreen;
 async function enterTitle() {
   state = 'title';
   try {
+    // The shared panel chrome, used to backdrop the widened live view.
+    try { screenChrome = await import('./ui/screens/screenbase.js'); } catch { screenChrome = null; }
     const mod = await import('./bootstrap.js');
     await mod.startGame({
       engine, input, ui, screens, uiCtx, registerScreen, openScreen,
-      setSession: (s, h) => { session = s; hud = h; window.__session = s; },
+      setSession: (s, h) => {
+        session = s; hud = h; window.__session = s;
+        // The real stack, so Screen.close() works from every screen.
+        s.screens = screens;
+      },
     });
     window.__gameReady = true;
   } catch (e) {
@@ -296,10 +420,17 @@ window.__mm6 = {
   ready: () => !!session && !!hud,
   open: (id, opts) => openScreen(id, opts),
   close: () => screens.clear(),
-  /** Skip the title and drop straight into the world (used by capture runs). */
-  newGame: () => { screens.clear(); },
+  /** Skip the title and drop straight into the world (used by capture runs).
+   *  Routes through the menu flow's startPlay so gameStarted/autosave arm. */
+  newGame: () => {
+    if (window.__mm6_newGame) window.__mm6_newGame();
+    else screens.clear();
+  },
   title: () => window.__mm6_showTitle && window.__mm6_showTitle(),
   screen: () => (screens.top ? screens.top.id : null),
+  /** Live top-screen object and open stack, for the capture/QA harness. */
+  topScreen: () => screens.top,
+  screenStack: () => screens.stack.map((s) => s.id),
   teleport(x, y, z, yaw) {
     if (!session) return;
     session.player.pos.set(x, y, z);

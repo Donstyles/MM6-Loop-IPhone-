@@ -194,9 +194,33 @@ export class RestScreen extends Screen {
   monstersNear() {
     const s = this.session;
     if (!s) return false;
-    if (s.inCombat) return true;
+    // The live combat probe wins when the glue layer provides one; the raw
+    // inCombat flag deadlocked rest because it only clears in session.update,
+    // which never runs while this screen is open.
+    if (typeof s.checkCombat === 'function') {
+      try { return !!s.checkCombat(); } catch { /* fall through */ }
+    }
     if (typeof s.monstersNear === 'function') return s.monstersNear();
-    return false;
+    // Last resort: scan for a monster actually chasing us right now.
+    const list = s.entities && s.entities.list;
+    if (list && s.player) {
+      const px = s.player.pos.x, pz = s.player.pos.z;
+      for (const e of list) {
+        if (e.category !== 'monster' || e.dead) continue;
+        if (e.state !== 'chase' && e.state !== 'flee') continue;
+        const dx = e.pos.x - px, dz = e.pos.z - pz;
+        if (dx * dx + dz * dz < 2500 * 2500) return true;
+      }
+      return false;
+    }
+    return !!s.inCombat;
+  }
+
+  /** MM6 rest rules: one ration per party member. */
+  get foodNeeded() {
+    return Math.max(1, members(this.session).filter(
+      (ch) => !hasCondition(ch, 'dead') && !hasCondition(ch, 'eradicated'),
+    ).length);
   }
 
   begin(kind) {
@@ -210,7 +234,10 @@ export class RestScreen extends Screen {
     let heal = false;
     switch (kind) {
       case 'rest8':
-        if ((this.party.food | 0) <= 0) { this.say('You have no food. You cannot rest.', C_RED); return; }
+        if ((this.party.food | 0) < this.foodNeeded) {
+          this.say(`You need ${this.foodNeeded} food to rest.`, C_RED);
+          return;
+        }
         minutes = 8 * 60; heal = true;
         break;
       case 'dawn': {
@@ -231,7 +258,13 @@ export class RestScreen extends Screen {
   finish(p) {
     const list = members(this.session);
     if (p.heal) {
-      this.party.food = Math.max(0, (this.party.food | 0) - 1);
+      // MM6 charges one ration a head, and the camp is found or it is not
+      // BEFORE anyone heals - an interrupted rest restores nothing.
+      this.party.food = Math.max(0, (this.party.food | 0) - this.foodNeeded);
+      if (this.outdoor && this.rnd.bool(0.22)) {
+        this.interrupted();
+        return;
+      }
       for (const ch of list) {
         if (hasCondition(ch, 'dead') || hasCondition(ch, 'eradicated') || hasCondition(ch, 'stoned')) continue;
         ch.hp = this.safe(() => maxHP(ch), ch.maxHP || ch.hp);
@@ -241,17 +274,41 @@ export class RestScreen extends Screen {
         clearCondition(ch, 'weak');
         clearCondition(ch, 'unconscious');
       }
-      // Outdoors, something occasionally finds the camp.
-      if (this.outdoor && this.rnd.bool(0.22)) {
-        this.say('You are woken by something moving in the dark!', C_RED);
-        say(this.session, 'Your rest is interrupted!', C_RED);
-        if (this.session) this.session.inCombat = true;
-        return;
-      }
       this.say('You wake rested. Hit points and spell points are restored.', C_GREEN);
     } else {
       this.say(`Time passes. It is now ${this.clock ? this.clock.format() : ''}.`);
     }
+  }
+
+  /** Something found the camp: spawn it and drop straight into the fight. */
+  interrupted() {
+    const s = this.session;
+    say(s, 'Your rest is interrupted!', C_RED);
+    let spawned = false;
+    if (s && typeof s.spawnAmbush === 'function') {
+      try {
+        const level = Math.max(1, Math.round(
+          members(s).reduce((t, ch) => t + (ch.level || 1), 0) / Math.max(1, members(s).length),
+        ));
+        s.spawnAmbush({ count: 2 + (this.rnd.int ? this.rnd.int(0, 2) : 0), level });
+        spawned = true;
+      } catch { /* the glue layer may not be ready yet */ }
+    }
+    if (!spawned && s && s.spawner && s.spawner.spawnMonster && s.player && s.map) {
+      // Fallback ambush: a couple of goblins just outside the firelight.
+      try {
+        for (let i = 0; i < 2; i++) {
+          const a = (i / 2) * Math.PI * 2 + 0.7;
+          const x = s.player.pos.x + Math.sin(a) * 800;
+          const z = s.player.pos.z + Math.cos(a) * 800;
+          const e = s.spawner.spawnMonster(i ? 'GoblinB' : 'GoblinA', x, s.map.groundAt(x, z, s.player.pos.y), z);
+          if (e) { e.state = 'chase'; spawned = true; }
+        }
+      } catch { /* no spawner, no ambush */ }
+    }
+    if (s && spawned) s.inCombat = true;
+    // Close to combat: the fight is outside, not on this panel.
+    this.close();
   }
 
   say(msg, color) {
@@ -269,6 +326,11 @@ export class RestScreen extends Screen {
     const step = Math.min(p.left, (dt || 0) * MINUTES_PER_SECOND);
     p.left -= step;
     if (this.clock) this.clock.advanceMinutes(step);
+    // session.update is frozen while this panel is open, so drive the party
+    // clock bridge ourselves: waiting has to tick conditions and expire buffs.
+    if (this.session && typeof this.session.syncPartyClock === 'function') {
+      this.session.syncPartyClock();
+    }
     if (p.left <= 0.01) {
       this.pending = null;
       this.finish(p);
@@ -453,7 +515,7 @@ export class RestScreen extends Screen {
 
   drawButtons(ctx) {
     const p = this.party;
-    const canRest = (p.food | 0) > 0 && !this.monstersNear() && !this.pending;
+    const canRest = (p.food | 0) >= this.foodNeeded && !this.monstersNear() && !this.pending;
     const defs = [
       ['rest8', BTN_REST, 'Rest & Heal 8 Hours', canRest],
       ['dawn', BTN_DAWN, this.dawnLabel(), !this.pending],
@@ -465,7 +527,11 @@ export class RestScreen extends Screen {
     let seed = 12;
     for (const [id, r, label, on] of defs) {
       const hit = this.ui.region(`rest:${id}`, r.x, r.y, r.w, r.h,
-        id === 'rest8' && !on ? ((p.food | 0) <= 0 ? 'You have no food.' : 'Enemies are too close.') : null);
+        id === 'rest8' && !on
+          ? ((p.food | 0) < this.foodNeeded
+            ? `Resting costs ${this.foodNeeded} food (one a head).`
+            : 'Enemies are too close.')
+          : null);
       const d = A.button(ctx, r.x, r.y, r.w, r.h, null,
         !on ? 'disabled' : hit.down ? 'down' : hit.hover ? 'hot' : 'up',
         { material: 'wood', seed: (seed += 7) });

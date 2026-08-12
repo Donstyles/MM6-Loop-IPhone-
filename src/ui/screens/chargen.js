@@ -57,8 +57,26 @@ export class ChargenScreen extends Screen {
   constructor(session, ui, hud, opts = {}) {
     super(session, ui, hud, opts);
     this.id = 'chargen';
+    // Party creation always owns the whole frame. Leaving this to the caller
+    // meant a debug-opened chargen composited under the HUD with its Done and
+    // Back buttons clipped away.
+    this.fullFrame = true;
     this.seed = opts.seed || 1234;
     this.slots = [0, 1, 2, 3].map((i) => makeSlot(i, this.seed));
+    // No two rolled companions share a name (Selene and Selene read as a bug).
+    const used = new Set();
+    this.slots.forEach((s, i) => {
+      const pool = s.sex === 'm' ? NAMES_M : NAMES_F;
+      let k = pool.indexOf(s.name);
+      if (k < 0) k = 0;
+      let tries = 0;
+      while (used.has(s.name) && tries < pool.length) {
+        k = (k + 1) % pool.length;
+        s.name = pool[k];
+        tries++;
+      }
+      used.add(s.name);
+    });
     this.sel = 0;
     this.editing = false;
     this.keyboard = false;
@@ -88,7 +106,7 @@ export class ChargenScreen extends Screen {
   raise(s, id) {
     const v = s.stats[id] | 0;
     const cost = costUp(v);
-    if (v >= MAX_STAT) return;
+    if (v >= MAX_STAT) { this.say('That is as high as it will go.', C_RED); return; }
     if (this.pointsLeft(s) < cost) { this.say('No points left to spend.', C_RED); return; }
     s.stats[id] = v + 1;
     s.spent += cost;
@@ -137,7 +155,10 @@ export class ChargenScreen extends Screen {
   validate() {
     for (const s of this.slots) {
       if (!s.name || !s.name.trim()) return 'Every character needs a name.';
-      if (this.pointsLeft(s) > 0) return `${s.name} has ${this.pointsLeft(s)} points still to spend.`;
+      if (this.pointsLeft(s) > 0) {
+        const n = this.pointsLeft(s);
+        return `${s.name} has ${n} point${n === 1 ? '' : 's'} still to spend.`;
+      }
     }
     return null;
   }
@@ -417,7 +438,7 @@ export class ChargenScreen extends Screen {
     const sw = W - sx - 14;
     F.drawText(ctx, 'The Party', sx, y + 10, { color: C_CANARY });
     const left = this.slots.reduce((t, s) => t + this.pointsLeft(s), 0);
-    F.drawText(ctx, left ? `${left} points unspent` : 'All points spent',
+    F.drawText(ctx, left ? `${left} point${left === 1 ? '' : 's'} unspent` : 'All points spent',
       sx, y + 24, { face: 'small', color: left ? C_RED : C_GREEN });
     const bw = Math.min(120, sw), bh = 26;
     const bx = sx, by = y + 44;

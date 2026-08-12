@@ -28,13 +28,17 @@ import { Screen, baked, vignette, MM6, C_GOLD } from './dialogue.js';
 
 const { rct, stipple, band, mix, shade, blit, paintCanvas, cached, flame, lightPool } = MM6;
 
-const MENU = [
-  { id: 'new', label: 'New Game' },
-  { id: 'load', label: 'Load Game' },
-  { id: 'options', label: 'Options' },
-  { id: 'credits', label: 'Credits' },
-  { id: 'quit', label: 'Quit' },
-];
+/** Menu for a fresh install; with a save on disk, Continue leads the list. */
+function buildMenu(hasSave) {
+  const items = [];
+  if (hasSave) items.push({ id: 'load', label: 'Continue' });
+  items.push({ id: 'new', label: 'New Game' });
+  if (!hasSave) items.push({ id: 'load', label: 'Load Game' });
+  items.push({ id: 'options', label: 'Options' });
+  items.push({ id: 'credits', label: 'Credits' });
+  items.push({ id: 'quit', label: 'Quit' });
+  return items;
+}
 
 // The body colour of an unselected option: the cream of the original's painted
 // lettering, not UI white. The selected line goes to Sunflower #E1CD23.
@@ -687,9 +691,16 @@ export class TitleScreen extends Screen {
   constructor(session, ui, hud, opts = {}) {
     super(session, ui, hud, opts);
     this.id = 'title';
+    // The title always owns the whole frame; never composite it under the HUD.
+    this.fullFrame = true;
     this.t = 0;
     this.selected = 0;
     this.onPick = opts.onPick || null;
+    let hasSave = opts.hasSave;
+    if (hasSave === undefined) {
+      try { hasSave = !!localStorage.getItem('mm6-save'); } catch { hasSave = false; }
+    }
+    this.menu = buildMenu(!!hasSave);
   }
 
   update(dt) { this.t += dt || 0; }
@@ -746,9 +757,10 @@ export class TitleScreen extends Screen {
    * mark either side of the live line.
    */
   drawMenu(ctx) {
+    const MENU = this.menu;
     const MENU_CX = Math.round(layout.w / 2);
     const x0 = MENU_CX - MENU_W / 2;
-    const hits = MENU.map((m, i) => this.ui.region(`title:${m.id}`,
+    const hits = MENU.map((m, i) => this.ui.region(`title:${m.id}${i}`,
       x0, MENU_Y0 + i * MENU_STEP - 3, MENU_W, MENU_STEP - 2, null));
     const hovered = hits.findIndex((hh) => hh.hover);
     if (hovered >= 0) this.selected = hovered;
@@ -775,9 +787,10 @@ export class TitleScreen extends Screen {
   }
 
   handleKey(code) {
-    if (code === 'ArrowDown') { this.selected = (this.selected + 1) % MENU.length; return true; }
-    if (code === 'ArrowUp') { this.selected = (this.selected + MENU.length - 1) % MENU.length; return true; }
-    if (code === 'Enter' || code === 'Space') { this.pick(MENU[this.selected].id); return true; }
+    const menu = this.menu;
+    if (code === 'ArrowDown') { this.selected = (this.selected + 1) % menu.length; return true; }
+    if (code === 'ArrowUp') { this.selected = (this.selected + menu.length - 1) % menu.length; return true; }
+    if (code === 'Enter' || code === 'Space') { this.pick(menu[this.selected].id); return true; }
     return false;
   }
 }

@@ -17,14 +17,18 @@ export class UIContext {
     this.hot = null;        // id of the rect under the cursor
     this.active = null;     // id being pressed
     this.hoverText = null;  // tooltip / status line text for this frame
+    this.prevHoverText = null; // last frame's tooltip (drawn by chrome painted earlier)
     this.cursorItem = null; // item being dragged on the cursor
     this._pressStart = null;
     this.consumed = false;
+    /** Extra logical pixels added around every hot rect on touch input. */
+    this.touchSlop = 0;
   }
 
   beginFrame(ctx, pointer, events) {
     this.ctx = ctx;
     this.hot = null;
+    this.prevHoverText = this.hoverText;
     this.hoverText = null;
     this.consumed = false;
     this.mouse.x = pointer.x;
@@ -70,7 +74,12 @@ export class UIContext {
    * @returns {{hover:boolean, down:boolean, click:boolean, rightClick:boolean}}
    */
   region(id, x, y, w, h, tip = null) {
-    const hover = this.inRect(x, y, w, h);
+    // Fat-finger tolerance: on touch input every hot rect grows a little in
+    // every direction. Registration order resolves overlaps (first wins the
+    // click), which matches how the screens already paint front-to-back.
+    const s = this.touchSlop || 0;
+    const hover = s ? this.inRect(x - s, y - s, w + s * 2, h + s * 2)
+      : this.inRect(x, y, w, h);
     if (hover) {
       this.hot = id;
       if (tip) this.hoverText = tip;
@@ -144,7 +153,7 @@ export class Transition {
 /** Rolling message log shown above the bottom bar, as MM6 does. */
 export class MessageLog {
   constructor(max = 60) { this.lines = []; this.max = max; }
-  add(text, color = null, ttl = 6) {
+  add(text, color = null, ttl = 4) {
     this.lines.push({ text, color, t: 0, ttl });
     while (this.lines.length > this.max) this.lines.shift();
   }

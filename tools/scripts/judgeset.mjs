@@ -9,11 +9,17 @@ export default [
   ['02-chargen', '__mm6.open("chargen")', 900],
   ['03-outdoor-morning', '__mm6.newGame(); __mm6.setTime(9,0)', 1400],
   ['04-outdoor-noon', '__mm6.setTime(13,0); __mm6.look(0.9,0)', 1000],
-  ['05-outdoor-looking-down', '__mm6.look(0,-0.30)', 800],
-  ['06-outdoor-walk', '__mm6.look(0,0.30); __mm6.walk(1,0,2200)', 2600],
-  ['07-outdoor-dusk', '__mm6.setTime(19,45)', 900],
-  ['08-outdoor-night', '__mm6.setTime(23,30)', 900],
-  ['09-outdoor-dawn', '__mm6.setTime(5,45)', 900],
+  // look(dx, dy): POSITIVE dy pitches DOWN (negative dy = up - verified
+  // empirically by the world-visuals agent). The old signs had these two
+  // frames swapped, so the "looking down" shot stared at the sky.
+  ['05-outdoor-looking-down', '__mm6.look(0,0.30)', 800],
+  ['06-outdoor-walk', '__mm6.look(0,-0.30); __mm6.walk(1,0,2200)', 2600],
+  // Re-seat before each time-of-day frame: the walk in 06 routinely ends
+  // nose-first against a building or inside a canopy, and a dusk/night/dawn
+  // shot taken there shows a wall instead of the sky and the day cycle.
+  ['07-outdoor-dusk', '__mm6.clearView(); __mm6.setTime(19,45)', 900],
+  ['08-outdoor-night', '__mm6.clearView(); __mm6.setTime(23,30)', 900],
+  ['09-outdoor-dawn', '__mm6.clearView(); __mm6.setTime(5,45)', 900],
   // Re-seat before spawning: frame 06 often ends with the camera inside a
   // canopy or against a building corner, and monsters spawned straight ahead
   // land inside the wall. A fight nobody can see says nothing about how the

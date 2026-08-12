@@ -18,6 +18,7 @@ import * as UI from '../../art/uiart.js';
 import * as PORTRAITS from '../../art/portraits.js';
 import { mulberry32 } from '../../core/rng.js';
 import { rampCss, quantizeImageData } from '../../core/palette.js';
+import { layout } from '../../core/layout.js';
 import * as M from './mm6art.js';
 
 // --- geometry ---------------------------------------------------------------
@@ -333,6 +334,64 @@ export function portraitOf(ch, expression) {
 export const PW = PORTRAITS.PORTRAIT_W || 90;
 export const PH = PORTRAITS.PORTRAIT_H || 78;
 
+// --- shell chrome -------------------------------------------------------------
+
+/**
+ * Backdrop for the widened live view. Panels paint a 461-px page; on a phone
+ * the 3D window is wider than that and raw frozen 3D showed through the
+ * difference. The shell calls this before the panel draws, so the whole live
+ * view is solid carved stone and anything a screen paints beyond the page
+ * (a shop's option column, say) sits on backdrop instead of on noise.
+ */
+export function fillWideView(ctx) {
+  const v = layout.view;
+  if (!v) return;
+  // Nothing to do when the live view is (near enough) the classic page.
+  if (v.w <= PANEL.w + 2 && v.h <= PANEL.h + 2) return;
+  A.stone(ctx, v.x, v.y, v.w, v.h, { rivets: false });
+  A.bevel(ctx, v.x, v.y, v.w, v.h, { sunken: true, size: 2 });
+}
+
+/**
+ * Guaranteed way OUT of a house screen. The house screens' own big
+ * Exit/Goodbye plate historically sat at (471,445), under the party bar's
+ * clip, so nothing visible could close them. Until each screen carries its
+ * own in-panel plate (set `hasVisibleExit = true` when it does), the shell
+ * paints this one on the tab baseline inside the page and closes the screen
+ * when it is clicked.
+ */
+let _shellExitHit = null;
+
+/**
+ * Register the plate's hot rect BEFORE the screen draws (first-registered
+ * region wins the click, and the plate is painted on top, so it must also
+ * hear first), and act on a click. Returns true when it closed the screen.
+ */
+export function pollShellExit(ui, screen) {
+  _shellExitHit = null;
+  if (!screen || screen.fullFrame || screen.hasVisibleExit) return false;
+  const r = exitRect();
+  _shellExitHit = ui.region('shell:exit', r.x, r.y, r.w, r.h, 'Leave');
+  if (_shellExitHit.click) {
+    if (typeof screen.close === 'function') screen.close();
+    return true;
+  }
+  return false;
+}
+
+export function drawShellExit(ctx, ui, screen, label = 'Exit') {
+  if (!screen || screen.fullFrame || screen.hasVisibleExit) return false;
+  const r = exitRect();
+  const hit = _shellExitHit || { hover: false, down: false, click: false };
+  const d = M.sheetTab(ctx, r.x, r.y, r.w, r.h, {
+    open: false, down: hit.down, hot: hit.hover, seed: 21,
+  });
+  F.drawText(ctx, label, (r.x + r.w / 2 + d) | 0, (r.y + 2 + ((r.h - 12) >> 1) + d) | 0, {
+    align: 'center', color: hit.hover ? HILITE : CANARY,
+  });
+  return false;
+}
+
 // --- text -------------------------------------------------------------------
 
 /** Word wrap that prefers the real helper but never depends on it. */
@@ -502,6 +561,7 @@ export class Screen {
 
   /** Exit button on the tab baseline. Returns true when it was clicked. */
   drawExit(ctx, label = 'Exit') {
+    this.hasVisibleExit = true;   // the shell need not paint its fallback
     const r = exitRect();
     const hit = this.ui.region(`${this.id}:exit`, r.x, r.y, r.w, r.h, 'Close');
     // Exit is the fifth tab in the same painted set, so it is painted the same.
@@ -528,18 +588,68 @@ export class Screen {
   }
 
   /**
-   * Vertical runner: wheel and drag only. MM6 has no arrow buttons on a book
-   * page, so neither does this - it is a channel with a wooden slider in it.
+   * Vertical runner: wheel, track drag, and body drag. MM6 has no arrow
+   * buttons on a book page, so neither does this - it is a channel with a
+   * wooden slider in it. On top of the 1998 chrome the whole overflowing body
+   * is drag-to-scroll with momentum (finger or mouse), because a 10-px runner
+   * is no target at all on a phone.
    */
   scrollbar(ctx, id, x, y, h, scroll, total, visible) {
     const maxScroll = Math.max(0, total - visible);
     let s = Math.max(0, Math.min(maxScroll, scroll));
-    const hit = this.ui.region(`${this.id}:${id}`, x, y, 10, h);
-    if (hit.hover && this.ui.mouse.wheel) s += Math.sign(this.ui.mouse.wheel);
-    else if (hit.down && maxScroll > 0) {
-      const t = (this.ui.mouse.y - y - 2) / Math.max(1, h - 4);
+    const ui = this.ui;
+    const hit = ui.region(`${this.id}:${id}`, x, y, 10, h);
+
+    // Wheel works anywhere over the page, not only over the runner.
+    const overPage = ui.inRect(PANEL.x, PANEL.y, PANEL.w, PANEL.h);
+    if (ui.mouse.wheel && (hit.hover || overPage)) s += Math.sign(ui.mouse.wheel);
+
+    if (!this._dragScroll) this._dragScroll = {};
+    const st = this._dragScroll[id] || (this._dragScroll[id] = {
+      active: false, lastY: 0, lastT: 0, vel: 0, acc: 0,
+    });
+    const now = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+    const pitch = Math.max(6, h / Math.max(1, visible));   // logical px per row
+
+    if (hit.down && maxScroll > 0 && !st.active) {
+      // Grabbing the runner (or tapping the channel) jumps the scroll there.
+      const t = (ui.mouse.y - y - 2) / Math.max(1, h - 4);
       s = Math.round(Math.max(0, Math.min(1, t)) * maxScroll);
+      st.vel = 0; st.acc = 0;
+    } else if (maxScroll > 0) {
+      // Drag the body itself. Excludes the runner column so the two gestures
+      // cannot fight over one pointer.
+      const inBody = ui.mouse.down
+        && ui.inRect(PANEL.x, PANEL.y, PANEL.w, PANEL.h)
+        && !ui.inRect(x - 6, y, 22, h);
+      if (inBody) {
+        if (!st.active) {
+          st.active = true; st.lastY = ui.mouse.y; st.lastT = now; st.vel = 0; st.acc = 0;
+        } else {
+          const dy = ui.mouse.y - st.lastY;
+          const dt = Math.max(1 / 240, now - st.lastT);
+          st.lastY = ui.mouse.y; st.lastT = now;
+          st.acc += -dy / pitch;
+          st.vel = st.vel * 0.75 + (-dy / pitch / dt) * 0.25;   // rows per second
+          const rows = Math.trunc(st.acc);
+          if (rows) { s += rows; st.acc -= rows; }
+        }
+      } else {
+        if (st.active) { st.active = false; st.lastT = now; }
+        // Momentum: the flick keeps scrolling and dies away over ~a second.
+        if (Math.abs(st.vel) > 0.4) {
+          const dt = Math.min(0.1, Math.max(0, now - st.lastT));
+          st.lastT = now;
+          st.acc += st.vel * dt;
+          st.vel *= Math.pow(0.04, dt);
+          const rows = Math.trunc(st.acc);
+          if (rows) { s += rows; st.acc -= rows; }
+        } else {
+          st.vel = 0; st.acc = 0;
+        }
+      }
     }
+
     s = Math.max(0, Math.min(maxScroll, s));
     A.scrollbar(ctx, x, y, h, maxScroll > 0 ? s / maxScroll : 0, visible / Math.max(1, total));
     return s;

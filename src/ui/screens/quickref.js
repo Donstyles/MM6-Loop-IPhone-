@@ -102,7 +102,9 @@ export class QuickRefScreen extends Screen {
     for (let i = 0; i < 4; i++) {
       const ch = members[i];
       const x = px(COL_X + i * COL_W);
-      const hit = this.ui.region(`${this.id}:col${i}`, x, py(36), COL_W, PANEL.h - 60,
+      // The column stops above the tab baseline: running it to PANEL.h-60
+      // overlapped the Exit plate's upper half, which silently ate the click.
+      const hit = this.ui.region(`${this.id}:col${i}`, x, py(36), COL_W, TAB_Y - 40,
         ch ? `${ch.name}` : 'Empty slot');
       if (hit.click && ch) { this.session.activeChar = i; this.sound('click'); }
       // The active column is marked with a gilded underline *below* the name's

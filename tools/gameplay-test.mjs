@@ -139,7 +139,7 @@ await S(() => window.__mm6.close());
 
 // --- quests -----------------------------------------------------------------
 const quests = await S(() => {
-  const q = window.__session.quests || [];
+  const q = window.__session.questPool || [];
   return { n: q.length, titles: q.slice(0, 3).map((x) => x.title), unique: new Set(q.map((x) => x.title)).size };
 });
 check('quests generated', quests.n > 0, `${quests.n}: ${quests.titles.join(' / ')}`);

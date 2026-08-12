@@ -82,6 +82,26 @@ export class HUD {
     this._chromeCache = null;
     this._chromeKey = '';
     this.t = 0;
+    /**
+     * True while a modal panel is open above the HUD. The chrome still draws,
+     * but its hot regions go inert (except the party portraits, which MM6
+     * keeps live for character switching) so they can neither steal a click
+     * from the panel nor leave a fossil tooltip in the status line.
+     */
+    this.modal = false;
+    /** Tap-a-portrait readout: { text, until } against this.t. */
+    this._charStatus = null;
+    this.touchGeom = null;
+  }
+
+  /**
+   * All HUD hot rects go through here so the modal gate lives in one place.
+   */
+  region(id, x, y, w, h, tip) {
+    if (this.modal && !id.startsWith('hud:char')) {
+      return { hover: false, down: false, click: false, rightClick: false };
+    }
+    return this.ui.region(id, x, y, w, h, tip);
   }
 
   /** X offset applied to right-column elements when the frame is widened. */
@@ -248,14 +268,14 @@ export class HUD {
     // ib-autmask goes on last, cutting the square blit into an arched aperture.
     HC.blit(ctx, HC.mapMask(m.w, m.h), m.x, m.y);
 
-    const zi = this.ui.region('map:zoomin', ZOOM_IN_X + this.dx, ZOOM_Y, 18, HC.COMPASS_H, 'Zoom in');
-    const zo = this.ui.region('map:zoomout', ZOOM_OUT_X + this.dx, ZOOM_Y, 18, HC.COMPASS_H, 'Zoom out');
+    const zi = this.region('map:zoomin', ZOOM_IN_X + this.dx, ZOOM_Y, 18, HC.COMPASS_H, 'Zoom in');
+    const zo = this.region('map:zoomout', ZOOM_OUT_X + this.dx, ZOOM_Y, 18, HC.COMPASS_H, 'Zoom out');
     HC.drawZoomKey(ctx, ZOOM_IN_X + this.dx, ZOOM_Y, 18, HC.COMPASS_H, 1, zi.down);
     HC.drawZoomKey(ctx, ZOOM_OUT_X + this.dx, ZOOM_Y, 18, HC.COMPASS_H, -1, zo.down);
     if (zi.click) this.minimapZoom = Math.max(2048, this.minimapZoom / 2);
     if (zo.click) this.minimapZoom = Math.min(65536, this.minimapZoom * 2);
 
-    const dt = this.ui.region('map:datetime', m.x, m.y, m.w, m.h, `${this.session.clock.format()}  ${this.session.clock.formatDate()}`);
+    const dt = this.region('map:datetime', m.x, m.y, m.w, m.h, `${this.session.clock.format()}  ${this.session.clock.formatDate()}`);
     this.buttons.push({ id: 'datetime', hit: dt });
   }
 
@@ -265,7 +285,7 @@ export class HUD {
    */
   drawCompass(ctx) {
     HC.drawCompassRibbon(ctx, COMPASS_X + this.dx, COMPASS_Y, COMPASS_W, this.session.player.yaw);
-    this.ui.region('compass', COMPASS_X + this.dx, COMPASS_Y, COMPASS_W, HC.COMPASS_H,
+    this.region('compass', COMPASS_X + this.dx, COMPASS_Y, COMPASS_W, HC.COMPASS_H,
       headingName(this.session.player.yaw));
   }
 
@@ -274,13 +294,21 @@ export class HUD {
     for (let i = 0; i < 2; i++) {
       const x = HIRE_X[i] + this.dx;
       const npc = hire[i];
-      // The empty alcove is chrome - an arched recess with a bare hook in it -
-      // so nothing is drawn over it until someone is actually engaged.
-      if (!npc) { HC.drawEmptyHook(ctx, x + (PORTRAIT_W >> 1), HIRE_Y + 5); continue; }
-      const p = getPortrait(npc.portraitSeed || i * 977, { sex: npc.sex || 'm', klass: npc.klass }, 'normal');
+      // The empty alcove is chrome - an arched recess with a bare hook in it.
+      // A checker shade is laid over it so the unused niche reads as a
+      // shadowed recess, deliberately dark, rather than a broken feature; a
+      // hover/tap says what it is for.
+      if (!npc) {
+        HC.drawEmptyHook(ctx, x + (PORTRAIT_W >> 1), HIRE_Y + 5);
+        ctx.drawImage(nicheShade(PORTRAIT_W, PORTRAIT_H), x, HIRE_Y);
+        this.region(`hire${i}`, x, HIRE_Y, PORTRAIT_W, PORTRAIT_H,
+          'An empty alcove. Hirelings you engage wait here.');
+        continue;
+      }
+      const p = getPortrait(npc.portraitSeed || i * 977, { sex: npc.sex || 'm', klass: npc.klass || npc.class }, 'normal');
       ctx.drawImage(p, x, HIRE_Y);
       UI.drawPortraitFrame(ctx, x, HIRE_Y, PORTRAIT_W, PORTRAIT_H, 'normal');
-      const hit = this.ui.region(`hire${i}`, x, HIRE_Y, PORTRAIT_W, PORTRAIT_H, `${npc.name} the ${npc.profession || 'Hireling'}`);
+      const hit = this.region(`hire${i}`, x, HIRE_Y, PORTRAIT_W, PORTRAIT_H, `${npc.name} the ${npc.profession || 'Hireling'}`);
       this.buttons.push({ id: `hire${i}`, hit, npc });
     }
   }
@@ -300,11 +328,17 @@ export class HUD {
         const id = PARTY_BUFFS[idx];
         if (!id) continue;
         const x = xs[i] + this.dx, y = BUFF_ROW_Y[row];
-        if (!buffUp(buffs, id, now)) continue;
+        if (!buffUp(buffs, id, now)) {
+          // The empty socket stays painted chrome, knocked back into shadow so
+          // it reads as a waiting recess; the name only surfaces on hover/tap.
+          ctx.drawImage(nicheShade(16, 16), x, y);
+          this.region(`buff${idx}`, x, y, 16, 16, `${PARTY_BUFF_NAMES[idx]} (not active)`);
+          continue;
+        }
         // 126 frames at 50fps - a ~2.5s loop - with a per-slot phase offset.
         const phase = (((this.t * 1000) / 20 + 20 * BUFF_PHASE[idx]) % 126 + 126) % 126;
         HC.drawBuffIcon(ctx, id, x, y, phase);
-        this.ui.region(`buff${idx}`, x, y, 16, 16, PARTY_BUFF_NAMES[idx]);
+        this.region(`buff${idx}`, x, y, 16, 16, PARTY_BUFF_NAMES[idx]);
       }
     }
   }
@@ -314,11 +348,11 @@ export class HUD {
     const phase = this.t * 6;
     if (this.buffActive('torch_light')) {
       HC.drawIndicator(ctx, 'torch', TORCH_X + this.dx, INDICATOR_Y, phase);
-      this.ui.region('ind:torch', TORCH_X + this.dx, INDICATOR_Y, 32, 32, 'Torch Light');
+      this.region('ind:torch', TORCH_X + this.dx, INDICATOR_Y, 32, 32, 'Torch Light');
     }
     if (this.buffActive('wizard_eye')) {
       HC.drawIndicator(ctx, 'wizeye', WIZEYE_X + this.dx, INDICATOR_Y, phase);
-      this.ui.region('ind:wizeye', WIZEYE_X + this.dx, INDICATOR_Y, 32, 32, 'Wizard Eye');
+      this.region('ind:wizeye', WIZEYE_X + this.dx, INDICATOR_Y, 32, 32, 'Wizard Eye');
     }
   }
 
@@ -329,8 +363,8 @@ export class HUD {
     F.drawText(ctx, fmtNum(P ? P.gold : 0), 632 + x, FOODGOLD_Y, { face: 'small', align: 'right', color: '#FFFFFF' });
     UI.drawIcon(ctx, 'food', 478 + x, FOODGOLD_Y - 2, 14);
     UI.drawIcon(ctx, 'gold', 557 + x, FOODGOLD_Y - 2, 14);
-    this.ui.region('food', 476 + x, FOODGOLD_Y, 77, 17, 'Food');
-    this.ui.region('gold', 555 + x, FOODGOLD_Y, 77, 17, 'Gold');
+    this.region('food', 476 + x, FOODGOLD_Y, 77, 17, 'Food');
+    this.region('gold', 555 + x, FOODGOLD_Y, 77, 17, 'Gold');
   }
 
   drawBookTabs(ctx) {
@@ -341,7 +375,7 @@ export class HUD {
       const [tx, by] = TAB_POS[i];
       const x = tx + this.dx;
       const w = TAB_W[i], h = TAB_H[i];
-      const hit = this.ui.region(`tab:${id}`, x, by, w, h, TAB_LABELS[i]);
+      const hit = this.region(`tab:${id}`, x, by, w, h, TAB_LABELS[i]);
       const alert = this.session.newEntries && this.session.newEntries[id];
       if (UI.drawBookSpine) {
         UI.drawBookSpine(ctx, x, by, w, h, {
@@ -368,7 +402,10 @@ export class HUD {
       const hpx = HP_X[i] + bx, spx = SP_X[i] + bx;
       if (!ch) continue;
 
-      const p = getPortrait(ch.portraitSeed, { sex: ch.sex, klass: ch.klass }, this.expressionFor(ch));
+      // `klass` for legacy stub parties, `class` for the real party module -
+      // reading only one of them was why the HUD busts stopped matching the
+      // faces picked at character creation.
+      const p = getPortrait(ch.portraitSeed, { sex: ch.sex, klass: ch.klass || ch.class }, this.expressionFor(ch));
       ctx.drawImage(p, px, PORTRAIT_Y);
 
       // IB-selec: one continuous glowing border round the portrait, following
@@ -399,14 +436,14 @@ export class HUD {
       CHAR_BUFFS.forEach(([id, label, art], k) => {
         if (!buffUp(cb, id, S.clock ? S.clock.minutes : 0)) return;
         HC.drawBuffIcon(ctx, art, px + BUFF_DX, BUFF_Y[k], ((this.t * 50 + k * 20) % 126 + 126) % 126);
-        this.ui.region(`cbuff${i}:${k}`, px + BUFF_DX, BUFF_Y[k], 16, 16, label);
+        this.region(`cbuff${i}:${k}`, px + BUFF_DX, BUFF_Y[k], 16, 16, label);
       });
 
-      const hit = this.ui.region(`hud:char${i}`, px, PORTRAIT_Y, PORTRAIT_W, PORTRAIT_H,
-        `${ch.name} the ${ch.klass}`);
+      const hit = this.region(`hud:char${i}`, px, PORTRAIT_Y, PORTRAIT_W, PORTRAIT_H,
+        `${ch.name} the ${className(ch)}`);
       this.buttons.push({ id: `char${i}`, hit });
-      this.ui.region(`hud:hp${i}`, hpx, BAR_Y, BAR_W, BAR_H, `Hit Points: ${ch.hp} / ${mh}`);
-      this.ui.region(`hud:sp${i}`, spx, BAR_Y, BAR_W, BAR_H, `Spell Points: ${ch.sp} / ${ms}`);
+      this.region(`hud:hp${i}`, hpx, BAR_Y, BAR_W, BAR_H, `Hit Points: ${ch.hp} / ${mh}`);
+      this.region(`hud:sp${i}`, spx, BAR_Y, BAR_W, BAR_H, `Spell Points: ${ch.sp} / ${ms}`);
     }
 
     // The four stone buttons in the bottom right corner.
@@ -418,7 +455,7 @@ export class HUD {
     ];
     defs.forEach(([id, icon, tip], i) => {
       const x = BUTTON_X[i] + this.dx;
-      const hit = this.ui.region(`hud:${id}`, x, BUTTON_Y, BUTTON_W, BUTTON_H, tip);
+      const hit = this.region(`hud:${id}`, x, BUTTON_Y, BUTTON_W, BUTTON_H, tip);
       if (UI.drawActionPlate) {
         UI.drawActionPlate(ctx, x, BUTTON_Y, BUTTON_W, BUTTON_H, icon, hit.down ? 'down' : 'up');
       } else {
@@ -456,21 +493,60 @@ export class HUD {
 
   // --- overlays ------------------------------------------------------------
 
-  /** MM6 keeps one line of status text across the top of the party bar. */
+  /** Tap-a-portrait readout: exact numbers for phones with no hover. */
+  showCharStatus(i) {
+    const ch = ((this.session.party && this.session.party.members) || [])[i];
+    if (!ch) return;
+    const text = `${ch.name}: ${ch.hp} / ${charMaxHP(ch)} Hit Points, ${ch.sp} / ${charMaxSP(ch)} Spell Points`;
+    this._charStatus = { text, until: this.t + 4 };
+  }
+
+  /**
+   * MM6 keeps one line of status text across the top of the party bar. Here it
+   * is an honest message strip: live hover text wins while something is
+   * actually hovered, then a tapped portrait's numbers, then the recent
+   * message queue (up to three lines, each fading after its ttl). Under a
+   * modal panel the strip shows the panel's own hints - never fossil world
+   * text like the last monster the frozen reticle saw.
+   */
   drawStatusLine(ctx) {
-    // One line, one thing at a time: whatever the cursor is over wins,
-    // otherwise the most recent message while it is still fresh.
-    const recent = this.session.log.recent(1)[0];
-    const tip = this.ui.hoverText
+    const cx = 11 + 225 + this.bx;
+    const ink = { color: F.TEXT_HUD || '#0A0000', shadow: F.TEXT_HUD_SHADOW || '#E6D6C1' };
+
+    if (this.modal) {
+      // Panels register their regions AFTER this draws, so use the tooltip
+      // they produced last frame; one frame of lag is invisible.
+      const tip = this.ui.hoverText || this.ui.prevHoverText || '';
+      if (tip) F.drawText(ctx, tip, cx, STATUS_Y, { align: 'center', maxWidth: 450, ...ink });
+      return;
+    }
+
+    const hoverTip = this.ui.hoverText
       || (this.session.hoverEntity && this.session.hoverEntity.label)
-      || (recent && recent.t < recent.ttl ? recent.text : '')
       || '';
-    if (!tip) return;
-    // Centred in the same 450 px field the portraits are centred in.
-    F.drawText(ctx, tip, 11 + 225 + this.bx, STATUS_Y, {
-      align: 'center', color: F.TEXT_HUD || '#0A0000', shadow: F.TEXT_HUD_SHADOW || '#E6D6C1',
-      maxWidth: 450,
-    });
+    if (hoverTip) {
+      F.drawText(ctx, hoverTip, cx, STATUS_Y, { align: 'center', maxWidth: 450, ...ink });
+      return;
+    }
+    if (this._charStatus && this.t < this._charStatus.until) {
+      F.drawText(ctx, this._charStatus.text, cx, STATUS_Y, { align: 'center', maxWidth: 450, ...ink });
+      return;
+    }
+
+    // The message queue: newest at the bottom, up to three fresh lines.
+    const recent = this.session.log.recent(3);
+    if (!recent.length) return;
+    if (recent.length === 1) {
+      F.drawText(ctx, recent[0].text, cx, STATUS_Y, { align: 'center', maxWidth: 450, ...ink });
+      return;
+    }
+    // Stack in the band between the view and the portraits (357..385).
+    const lh = 10;
+    let y = STATUS_Y;
+    for (const l of recent) {
+      F.drawText(ctx, l.text, cx, y, { face: 'small', align: 'center', maxWidth: 450, ...ink });
+      y += lh;
+    }
   }
 
   /** Things MM6 draws inside the 3D window itself. */
@@ -529,17 +605,88 @@ export class HUD {
 
   /**
    * The touch stick, drawn the way everything else here is: scanline-filled
-   * rings and a Bayer stipple, never an arc with an alpha falloff.
+   * rings and a Bayer stipple, never an arc with an alpha falloff. In portrait
+   * mode the whole control set lives in the dead band under the frame: stick
+   * lower-left, look pad lower-right, action keys between them.
    */
   drawTouchControls(ctx) {
-    const v = layout.view;
-    const r = 46;
-    const cx = v.x + r + 14, cy = v.y + v.h - r - 14;
-    if (!this._stick) this._stick = HC.touchStick(r);
-    HC.blit(ctx, this._stick.ring, cx - r, cy - r);
+    const g = this.touchGeom;
+    const sr = (g && g.stick) || (() => {
+      const v = layout.view; const r = 46;
+      return { cx: v.x + r + 14, cy: v.y + v.h - r - 14, r };
+    })();
+
+    // The chrome painter already grounds the portrait control zone in the
+    // same ashlar as the rest of the frame; the controls sit straight on it.
+    if (!this._stick || this._stickR !== sr.r) {
+      this._stick = HC.touchStick(sr.r);
+      this._stickR = sr.r;
+    }
+    HC.blit(ctx, this._stick.ring, sr.cx - sr.r, sr.cy - sr.r);
+    // stickDX/DY are the normalised deflection (-1..1); scale by the ring
+    // radius so the knob actually rides the rim at full tilt.
     HC.blit(ctx, this._stick.knob,
-      cx + (this.stickDX || 0) - 16, cy + (this.stickDY || 0) - 16);
+      sr.cx + (this.stickDX || 0) * sr.r * 0.7 - 16,
+      sr.cy + (this.stickDY || 0) * sr.r * 0.7 - 16);
+
+    // Look pad and action keys only exist in the portrait control zone.
+    if (!g) return;
+    const lp = g.lookPad;
+    if (lp) {
+      ctx.fillStyle = '#1c1812';
+      ctx.fillRect(lp.x, lp.y, lp.w, lp.h);
+      ctx.fillStyle = '#3a3226';
+      ctx.fillRect(lp.x, lp.y, lp.w, 1); ctx.fillRect(lp.x, lp.y + lp.h - 1, lp.w, 1);
+      ctx.fillRect(lp.x, lp.y, 1, lp.h); ctx.fillRect(lp.x + lp.w - 1, lp.y, 1, lp.h);
+      // A small painted compass rosette so the pad reads as "look".
+      const mx = lp.x + lp.w / 2, my = lp.y + lp.h / 2;
+      ctx.fillStyle = '#6a5c40';
+      for (const [dx, dy] of [[0, -10], [0, 10], [-10, 0], [10, 0]]) {
+        ctx.fillRect(Math.round(mx + dx) - 1, Math.round(my + dy) - 1, 3, 3);
+      }
+      ctx.fillStyle = '#8a7a55';
+      ctx.fillRect(Math.round(mx) - 1, Math.round(my) - 1, 3, 3);
+      F.drawText(ctx, 'LOOK', mx, lp.y + lp.h - 14, { face: 'small', align: 'center', color: '#6a5c40' });
+    }
+    for (const b of g.buttons || []) {
+      const down = g.pressed && g.pressed[b.id];
+      const o = down ? 1 : 0;
+      ctx.fillStyle = down ? '#241e14' : '#332a1c';
+      ctx.fillRect(b.x + o, b.y + o, b.w, b.h);
+      ctx.fillStyle = down ? '#141008' : '#584a30';
+      ctx.fillRect(b.x + o, b.y + o, b.w, 2);
+      ctx.fillStyle = down ? '#584a30' : '#141008';
+      ctx.fillRect(b.x + o, b.y + o + b.h - 2, b.w, 2);
+      const label = b.id === 'attack' ? 'ATTACK' : 'USE';
+      F.drawText(ctx, label, b.x + o + b.w / 2, b.y + o + (b.h - 10) / 2, {
+        face: 'small', align: 'center', color: down ? '#E1CD23' : '#c8b888',
+      });
+    }
   }
+}
+
+/** Cached checker shade laid over an unused chrome fixture: a hard 8-bit
+ *  "in shadow" treatment, not an alpha wash. */
+const _shadeCache = new Map();
+function nicheShade(w, h) {
+  const key = `${w}x${h}`;
+  let c = _shadeCache.get(key);
+  if (c) return c;
+  c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  g.fillStyle = '#000000';
+  for (let y = 0; y < h; y++) {
+    for (let x = (y & 1); x < w; x += 2) g.fillRect(x, y, 1, 1);
+  }
+  _shadeCache.set(key, c);
+  return c;
+}
+
+/** Display name for a character's profession, whatever shape it arrived in. */
+function className(ch) {
+  const k = ch.klass || ch.class || '';
+  return k ? String(k).charAt(0).toUpperCase() + String(k).slice(1) : 'Adventurer';
 }
 
 /** Step an ink colour down toward black; the only fade an 8-bit frame has. */
