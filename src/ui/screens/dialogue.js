@@ -69,9 +69,31 @@ export const NPC_FRAME = { x: 517, y: 34 };
 /** Option list: shops start at y=146, house NPCs at y=160. */
 export const OPTION = { x: 480, w: 140, h: 30, shopY: 146, npcY: 160, step: 30 };
 
-export const EXIT_BTN = { x: 471, y: 445, w: 169, h: 35 };
-export const YES_BTN = { x: 486, y: 445, w: 75, h: 33 };
-export const NO_BTN = { x: 566, y: 445, w: 75, h: 33 };
+/**
+ * The engine's plate sat at (471,445) - under the party bar's clip - which
+ * left an INVISIBLE hot region that swallowed clicks on the HUD icon strip
+ * and gave the player no visible way out. The plate now lives at the foot of
+ * the dialogue column itself, above the y=352 bar line, where MM6's panel art
+ * puts it. Rects are computed from the live column so wide frames stay right.
+ */
+export const EXIT_BTN = { x: 486, y: 314, w: 136, h: 32 };
+export const YES_BTN = { x: 486, y: 314, w: 64, h: 32 };
+export const NO_BTN = { x: 558, y: 314, w: 64, h: 32 };
+
+function exitBtnRect() {
+  const d = dlgRect();
+  return { x: d.x + Math.round((d.w - EXIT_BTN.w) / 2), y: EXIT_BTN.y, w: EXIT_BTN.w, h: EXIT_BTN.h };
+}
+
+function yesNoRects() {
+  const d = dlgRect();
+  const gap = 8, w = 64;
+  const x0 = d.x + Math.round((d.w - w * 2 - gap) / 2);
+  return [
+    { x: x0, y: YES_BTN.y, w, h: YES_BTN.h },
+    { x: x0 + w + gap, y: NO_BTN.y, w, h: NO_BTN.h },
+  ];
+}
 
 /** Where several NPCs in one building put their portraits. */
 export const NPC_SLOTS = {
@@ -154,6 +176,44 @@ export function conditionIds(ch) {
 /** Deterministic per-screen RNG, so a shop looks the same on every visit. */
 export function rngFor(key) { return new Rand(String(key)); }
 
+/**
+ * A persistent, non-repeating RNG stream for anything a player could exploit
+ * by re-opening the screen (rest ambush rolls, tavern games). Prefers the
+ * session's registry (survives across opens); a fresh keyed Rand is only the
+ * fallback while that contract is not present.
+ */
+export function sessionRng(session, tag) {
+  if (session && typeof session.rngFor === 'function') {
+    try { const r = session.rngFor(tag); if (r) return r; } catch { /* fall through */ }
+  }
+  return new Rand(`${tag}:${(session && session.seed) || 0}:${Date.now() & 0xffff}`);
+}
+
+/**
+ * Identity text is never ellipsized (names must read in full): try the given
+ * face, drop to the small face, then wrap onto two small lines.
+ */
+export function drawNameFit(ctx, text, cx, y, maxW, o = {}) {
+  const s = String(text || '');
+  const color = o.color || C_WHITE;
+  const face = o.face || 'normal';
+  if (F.measure(s, face).w <= maxW) {
+    F.drawText(ctx, s, cx, y, { face, align: 'center', color });
+    return y + (face === 'small' ? 10 : 12);
+  }
+  if (F.measure(s, 'small').w <= maxW) {
+    F.drawText(ctx, s, cx, y + 1, { face: 'small', align: 'center', color });
+    return y + 11;
+  }
+  const lines = wrapLines(s, maxW, 'small').slice(0, 2);
+  let yy = y;
+  for (const l of lines) {
+    F.drawText(ctx, l, cx, yy, { face: 'small', align: 'center', color });
+    yy += 10;
+  }
+  return yy;
+}
+
 // ---------------------------------------------------------------------------
 // Interaction
 // ---------------------------------------------------------------------------
@@ -224,9 +284,9 @@ export function optionList(ui, ctx, items, o = {}) {
   return clicked;
 }
 
-/** The big exit plate at the bottom of the dialogue panel. */
+/** The exit plate at the foot of the dialogue column - visible, always. */
 export function exitButton(ui, ctx, label = 'Exit', id = 'house:exit') {
-  const r = EXIT_BTN;
+  const r = exitBtnRect();
   const hit = ui && ui.region ? ui.region(id, r.x, r.y, r.w, r.h, null) : { hover: false, click: false, down: false };
   A.button(ctx, r.x, r.y, r.w, r.h, null, hit.down ? 'down' : 'up');
   F.drawText(ctx, label, r.x + r.w / 2, r.y + (r.h - 11) / 2 + (hit.down ? 1 : 0),
@@ -234,10 +294,12 @@ export function exitButton(ui, ctx, label = 'Exit', id = 'house:exit') {
   return hit.click;
 }
 
-/** Yes / No confirmation pair, in the same strip as the exit button. */
+/** Yes / No confirmation pair, in the exit plate's own strip. */
 export function yesNo(ui, ctx, idNs = 'confirm') {
   let r = null;
-  for (const [id, rect, label] of [['yes', YES_BTN, 'Yes'], ['no', NO_BTN, 'No']]) {
+  const rects = yesNoRects();
+  const defs = [['yes', rects[0], 'Yes'], ['no', rects[1], 'No']];
+  for (const [id, rect, label] of defs) {
     const hit = ui && ui.region ? ui.region(`${idNs}:${id}`, rect.x, rect.y, rect.w, rect.h)
       : { hover: false, click: false, down: false };
     A.button(ctx, rect.x, rect.y, rect.w, rect.h, null, hit.down ? 'down' : 'up');
@@ -917,6 +979,13 @@ export class HouseScreen extends Screen {
     this.messageT = 99;
     this.t = 0;
     this.optionY = OPTION.shopY;
+    // House screens paint their own visible Exit plate at the foot of the
+    // dialogue column, so the shell must not paint its fallback plate over the
+    // panel's bottom-right (it used to bury the shop nameplate band).
+    this.hasVisibleExit = true;
+    /** Panel-info scroll offset (rows), for long dialogue replies. */
+    this.infoScroll = 0;
+    this._infoDrag = null;
   }
 
   say(msg, color) {
@@ -963,7 +1032,13 @@ export class HouseScreen extends Screen {
     this.drawPanelInfo(ctx);
 
     const opts = this.options();
-    const clicked = optionList(this.ui, ctx, opts, { ns: this.id, y: this.optionY });
+    // Compress the row pitch when a long option list would run under the
+    // Exit plate (six shop services at the stock 30px step end at y=326).
+    const step = opts.length
+      ? Math.min(OPTION.step, Math.floor((EXIT_BTN.y - 6 - this.optionY) / opts.length))
+      : OPTION.step;
+    this._optStep = step;
+    const clicked = optionList(this.ui, ctx, opts, { ns: this.id, y: this.optionY, step, h: Math.min(OPTION.h, step) });
     if (clicked) { this.sound('click'); this.onOption(clicked); }
 
     if (exitButton(this.ui, ctx, this.exitLabel || 'Exit', `${this.id}:exit`)) {
@@ -981,10 +1056,11 @@ export class HouseScreen extends Screen {
     const img = portraitOf(k, k.expression || 'normal');
     if (img) ctx.drawImage(img, p.x, p.y);
     else { ctx.fillStyle = rampCss('stone', 5); ctx.fillRect(p.x, p.y, p.w, p.h); }
-    F.drawText(ctx, k.name || 'Proprietor', p.x + p.w / 2, p.y + p.h + 6,
-      { align: 'center', color: C_BLUE, maxWidth: 150 });
+    // Names are identity: shrink or wrap, never "Gregor Merriweat...".
+    const ny = drawNameFit(ctx, k.name || 'Proprietor', p.x + p.w / 2, p.y + p.h + 6, 150,
+      { color: C_BLUE });
     if (k.title) {
-      F.drawText(ctx, k.title, p.x + p.w / 2, p.y + p.h + 18,
+      F.drawText(ctx, k.title, p.x + p.w / 2, ny + 2,
         { face: 'small', align: 'center', color: C_DIM, maxWidth: 150 });
     }
   }
@@ -999,9 +1075,9 @@ export class HouseScreen extends Screen {
     const raw = this.panelInfo ? this.panelInfo() : [];
     if (!raw.length) return;
     // Wrap first, then fit. The serif face is proportional, so the number of
-    // rows is only known after measuring; anything that will not fit between
-    // the last option and the Exit button is dropped, never clipped or
-    // truncated mid-word.
+    // rows is only known after measuring. Long replies are never dropped:
+    // the block scrolls (wheel + drag) and a "More..." chip pages through it,
+    // so quest terms always reach the player in full.
     const colW = d.w - 24;
     const rows = [];
     for (const l of raw) {
@@ -1009,24 +1085,59 @@ export class HouseScreen extends Screen {
       const color = (l && l.color) || C_WHITE;
       for (const line of wrapLines(s, colW, 'small')) rows.push({ line, color });
     }
-    // The block is bounded by the party bar, not by the exit button: the bar is
-    // painted over the panel from y=352 down, so a line that starts at 351 is
-    // sliced through the middle of its glyphs. Anything that will not fit
-    // between the last option and that edge is dropped, never clipped.
     const optCount = this.options ? this.options().length : 0;
-    const lastOpt = this.optionY + optCount * OPTION.step;
+    const lastOpt = this.optionY + optCount * (this._optStep || OPTION.step);
     const top = lastOpt + 10;
-    const bottom = Math.min(EXIT_BTN.y - 10, d.y + d.h - 2);
-    const room = Math.max(0, Math.floor((bottom - top) / 11));
-    const shown = rows.slice(0, Math.min(rows.length, room));
+    // Bounded by the exit plate; the party bar paints over everything past 352.
+    const bottom = Math.min(EXIT_BTN.y - 8, d.y + d.h - 2);
+    const lh = 11;
+    const room = Math.max(1, Math.floor((bottom - top) / lh));
+    const overflow = rows.length > room;
+    const visible = overflow ? room - 1 : room;   // last row goes to the chip
+    const maxScroll = Math.max(0, rows.length - visible);
+    let s = Math.max(0, Math.min(maxScroll, this.infoScroll | 0));
+
+    if (overflow) {
+      // Wheel over the column scrolls the reply.
+      const overCol = this.ui.inRect(d.x, top - 6, d.w, bottom - top + 12);
+      if (this.ui.mouse.wheel && overCol) s += Math.sign(this.ui.mouse.wheel) * 2;
+      // Touch drag over the text block scrolls it too.
+      const st = this._infoDrag || (this._infoDrag = { on: false, y: 0, acc: 0 });
+      if (this.ui.mouse.down && overCol) {
+        if (!st.on) { st.on = true; st.y = this.ui.mouse.y; st.acc = 0; }
+        else {
+          st.acc += -(this.ui.mouse.y - st.y) / lh;
+          st.y = this.ui.mouse.y;
+          const r = Math.trunc(st.acc);
+          if (r) { s += r; st.acc -= r; }
+        }
+      } else st.on = false;
+      s = Math.max(0, Math.min(maxScroll, s));
+    } else s = 0;
+    this.infoScroll = s;
+
+    const shown = rows.slice(s, s + Math.min(rows.length, visible));
     if (!shown.length) return;
-    let y = Math.min(bottom - shown.length * 11, top);
+    let y = overflow ? top : Math.min(bottom - shown.length * lh, top);
     A.divider(ctx, d.x + 14, y - 8, d.w - 28);
     for (const r of shown) {
       F.drawText(ctx, r.line, d.x + d.w / 2, y, {
         face: 'small', align: 'center', color: r.color,
       });
-      y += 11;
+      y += lh;
+    }
+    if (overflow) {
+      // The "More..." chip: pages forward, wrapping back to the top.
+      const label = s < maxScroll ? 'More...' : 'Back to top';
+      const cw = 90, cx = d.x + Math.round((d.w - cw) / 2);
+      const hit = this.ui.region(`${this.id}:info:more`, cx, y - 2, cw, lh + 4, 'More of the reply');
+      F.drawText(ctx, label, d.x + d.w / 2, y, {
+        face: 'small', align: 'center', color: hit.hover ? C_GOLD : C_CANARY,
+      });
+      if (hit.click) {
+        this.infoScroll = s < maxScroll ? Math.min(maxScroll, s + visible) : 0;
+        this.sound('page_turn');
+      }
     }
   }
 
@@ -1124,6 +1235,7 @@ export class DialogueScreen extends HouseScreen {
   setBody(s, expression) {
     this.body = String(s || '');
     this.shown = 0;
+    this.infoScroll = 0;   // a new reply always starts at its first line
     if (expression) { this.expression = expression; this.npc.expression = expression; }
   }
 

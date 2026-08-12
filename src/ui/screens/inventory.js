@@ -459,9 +459,12 @@ export class InventoryScreen extends Screen {
       if (hit.hover) M.stipple(ctx, ix + 1, iy + 1, iw - 1, ih - 1, [255, 240, 190], 0.22);
       const ic = itemIcon(it);
       ctx.drawImage(ic, (ix + (iw - ic.width) / 2) | 0, (iy + (ih - ic.height) / 2) | 0);
-      if (it.broken) tint(ctx, ix + 1, iy + 1, iw - 1, ih - 1, 'rgba(255,0,0,0.35)');
-      else if (it.identified === false) tint(ctx, ix + 1, iy + 1, iw - 1, ih - 1, 'rgba(0,225,0,0.28)');
-      else if (it.prefix || it.suffix || it.bonus) tint(ctx, ix + 1, iy + 1, iw - 1, ih - 1, 'rgba(120,120,255,0.20)');
+      // State markers ride the item art, not the cell: palette-snapped corner
+      // flashes and a stippled outline, never a translucent RGBA slab (which
+      // has no index in an 8-bit frame).
+      if (it.broken) itemMark(ctx, ix, iy, iw, ih, [255, 0, 0]);
+      else if (it.identified === false) itemMark(ctx, ix, iy, iw, ih, [0, 225, 0]);
+      else if (it.prefix || it.suffix || it.bonus) itemMark(ctx, ix, iy, iw, ih, [0, 175, 255]);
       if (hit.rightClick) this.showPopup(it);
       else if (hit.click && !carried) {
         // A consumable is used where it lies; anything else goes to the hand.
@@ -477,8 +480,10 @@ export class InventoryScreen extends Screen {
     if (carried && hoverCell) {
       const ok = this.fitsAt(inv, carried, hoverCell.x, hoverCell.y);
       const fw = itemW(carried) * CELL, fh = itemH(carried) * CELL;
-      ctx.fillStyle = ok ? 'rgba(96,96,96,0.5)' : 'rgba(160,32,16,0.5)';
-      ctx.fillRect(gx + hoverCell.x * CELL + 1, gy + hoverCell.y * CELL + 1, fw - 1, fh - 1);
+      // Placement preview as a Bayer stipple in a solid palette ink - a
+      // translucent slab has no index in an 8-bit frame.
+      M.stipple(ctx, gx + hoverCell.x * CELL + 1, gy + hoverCell.y * CELL + 1, fw - 1, fh - 1,
+        ok ? [225, 205, 35] : [255, 35, 16], 0.4);
       const hit = this.ui.region(`${this.id}:drop`, gx, gy, w, h, ok ? 'Put it here' : 'It will not fit there');
       if (hit.click && ok) {
         invAdd(inv, carried, hoverCell.x, hoverCell.y);
@@ -491,8 +496,32 @@ export class InventoryScreen extends Screen {
   drawCursorItem(ctx) {
     const it = this.ui.cursorItem;
     if (!it) return;
+    // A lifted finger parks the pointer off-screen; remember the last real
+    // position so the carried item never turns invisible mid-move on touch.
+    if (this.ui.mouse.x > -100) this._carryPos = { x: this.ui.mouse.x, y: this.ui.mouse.y };
+    const p = (this.ui.mouse.x > -100 ? this.ui.mouse : this._carryPos) || this.ui.mouse;
     const ic = itemIcon(it);
-    ctx.drawImage(ic, (this.ui.mouse.x - ic.width / 2) | 0, (this.ui.mouse.y - ic.height / 2) | 0);
+    ctx.drawImage(ic, (p.x - ic.width / 2) | 0, (p.y - ic.height / 2) | 0);
+  }
+
+  /**
+   * MM6's give: while an item rides the cursor, clicking a party portrait
+   * hands the item to that character instead of switching to them.
+   */
+  giveCursorTo(i) {
+    const it = this.ui.cursorItem;
+    const ch = this.members[i];
+    if (!it || !ch) return false;
+    const inv = this.invOf(ch);
+    if (!invAdd(inv, it)) {
+      this.status = `${ch.name}'s pack is full.`;
+      this.sound('error');
+      return true;   // consumed the click; the item stays in hand
+    }
+    this.ui.cursorItem = null;
+    this.status = `${itemName(it) || 'The item'} goes to ${ch.name}.`;
+    this.sound('item_pickup');
+    return true;
   }
 
   drawPopup(ctx) {
@@ -539,6 +568,19 @@ export class InventoryScreen extends Screen {
 }
 
 function tint(ctx, x, y, w, h, color) { ctx.fillStyle = color; ctx.fillRect(x, y, w, h); }
+
+/**
+ * A state marker in the engine's own vocabulary: a 1-bit stippled outline
+ * around the cell rim plus two corner flashes, in a solid palette ink.
+ */
+function itemMark(ctx, x, y, w, h, rgb) {
+  M.stipple(ctx, x + 1, y + 1, w - 2, 2, rgb, 0.6);
+  M.stipple(ctx, x + 1, y + h - 3, w - 2, 2, rgb, 0.6);
+  M.stipple(ctx, x + 1, y + 3, 2, h - 6, rgb, 0.6);
+  M.stipple(ctx, x + w - 3, y + 3, 2, h - 6, rgb, 0.6);
+  M.rct(ctx, x + 1, y + 1, 4, 4, rgb);
+  M.rct(ctx, x + w - 5, y + h - 5, 4, 4, rgb);
+}
 function capitalise(s) { return String(s).charAt(0).toUpperCase() + String(s).slice(1); }
 
 function slotLabel(slot) {

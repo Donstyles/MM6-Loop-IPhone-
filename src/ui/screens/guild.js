@@ -227,7 +227,11 @@ export class GuildScreen extends HouseScreen {
   teach(rank) {
     const ch = this.character || activeMember(this.session);
     if (!ch) return;
-    if (!this.isMember()) { this.say('Members only.'); return; }
+    if (!this.isMember()) {
+      this.sound('error');
+      this.say(`Members only. Join the ${this.title} first - ${gold(this.fee)} gold.`, C_RED);
+      return;
+    }
     const klass = ch.class || ch.klass;
     let max = 3;
     try { max = classSkillMax(klass, this.school); } catch { max = 3; }
@@ -255,22 +259,29 @@ export class GuildScreen extends HouseScreen {
     const ch = this.character || activeMember(this.session);
     const { level, mastery } = this.skillOf(ch);
     const member = this.isMember();
+    // Everything stays CLICKABLE: a tap on a service you have not earned gets
+    // a spoken refusal ("Members only", "needs Expert...") instead of the
+    // silent no-op that read as a dead screen.
     return [
-      { id: 'join', label: member ? 'Member' : 'Join', note: member ? 'in good standing' : `${gold(this.fee)} gold`,
-        enabled: !member },
-      { id: 'skill', label: 'Learn Skill', note: mastery ? `${MASTERY_NAMES[mastery]} ${level}` : `${gold(50 * this.tier)} gold`,
-        enabled: member && !mastery },
-      { id: 'expert', label: 'Expert Training', note: `${gold(masteryCost(2))} gold`,
-        enabled: member && mastery === 1 },
-      { id: 'master', label: 'Master Training', note: `${gold(masteryCost(3))} gold`,
-        enabled: member && mastery === 2 },
+      { id: 'join', label: member ? 'Member' : 'Join', note: member ? 'in good standing' : `${gold(this.fee)} gold` },
+      { id: 'skill', label: 'Learn Skill',
+        note: mastery ? `${MASTERY_NAMES[mastery]} ${level}` : member ? `${gold(50 * this.tier)} gold` : 'members only' },
+      { id: 'expert', label: 'Expert Training',
+        note: member && mastery >= 1 ? `${gold(masteryCost(2))} gold` : member ? 'learn the skill first' : 'members only' },
+      { id: 'master', label: 'Master Training',
+        note: member && mastery >= 2 ? `${gold(masteryCost(3))} gold` : member ? 'reach Expert first' : 'members only' },
     ];
   }
 
   onOption(id) {
     switch (id) {
       case 'join': this.join(); return;
-      case 'skill': this.teach(1); return;
+      case 'skill': {
+        const ch = this.character || activeMember(this.session);
+        const { mastery } = this.skillOf(ch);
+        if (mastery) { this.say(`${charName(ch)} already knows ${this.school} magic - buy training instead.`); return; }
+        this.teach(1); return;
+      }
       case 'expert': this.teach(2); return;
       case 'master': this.teach(3); return;
       default:

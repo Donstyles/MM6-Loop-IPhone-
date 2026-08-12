@@ -129,9 +129,14 @@ export async function startGame(shell) {
       // context is created in the tap - but the heavy work (ambience bed
       // prerender, the scheduler) is deferred off the gesture into idle time
       // so the first tap no longer carries a half-second hitch.
+      let kicked = false;
       const kick = () => {
+        if (kicked) return;   // first gesture only, whichever kind arrives
+        kicked = true;
         try { session.audio.init(); } catch (e) { console.warn('audio init failed', e); }
         removeEventListener('pointerdown', kick);
+        removeEventListener('keydown', kick);
+        removeEventListener('touchend', kick);
         const finish = () => {
           try {
             if (musicMod && musicMod.Music && !session.music) {
@@ -152,7 +157,11 @@ export async function startGame(shell) {
         if (typeof requestIdleCallback === 'function') requestIdleCallback(finish, { timeout: 1500 });
         else setTimeout(finish, 250);
       };
-      addEventListener('pointerdown', kick, { once: true });
+      // Any first gesture unlocks the score: a pointer press, a key, or the
+      // tail of a touch (iOS accepts all three as activation gestures).
+      addEventListener('pointerdown', kick);
+      addEventListener('keydown', kick);
+      addEventListener('touchend', kick);
     }
   } catch (e) { console.warn('audio unavailable', e); }
 
@@ -243,9 +252,11 @@ function installClockBridge(session) {
 // Audio direction
 // ---------------------------------------------------------------------------
 
-/** Music for a house screen while it is open. */
+/** Music for a house screen while it is open, keyed by the id's base (the
+ *  part before ':' - screen ids arrive as 'shop:weapon', 'guild:fire'). */
 const SCREEN_TRACKS = {
   tavern: 'tavern', shop: 'shop', guild: 'shop', temple: 'temple',
+  training: 'shop', bank: 'shop',
   title: 'title', chargen: 'title',
 };
 
@@ -261,9 +272,15 @@ const DUNGEON_TRACKS = {
  * only acts on change), including while modal screens freeze the simulation.
  */
 function installAudioDirector(session, screens) {
-  let current = { track: null, amb: null };
+  const current = { track: null, amb: null };
   let lastHour = session.clock.hour;
   let accum = 0;
+  let wasOverridden = false;
+  /** Town hysteresis: sticky in-town flag, only flipped past the deadband. */
+  let townState = false;
+  /** Wall-clock time of the last situational track change (cooldown). */
+  let lastChangeAt = -1e9;
+  const nowS = () => (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
 
   session.tickAudioDirector = (dt, topScreenId, force) => {
     accum += dt || 0;
@@ -272,6 +289,24 @@ function installAudioDirector(session, screens) {
 
     const music = session.music, audio = session.audio;
     if (!music && !audio) return;
+
+    // Combat owns the score. While the session's override is up (combat,
+    // victory sting, defeat dirge) the director stands down completely -
+    // session.onCombatChange has already started that track - and when the
+    // override clears the situation is re-evaluated from scratch, so the town
+    // gets town music back rather than a stale 'field' memo.
+    const override = typeof session.combatMusicOverride === 'function'
+      ? safeCall(() => session.combatMusicOverride()) : null;
+    if (override) {
+      current.track = override;   // remember what the fight is playing
+      wasOverridden = true;
+      return;
+    }
+    if (wasOverridden) {
+      wasOverridden = false;
+      current.track = null;       // force a fresh situational decision
+      lastChangeAt = -1e9;        // and let it through the cooldown
+    }
 
     // New-day sting when dawn breaks (05:00).
     const hour = session.clock.hour;
@@ -285,13 +320,21 @@ function installAudioDirector(session, screens) {
     let amb = session.ambienceId || 'amb_forest';
     const indoor = session.map && session.map.indoor;
     if (!indoor) {
+      townState = inTown(session, townState);
       if (session.clock.isNight) { track = 'night'; amb = 'amb_night'; }
-      else if (inTown(session)) { track = 'town'; amb = 'amb_town'; }
+      else if (townState) { track = 'town'; amb = 'amb_town'; }
     }
-    const screenTrack = topScreenId && SCREEN_TRACKS[topScreenId];
+    // Screen ids carry a subkind suffix: 'shop:weapon' plays the shop track.
+    const baseId = topScreenId ? String(topScreenId).split(':')[0] : null;
+    const screenTrack = baseId && SCREEN_TRACKS[baseId];
     if (screenTrack) track = screenTrack;
 
     if (music && track !== current.track) {
+      // Cooldown so a stroll along a town boundary cannot thrash the deck;
+      // screen tracks and forced re-evaluations are deliberate and skip it.
+      const t = nowS();
+      if (!screenTrack && !force && t - lastChangeAt < 6) return;
+      lastChangeAt = t;
       current.track = track;
       try { music.play(track); } catch { /* unknown track falls back next tick */ }
     }
@@ -302,14 +345,20 @@ function installAudioDirector(session, screens) {
   };
 }
 
-/** Is the party standing inside any town's radius? */
-function inTown(session) {
+/**
+ * Is the party in town? Sticky with a +/-10% deadband: you must come 10%
+ * inside the radius to enter and drift 10% past it to leave, so pacing the
+ * boundary does not restart the town theme six times in five seconds.
+ */
+function inTown(session, wasIn) {
   const towns = session.regionTowns;
   if (!towns || !towns.length) return false;
   const p = session.player.pos;
+  const k = wasIn ? 1.1 : 0.9;
   for (const t of towns) {
     const dx = p.x - t.x, dz = p.z - t.z;
-    if (dx * dx + dz * dz <= t.r * t.r) return true;
+    const r = t.r * k;
+    if (dx * dx + dz * dz <= r * r) return true;
   }
   return false;
 }
@@ -339,7 +388,17 @@ function installSaveSystem(session, shell) {
         // when that side of the house provides one.
         state: (typeof session.saveState === 'function' ? safeCall(() => session.saveState()) : null),
       };
-      localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+      // The glue layer's snapshot occasionally carries live engine objects
+      // (a monster's material, a THREE.Texture on a cached sprite); letting
+      // JSON.stringify walk into their toJSON() spat ~15 texture-serialisation
+      // warnings per save and bloated the blob. Strip them at the fence.
+      localStorage.setItem(SAVE_KEY, JSON.stringify(data, (k, v) => (
+        v && typeof v === 'object'
+          && (v.isTexture || v.isObject3D || v.isMaterial || v.isBufferGeometry
+            || v.isWebGLRenderTarget || v instanceof HTMLCanvasElement
+            || v instanceof HTMLImageElement)
+          ? undefined : v
+      )));
       session.saveName = `Saved ${session.clock.formatDate()}, ${session.clock.format()}`;
       return true;
     } catch (e) {
@@ -396,16 +455,23 @@ async function applySave(session, shell, data) {
     } catch (e) { console.warn('could not restore the party', e); }
   }
   if (Number.isFinite(data.clock)) session.clock.minutes = data.clock;
+  // The master seed feeds every keyed RNG stream (clock bridge, screen art,
+  // session.rngFor registry); leaving the boot-time random one in place made
+  // those streams diverge from the world being rebuilt below.
+  if (Number.isFinite(data.seed)) session.seed = data.seed;
   // Quest state rides in the glue layer's snapshot (data.state.questPool);
   // restoreState refills party.quests below. Older saves' flat `quests`
   // arrays are ignored on purpose.
   if (session.resetClockBridge) session.resetClockBridge();
 
   // Rebuild the map the save was standing in, then put the party back.
+  // The glue layer writes mapMeta.kind, older shell saves wrote .type -
+  // accept both spellings.
   const meta = data.map || {};
+  const metaKind = meta.kind || meta.type;
   const mseed = meta.seed !== undefined ? meta.seed : (data.seed !== undefined ? data.seed : session.seed);
   try {
-    if (meta.type === 'dungeon' && meta.spec) {
+    if (metaKind === 'dungeon' && meta.spec) {
       await loadDungeon(session, meta.spec, mseed);
     } else {
       await loadRegion(session, meta.id || 'new_sorpigal', mseed);
@@ -554,7 +620,8 @@ export async function loadRegion(session, regionId, seed, entry = null) {
   const map = outdoorMap(region);
   session.setMap(map, regionId, entry || region.spawnPoint || townEntry(region) || null);
   populateRegion(session, region, seed);
-  session.mapMeta = { type: 'region', id: regionId, seed };
+  // Both spellings: the glue layer reads .kind, older shell code read .type.
+  session.mapMeta = { kind: 'region', type: 'region', id: regionId, seed };
   // Town circles for the audio director (and anyone else asking "am I in town?").
   session.regionTowns = (region.towns || [])
     .filter((t) => Number.isFinite(t.x) && Number.isFinite(t.z))
@@ -604,7 +671,7 @@ export async function loadDungeon(session, spec, seed, entry = null) {
   const map = dungeonMap(d);
   session.setMap(map, spec.id || 'dungeon', entry);
   populateDungeon(session, d, seed);
-  session.mapMeta = { type: 'dungeon', spec: { ...spec }, seed };
+  session.mapMeta = { kind: 'dungeon', type: 'dungeon', spec: { ...spec }, seed };
   session.regionTowns = [];
   session.musicTrack = d.music || DUNGEON_TRACKS[spec.theme] || 'dungeon';
   session.ambienceId = d.ambience || (spec.theme === 'cave' || spec.theme === 'mine' ? 'amb_cave' : 'amb_dungeon');

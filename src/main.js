@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { Engine } from './core/engine.js';
-import { computeLayout, layout, inView } from './core/layout.js';
+import { computeLayout, layout, inView, readSafeInsets } from './core/layout.js';
 import { Input } from './core/input.js';
 import { UIContext, ScreenStack } from './ui/uikit.js';
 import { Boot } from './boot.js';
@@ -72,6 +72,22 @@ function resize() {
 }
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', () => setTimeout(resize, 120));
+// iOS reports different env(safe-area-inset-*) as its toolbars collapse and
+// expand, and nothing fires for it. Re-poll on visibility flips and, on touch
+// devices, once a second; resize only when the numbers actually moved.
+{
+  let lastInsets = '';
+  const pollInsets = () => {
+    try {
+      const v = JSON.stringify(readSafeInsets());
+      if (v !== lastInsets) { lastInsets = v; resize(); }
+    } catch { /* no probe, no poll */ }
+  };
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) setTimeout(pollInsets, 80); });
+  if (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0) {
+    setInterval(pollInsets, 1000);
+  }
+}
 // An embedded stage can change size without the window doing anything - the
 // host frame growing to fit its content, a phone rotating inside it - and the
 // resize event never fires for that.
@@ -286,7 +302,7 @@ function handleKeys() {
   if (input.justPressed.has('KeyQ')) openScreen('questlog');
   if (input.justPressed.has('KeyM')) openScreen('mapscreen');
   if (input.justPressed.has('KeyZ')) openScreen('quickref');
-  if (input.justPressed.has('KeyR')) openScreen('rest');
+  if (input.justPressed.has('KeyR')) tryOpenRest();
   if (input.justPressed.has('Enter')) session.toggleTurnBased();
   for (let i = 0; i < 4; i++) {
     if (input.justPressed.has(`Digit${i + 1}`)) session.activeChar = i;
@@ -339,7 +355,7 @@ function handleHudButtons() {
   for (const b of hud.buttons) {
     if (!b.hit.click) continue;
     if (b.id === 'cast') openScreen('spellbook');
-    else if (b.id === 'rest') openScreen('rest');
+    else if (b.id === 'rest') tryOpenRest();
     else if (b.id === 'quickref') openScreen('quickref');
     else if (b.id === 'options') openScreen('options');
     else if (b.id === 'turnbased') session.toggleTurnBased();
@@ -365,6 +381,27 @@ function handleHudButtons() {
       }
     }
   }
+}
+
+/**
+ * MM6 refuses to make camp with enemies at hand - and the panel must not even
+ * open, because the fight keeps running behind it while the sim is frozen.
+ */
+function tryOpenRest() {
+  if (session) {
+    let hostile = false;
+    try {
+      hostile = !!(session.inCombat
+        || (typeof session.checkCombat === 'function' && session.checkCombat())
+        || (typeof session.monstersNear === 'function' && session.monstersNear()));
+    } catch { hostile = !!session.inCombat; }
+    if (hostile) {
+      session.message('You cannot rest with enemies nearby!');
+      try { session.audio && session.audio.play && session.audio.play('error'); } catch { /* optional */ }
+      return;
+    }
+  }
+  openScreen('rest');
 }
 
 function doAttack() { if (session && session.attack) session.attack(); }

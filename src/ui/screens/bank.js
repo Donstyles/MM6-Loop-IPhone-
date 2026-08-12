@@ -182,11 +182,13 @@ export class BankScreen extends HouseScreen {
   settle() {
     const b = this.bank;
     if (!b) return 0;
-    const weeks = Math.floor((this.now - b.lastMinutes) / WEEK);
+    // Cap compounding at four weeks per settlement: wait-spamming the clock
+    // must not mint unbounded gold between two visits.
+    const weeks = Math.min(4, Math.floor((this.now - b.lastMinutes) / WEEK));
     if (weeks <= 0 || b.balance <= 0) return 0;
     const before = b.balance;
     b.balance = Math.floor(b.balance * Math.pow(1 + RATE, weeks));
-    b.lastMinutes += weeks * WEEK;
+    b.lastMinutes = this.now;
     const gained = b.balance - before;
     b.earned = (b.earned | 0) + gained;
     if (gained > 0) this.say(`Your account has earned ${gold(gained)} gold in interest.`);

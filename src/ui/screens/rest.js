@@ -16,7 +16,7 @@ import { clamp, hash2 } from '../../core/rng.js';
 import * as F from '../../art/font.js';
 import { maxHP, maxSP } from '../../game/stats.js';
 import {
-  Screen, PANEL, A, baked, poly, rngFor, paintFloor, paintClutter, vignette,
+  Screen, PANEL, A, baked, poly, sessionRng, paintFloor, paintClutter, vignette,
   members, hasCondition, clearCondition, say, MM6, C_WHITE, C_GOLD, C_CANARY, C_DIM,
   C_RED, C_GREEN,
 } from './dialogue.js';
@@ -168,8 +168,10 @@ export function paintRestPanel(g, w, h) {
   paintBedroll(g, 36, h - 68, 62, '#8a7048');
   paintBedroll(g, 34, h - 26, 62, '#6e6a58');
 
-  paintClutter(g, 262, h - 4, 'sack', 24);
-  paintClutter(g, w - 42, h - 8, 'barrel', 26);
+  // Clutter tucked clear of the Exit plate (rel x 280..434, y 297..334): the
+  // barrel used to stand half-buried under the plate's bottom edge.
+  paintClutter(g, 254, h - 4, 'sack', 24);
+  paintClutter(g, w - 20, h - 4, 'barrel', 24);
   vignette(g, w, h, 0.32);
 }
 
@@ -183,7 +185,25 @@ export class RestScreen extends Screen {
     this.message = '';
     this.messageT = 99;
     this.t = 0;
-    this.rnd = rngFor('rest');
+    // A PERSISTENT stream: a fresh fixed-seed Rand here meant roll #1 always
+    // passed, so re-opening the screen made every rest ambush-proof.
+    this.rnd = sessionRng(session, 'rest');
+  }
+
+  onOpen() {
+    this.sound('rest');
+    // The campfire crackles for as long as the camp panel is up.
+    const a = this.session && this.session.audio;
+    if (a && typeof a.loop === 'function') {
+      try { this._fire = a.loop('fire_crackle', { volume: 0.5 }); } catch { this._fire = null; }
+    }
+  }
+
+  onClose() {
+    if (this._fire && typeof this._fire.stop === 'function') {
+      try { this._fire.stop(0.4); } catch { /* already gone */ }
+    }
+    this._fire = null;
   }
 
   get clock() { return this.session && this.session.clock; }

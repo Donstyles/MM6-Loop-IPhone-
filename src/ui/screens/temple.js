@@ -11,8 +11,9 @@ import { rampCss } from '../../core/palette.js';
 import { clamp, hash2 } from '../../core/rng.js';
 import * as F from '../../art/font.js';
 import { healCost, worstCondition, CONDITIONS, maxHP, maxSP } from '../../game/stats.js';
+import { npcName } from '../../game/npcnames.js';
 import {
-  HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, paintWall, paintFloor,
+  HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, rngFor, paintWall, paintFloor,
   paintClutter, vignette, members, activeMember, charName, partyGold, spend, hasCondition,
   clearCondition, conditionIds, contactShadow, poseSeed, MM6, C_WHITE, C_CANARY, C_DIM, C_RED, C_GREEN,
 } from './dialogue.js';
@@ -189,8 +190,18 @@ export class TempleScreen extends HouseScreen {
     this.id = 'temple';
     this.tier = opts.tier || 2;
     this.god = opts.god || GODS[(opts.tier || 2) % GODS.length];
-    this.title = opts.title || `Temple of ${this.god}`;
-    this.keeper = opts.keeper || { name: 'Brother Aldric', title: 'Healer', portraitSeed: 77, sex: 'm', klass: 'cleric' };
+    this.title = opts.title || (opts.temple && opts.temple.name) || `Temple of ${this.god}`;
+    // Payload keeper first; else a generated healer for THIS temple - the
+    // same treatment the shops get, never one Brother Aldric everywhere.
+    const krand = rngFor(`keeper:temple:${opts.id || this.title}`);
+    const keeperSex = krand.bool() ? 'm' : 'f';
+    this.keeper = opts.keeper || {
+      name: `${keeperSex === 'm' ? 'Brother' : 'Sister'} ${npcName(krand, keeperSex, { epithet: false }).split(' ')[0]}`,
+      title: 'Healer',
+      portraitSeed: krand.int(0, 0x7fffffff),
+      sex: keeperSex,
+      klass: 'cleric',
+    };
     this.tint = opts.tint || '#e1cd23';
     this.mode = null;
   }

@@ -200,7 +200,13 @@ export class OptionsScreen extends Screen {
       if (hit.click) this.press(id);
     }
 
-    this.drawHelpLine(ctx, 306);
+    // No floating hover hint here - the HUD status strip under the panel
+    // already prints it, and doubling it read as a glitch. Only the screen's
+    // own action feedback ("Game saved.") prints on the panel face.
+    if (this.status) {
+      F.drawText(ctx, this.status, px(PANEL.w / 2), py(306),
+        { face: 'small', align: 'center', color: CANARY });
+    }
     if (this.sub === 'controls') this.drawControls(ctx);
     if (this.confirm) this.drawConfirm(ctx);
     this.pollPartyBar();

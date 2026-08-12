@@ -259,11 +259,33 @@ export const A = {
   check(ctx, x, y, on, hot) {
     M.tickBox(ctx, x | 0, y | 0, 13, !!on, !!hot);
   },
-  /** A cut groove with a metal plate riding it. */
+  /**
+   * A slider carved out of the panel: a stone channel with a banded brass
+   * fill up to the value and a carved knob riding the lip. The old bare
+   * groove-and-grey-plate read as a Windows rail on the options board.
+   */
   slider(ctx, x, y, w, t, hot) {
-    M.groove(ctx, x | 0, y + 4, w | 0, 5);
-    const kx = (x + Math.round((w - 7) * Math.max(0, Math.min(1, t)))) | 0;
-    M.handle(ctx, kx, (y | 0) - 1, 7, 15, !!hot);
+    x |= 0; y |= 0; w |= 0;
+    const k = Math.max(0, Math.min(1, t));
+    M.carvedWell(ctx, x - 2, y + 2, w + 4, 9, { material: 'stone', seed: 57 });
+    // Banded brass fill - the light catches the top of the moulding and
+    // falls away down its face, exactly like the loading bar.
+    const fill = Math.round((w - 4) * k);
+    if (fill > 0) {
+      const BANDS = [[214, 176, 88], [188, 150, 66], [146, 112, 44], [104, 78, 30]];
+      for (let b = 0; b < BANDS.length; b++) {
+        M.rct(ctx, x, y + 4 + b, fill, 1, BANDS[b]);
+      }
+      M.rct(ctx, x + fill - 1, y + 4, 1, 4, [82, 60, 22]);   // leading edge in shadow
+    }
+    // Ticks cut under the channel lip, MM6's stepped-volume look.
+    for (let i = 0; i <= 8; i++) {
+      M.rct(ctx, x + Math.round(((w - 1) * i) / 8), y + 11, 1, 2, [58, 50, 40]);
+    }
+    const kx = (x + Math.round((w - 9) * k)) | 0;
+    M.carvedPlate(ctx, kx, y - 2, 9, 17, {
+      state: hot ? 'hot' : 'up', material: 'brass', seed: 31,
+    });
   },
   /**
    * A cut channel with a wooden runner in it - no track, no thumb outline and
@@ -596,6 +618,9 @@ export class Screen {
    */
   scrollbar(ctx, id, x, y, h, scroll, total, visible) {
     const maxScroll = Math.max(0, total - visible);
+    // Content that fits needs no runner: an empty channel with no thumb in it
+    // reads as a broken widget, and MM6 never draws one on a short page.
+    if (maxScroll <= 0) return 0;
     let s = Math.max(0, Math.min(maxScroll, scroll));
     const ui = this.ui;
     const hit = ui.region(`${this.id}:${id}`, x, y, 10, h);
@@ -655,12 +680,21 @@ export class Screen {
     return s;
   }
 
-  /** Character switching from the live party bar underneath the panel. */
+  /** Character switching from the live party bar underneath the panel.
+   *  While an item rides the cursor, a portrait click GIVES the item to that
+   *  character (MM6's flow) instead of switching to them. */
   pollPartyBar() {
     const btns = (this.hud && this.hud.buttons) || [];
     for (const b of btns) {
       const m = /^char(\d)$/.exec(b.id);
       if (m && b.hit && b.hit.click && this.members[+m[1]]) {
+        if (this.ui && this.ui.cursorItem && typeof this.giveCursorTo === 'function') {
+          if (this.giveCursorTo(+m[1])) {
+            // Consume the click so the shell does not also switch characters.
+            b.hit.click = false;
+            continue;
+          }
+        }
         this.session.activeChar = +m[1];
         this.onCharChanged(+m[1]);
       }

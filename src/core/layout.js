@@ -59,8 +59,26 @@ export const layout = {
   dpr: 1,
 };
 
-/** CSS px per millimetre. CSS px are density-independent, so this is fixed. */
-const CSS_PX_PER_MM = 96 / 25.4;
+/**
+ * CSS px per millimetre. The CSS reference (96 px/inch) is only true of a
+ * desktop monitor at arm's length: an iPhone packs ~153 *logical* px per
+ * physical inch, so a "7 mm" control computed at 96 dpi lands at ~4.4 mm under
+ * a thumb. High-density touch devices therefore use the measured mobile
+ * density; everything else keeps the CSS reference.
+ */
+const CSS_PX_PER_MM_DESKTOP = 96 / 25.4;
+const CSS_PX_PER_MM_MOBILE = 153 / 25.4;
+
+/** Touch-capable device, decided once (used for physical control sizing). */
+export function isTouchDevice() {
+  return typeof navigator !== 'undefined'
+    && (navigator.maxTouchPoints > 0 || (typeof window !== 'undefined' && 'ontouchstart' in window));
+}
+
+function cssPxPerMm() {
+  const dpr = typeof devicePixelRatio === 'number' ? devicePixelRatio : 1;
+  return (isTouchDevice() && dpr >= 2) ? CSS_PX_PER_MM_MOBILE : CSS_PX_PER_MM_DESKTOP;
+}
 
 /**
  * Read the safe-area insets published by index.html as CSS custom properties
@@ -159,7 +177,7 @@ export function computeLayout(cw, ch, allowWide = true) {
   layout.safe.bottom = Math.max(0, (layout.screen.y + layout.screen.h) - (ch - insets.bottom)) / scale;
   layout.safe.left = Math.max(0, insets.left - layout.screen.x) / scale;
 
-  layout.pxPerMm = CSS_PX_PER_MM / scale;
+  layout.pxPerMm = cssPxPerMm() / scale;
   layout.dpr = (typeof devicePixelRatio === 'number' ? devicePixelRatio : 1);
 
   // The control zone: everything under the 480-row frame, minus the bottom

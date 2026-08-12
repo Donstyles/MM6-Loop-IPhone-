@@ -11,7 +11,7 @@
 
 import * as F from '../../art/font.js';
 import {
-  Screen, A, PANEL, px, py, SCHOOL_COLORS,
+  Screen, A, PANEL, px, py, SCHOOL_COLORS, portraitOf,
   WHITE, CANARY, HILITE, DIM, BOOK_INK, drawWrapped,
 } from './screenbase.js';
 import * as M from './mm6art.js';
@@ -61,11 +61,33 @@ export class SpellbookScreen extends Screen {
 
   onOpen() {
     const ch = this.character;
-    // Open on a school the character can actually use, as MM6 does.
-    if (ch) {
-      const k = schoolSkill(ch, this.school);
-      if (!k.level) {
-        for (const s of SCHOOLS) if (schoolSkill(ch, s.id).level > 0) { this.school = s.id; break; }
+    // A character with no magic at all has no spellbook: refuse to open with
+    // a message instead of presenting a blank Fire spread as if it broke.
+    if (ch && !SCHOOLS.some((s) => schoolSkill(ch, s.id).level > 0)
+        && !(ch.spells && ch.spells.length)) {
+      if (this.session && this.session.message) {
+        this.session.message(`${ch.name || 'This character'} has no magic - there is no spellbook to open.`);
+      }
+      this.sound('error');
+      this._refused = true;   // closed on the next update; close() mid-push corrupts the stack
+      return;
+    }
+    // Open on the first school the character KNOWS SPELLS in, as MM6 does -
+    // never Fire-for-everyone (playtest #16). Prefer a school with actual
+    // spells in the book; fall back to any school with skill.
+    if (ch && !(this.opts && this.opts.school)) {
+      const hasSpells = (id) => (ch.spells || []).some(
+        (spid) => (SPELLS_BY_SCHOOL[id] || []).some((s) => s.id === spid),
+      );
+      if (!(schoolSkill(ch, this.school).level > 0 && hasSpells(this.school))) {
+        let found = null;
+        for (const s of SCHOOLS) {
+          if (schoolSkill(ch, s.id).level > 0 && hasSpells(s.id)) { found = s.id; break; }
+        }
+        if (!found) {
+          for (const s of SCHOOLS) if (schoolSkill(ch, s.id).level > 0) { found = s.id; break; }
+        }
+        if (found) this.school = found;
       }
     }
     this.sound('page_turn');
@@ -73,8 +95,18 @@ export class SpellbookScreen extends Screen {
 
   onCharChanged() { this.selected = null; this.onOpen(); }
 
+  update() {
+    if (this._refused) { this._refused = false; this.close(); }
+  }
+
   handleKey(code) {
     if (this.pickFor && code === 'Escape') { this.pickFor = null; return true; }
+    // Mid target-pick, the book's own hotkey cancels the pick instead of
+    // slamming the book shut under the player's cursor (playtest #16).
+    if (code === 'KeyB') {
+      if (this.pickFor) { this.pickFor = null; this.sound('click'); return true; }
+      return false;   // let the shell's toggle close it normally
+    }
     if (code === 'Escape' || code === 'KeyC') { this.close(); return true; }
     const i = SCHOOLS.findIndex((s) => s.id === this.school);
     if (code === 'ArrowDown' && i < 8) { this.turnTo(SCHOOLS[i + 1].id); return true; }
@@ -90,6 +122,10 @@ export class SpellbookScreen extends Screen {
   }
 
   draw(ctx) {
+    // While the "cast on whom?" picker is up, the shell's panel-toggle keys
+    // (B closes the book) must not fire mid-flow; `editing` is the shell's
+    // own suppression flag for exactly this.
+    this.editing = !!this.pickFor;
     this.drawPage(ctx, 'page');
     const ch = this.character;
     const tint = SCHOOL_COLORS[this.school] || WHITE;
@@ -142,23 +178,38 @@ export class SpellbookScreen extends Screen {
   drawTargetPicker(ctx, caster) {
     const sp = this.pickFor;
     const members = (this.session.party && this.session.party.members) || [];
-    const w = 220, rowH = 26;
-    const h = 58 + members.length * rowH + 30;
-    const x = px(198) - w / 2, y = py(150) - h / 2;
-    M.rct(ctx, x - 2, y - 2, w + 4, h + 4, [24, 16, 8]);
-    M.rct(ctx, x, y, w, h, [58, 42, 20]);
-    M.rct(ctx, x + 3, y + 3, w - 6, h - 6, [172, 146, 96]);
-    F.drawText(ctx, `Cast ${sp.name} on whom?`, x + w / 2, y + 12,
-      { align: 'center', color: '#2e2e2e' });
+    // MM6 targets allies through their faces: each row carries the painted
+    // bust, the name and a real health bar, in the same carved wood chrome
+    // the message boxes use - not a flat tan plaque over the page header.
+    const rowH = 40, w = 250;
+    const h = 46 + members.length * rowH + 34;
+    const x = Math.round(px(198) - w / 2), y = Math.round(py(160) - h / 2);
+    M.rct(ctx, x + 4, y + 4, w, h, [12, 9, 6]);            // hard drop shadow
+    M.carvedPlate(ctx, x, y, w, h, { material: 'wood', seed: 51 });
+    M.carvedWell(ctx, x + 5, y + 5, w - 10, h - 10, { material: 'wood', seed: 54 });
+    F.drawText(ctx, `Cast ${sp.name} on whom?`, x + w / 2, y + 14,
+      { align: 'center', color: CANARY });
     for (let i = 0; i < members.length; i++) {
       const m = members[i];
-      const ry = y + 34 + i * rowH;
-      const hit = this.ui.region(`${this.id}:pick:${i}`, x + 10, ry - 4, w - 20, rowH - 2,
-        `${m.name} - ${m.hp}/${maxHP(m)} hp`);
-      if (hit.hover) M.stipple(ctx, x + 10, ry - 4, w - 20, rowH - 2, [225, 205, 35], 0.25);
-      F.drawText(ctx, m.name, x + 18, ry, { color: hit.hover ? HILITE : '#2e2e2e' });
-      F.drawText(ctx, `${m.hp}/${maxHP(m)}`, x + w - 18, ry,
-        { align: 'right', color: m.hp <= 0 ? '#8a1a10' : BOOK_INK });
+      const ry = y + 32 + i * rowH;
+      const mhp = maxHP(m);
+      const hit = this.ui.region(`${this.id}:pick:${i}`, x + 10, ry, w - 20, rowH - 4,
+        `${m.name} - ${m.hp}/${mhp} hit points`);
+      if (hit.hover) M.stipple(ctx, x + 10, ry, w - 20, rowH - 4, [255, 232, 150], 0.22);
+      // The bust, scaled into a small framed niche.
+      const p = portraitOf(m, m.hp <= 0 ? 'unconscious' : 'normal');
+      const pw2 = 30, ph2 = 26;
+      A.inset(ctx, x + 14, ry + 3, pw2 + 4, ph2 + 4);
+      if (p) {
+        const sm = ctx.imageSmoothingEnabled;
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(p, x + 16, ry + 5, pw2, ph2);
+        ctx.imageSmoothingEnabled = sm;
+      }
+      F.drawText(ctx, m.name, x + 56, ry + 4, { color: hit.hover ? HILITE : WHITE });
+      A.statBar(ctx, x + 56, ry + 19, w - 56 - 60, 7, mhp > 0 ? m.hp / mhp : 0, 'hp');
+      F.drawText(ctx, `${m.hp}/${mhp}`, x + w - 16, ry + 16,
+        { face: 'small', align: 'right', color: m.hp <= 0 ? '#FF2300' : '#00E100' });
       if (hit.click) {
         this.pickFor = null;
         this.session.castSpell(this.charIndex, sp, { member: i });
@@ -166,9 +217,12 @@ export class SpellbookScreen extends Screen {
         return;
       }
     }
-    const cy = y + h - 22;
-    const cancel = this.ui.region(`${this.id}:pick:cancel`, x + w / 2 - 40, cy - 4, 80, 20, 'Cancel');
-    F.drawText(ctx, 'Cancel', x + w / 2, cy, { align: 'center', color: cancel.hover ? HILITE : BOOK_INK });
+    const cy = y + h - 28;
+    const cancel = this.ui.region(`${this.id}:pick:cancel`, x + w / 2 - 50, cy - 2, 100, 24, 'Cancel');
+    const d = A.button(ctx, x + w / 2 - 50, cy - 2, 100, 22, null,
+      cancel.down ? 'down' : cancel.hover ? 'hot' : 'up');
+    F.drawText(ctx, 'Cancel', x + w / 2 + d, cy + 4 + d,
+      { align: 'center', color: cancel.hover ? HILITE : CANARY });
     if (cancel.click) { this.pickFor = null; this.sound('click'); }
   }
 

@@ -10,13 +10,21 @@ import { rampCss } from '../../core/palette.js';
 import { clamp, hash2 } from '../../core/rng.js';
 import * as F from '../../art/font.js';
 import { maxHP, maxSP, effectiveStat } from '../../game/stats.js';
+import { npcName } from '../../game/npcnames.js';
 import {
-  HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, hotText, rngFor, paintWall,
-  paintFloor, paintShelf, paintCounter, paintClutter, vignette, members, activeMember,
+  HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, hotText, rngFor, sessionRng,
+  paintWall, paintFloor, paintShelf, paintCounter, paintClutter, vignette, members, activeMember,
   charName, partyGold, spend, earn, addCondition, hasCondition, paintFire, contactShadow, poseSeed,
   paintMasonry,
-  MM6, C_WHITE, C_CANARY, C_DIM, C_RED, C_GREEN,
+  MM6, C_WHITE, C_CANARY, C_GOLD, C_DIM, C_RED, C_GREEN,
 } from './dialogue.js';
+
+/** A generated sign for a tavern the town data did not name. */
+function genTavernName(rnd) {
+  const adj = ['Laughing', 'Prancing', 'Gilded', 'Thirsty', 'Drowsy', 'Rusty', 'Merry', 'Salty'];
+  const noun = ['Wench', 'Griffin', 'Boar', 'Tankard', 'Dragon', 'Peasant', 'Anchor', 'Stag'];
+  return `The ${rnd.pick(adj)} ${rnd.pick(noun)}`;
+}
 
 const RUMOURS = [
   'The bridge north of the town was washed out last spring; nobody has fixed it.',
@@ -294,23 +302,44 @@ export class TavernScreen extends HouseScreen {
   constructor(session, ui, hud, opts = {}) {
     super(session, ui, hud, opts);
     this.id = 'tavern';
-    this.title = opts.title || 'The Laughing Wench';
+    // The payload's own name and keeper win; the fallbacks are generated per
+    // establishment, the same treatment the shops get - never one hardcoded
+    // Mira behind every bar in Enroth.
+    this.tavernId = opts.id || (opts.tavern && opts.tavern.id) || opts.title || 'tavern';
+    this.title = opts.title || (opts.tavern && opts.tavern.name)
+      || genTavernName(rngFor(`tavname:${this.tavernId}`));
     this.tier = opts.tier || 1;
-    this.keeper = opts.keeper || { name: 'Mira', title: 'Innkeeper', portraitSeed: 88, sex: 'f' };
+    const krand = rngFor(`keeper:${this.tavernId}`);
+    const keeperSex = krand.bool() ? 'm' : 'f';
+    this.keeper = opts.keeper || {
+      name: npcName(krand, keeperSex, { epithet: false }),
+      title: 'Innkeeper',
+      portraitSeed: krand.int(0, 0x7fffffff),
+      sex: keeperSex,
+    };
     this.foodMax = opts.foodMax || 14;
     this.foodPrice = opts.foodPrice || 2 * this.tier;
     this.roomPrice = opts.roomPrice || 5 * this.tier;
     this.drinkPrice = opts.drinkPrice || 2 * this.tier;
     this.stake = opts.stake || 25 * this.tier;
-    this.patrons = opts.patrons || [
-      { id: 'gunther', name: 'Gunther', title: 'Sellsword', portraitSeed: 21, sex: 'm', wage: 12,
-        text: 'Coin up front, and I keep what I kill.' },
-      { id: 'elsi', name: 'Elsi', title: 'Guide', portraitSeed: 52, sex: 'f', wage: 8,
-        text: 'I know every track in these hills. You will not get lost with me along.' },
-    ];
+    this.patrons = opts.patrons || [0, 1].map((i) => {
+      const pr = rngFor(`patron:${this.tavernId}:${i}`);
+      const sex = pr.bool() ? 'm' : 'f';
+      const roles = [
+        ['Sellsword', 12, 'Coin up front, and I keep what I kill.'],
+        ['Guide', 8, 'I know every track in these hills. You will not get lost with me along.'],
+        ['Porter', 5, 'I carry, you fight. Fair split.'],
+        ['Scholar', 10, 'Ancient script read while you wait.'],
+      ];
+      const [role, wage, text] = roles[pr.int(0, roles.length - 1)];
+      const name = npcName(pr, sex, { epithet: false });
+      return { id: `${this.tavernId}:p${i}`, name, title: role, portraitSeed: pr.int(0, 0x7fffffff), sex, wage, text };
+    });
     this.rumour = '';
     this.game = null;
-    this.rnd = rngFor(`tavern:${this.title}`);
+    // Wagers must not replay a fixed script: the arm-wrestle stream persists
+    // across screen opens through the session registry.
+    this.rnd = sessionRng(session, `tavern:${this.tavernId}`);
   }
 
   // --- services ------------------------------------------------------------
@@ -471,12 +500,17 @@ export class TavernScreen extends HouseScreen {
   }
 
   drawContent(ctx) {
+    // The establishment's painted sign, engraved along the top of the room -
+    // the tavern finally announces which tavern it is.
+    MM6.stipple(ctx, PANEL.x + 8, PANEL.y + 6, PANEL.w - 16, 16, [0, 0, 0], 0.55);
+    F.drawText(ctx, this.title, PANEL.x + PANEL.w - 16, PANEL.y + 9,
+      { align: 'right', color: C_GOLD });
     if (this.mode === 'hire') this.drawHire(ctx);
     if (this.game) this.drawGame(ctx);
   }
 
   drawHire(ctx) {
-    const x = PANEL.x + 16, y = PANEL.y + 16, w = 260;
+    const x = PANEL.x + 16, y = PANEL.y + 28, w = 260;
     const h = 30 + this.patrons.length * 34;
     plate(ctx, x, y, w, h, 0.7);
     F.drawText(ctx, 'Drinking here tonight', x + 10, y + 6, { color: C_CANARY });

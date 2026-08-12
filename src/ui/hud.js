@@ -1,4 +1,4 @@
-import { layout } from '../core/layout.js';
+import { layout, mmToLogical } from '../core/layout.js';
 import * as UI from '../art/uiart.js';
 import * as HC from '../art/hudchrome.js';
 import * as F from '../art/font.js';
@@ -108,6 +108,26 @@ export class HUD {
   get dx() { return layout.w - 640; }
 
   /**
+   * Safe-area shifts for the interactive right-column rows. In landscape a
+   * notch-right orientation buries the trailing ~58pt of the frame and the
+   * home indicator owns the bottom edge, so the four action keys move up and
+   * the right-hugging rows (keys, gold/food, book tabs) move inboard. Portrait
+   * parks the frame clear of both, so the shifts are zero there.
+   */
+  get keyShift() {
+    if (layout.portrait) return { x: 0, y: 0 };
+    // The stock row already overhangs the 640x480 frame by a couple of pixels
+    // (BUTTON_X[3]+40 = 642, BUTTON_Y+35 = 485), so under a live inset the
+    // shift covers the inset AND that overhang, plus a 4px breath.
+    const overR = Math.max(0, BUTTON_X[3] + BUTTON_W - 640);
+    const overB = Math.max(0, BUTTON_Y + BUTTON_H - 480);
+    return {
+      x: -Math.round(layout.safe.right > 0 ? Math.min(layout.safe.right, 88) + overR + 4 : 0),
+      y: -Math.round(layout.safe.bottom > 0 ? Math.min(layout.safe.bottom, 40) + overB : 0),
+    };
+  }
+
+  /**
    * X offset for the party cluster. MM6 has no widescreen mode, so this is our
    * call: the portraits, their gauges and the status line keep every one of the
    * engine's internal offsets - the 115 px pitch, the tube positions, the niche
@@ -149,14 +169,15 @@ export class HUD {
       compass: { x: COMPASS_X + dx, y: COMPASS_Y, w: COMPASS_W, h: HC.COMPASS_H },
       hire: { x: [HIRE_X[0] + dx, HIRE_X[1] + dx], y: HIRE_Y, w: PORTRAIT_W, h: PORTRAIT_H },
       buffPanel: { y: BUFF_ROW_Y[0] - 8, h: (BUFF_ROW_Y[1] + 16) - (BUFF_ROW_Y[0] - 8) + 8, slots },
-      foodGold: { y: FOODGOLD_Y, split: 554 + dx },
+      foodGold: { y: FOODGOLD_Y, split: 554 + dx + this.keyShift.x },
       tabs: { y: TAB_POS[0][1], h: 28 },
-      keys: { y: BUTTON_Y },
+      keys: { y: BUTTON_Y + this.keyShift.y },
     };
   }
 
   chrome() {
-    const key = `${layout.w}x${layout.h}`;
+    const ks = this.keyShift;
+    const key = `${layout.w}x${layout.h}:${ks.x},${ks.y}`;
     if (this._chromeCache && this._chromeKey === key) return this._chromeCache;
     this._chromeCache = HC.hudChrome(layout.w, layout.h, this.chromeGeom());
     this._chromeKey = key;
@@ -358,7 +379,7 @@ export class HUD {
 
   drawFoodGold(ctx) {
     const P = this.session.party;
-    const x = this.dx;
+    const x = this.dx + this.keyShift.x;
     F.drawText(ctx, fmtNum(P ? P.food : 0), 553 + x, FOODGOLD_Y, { face: 'small', align: 'right', color: '#FFFFFF' });
     F.drawText(ctx, fmtNum(P ? P.gold : 0), 632 + x, FOODGOLD_Y, { face: 'small', align: 'right', color: '#FFFFFF' });
     UI.drawIcon(ctx, 'food', 478 + x, FOODGOLD_Y - 2, 14);
@@ -373,7 +394,7 @@ export class HUD {
     const flash = Math.floor(this.t) % 2 === 0;
     ids.forEach((id, i) => {
       const [tx, by] = TAB_POS[i];
-      const x = tx + this.dx;
+      const x = tx + this.dx + this.keyShift.x;
       const w = TAB_W[i], h = TAB_H[i];
       const hit = this.region(`tab:${id}`, x, by, w, h, TAB_LABELS[i]);
       const alert = this.session.newEntries && this.session.newEntries[id];
@@ -453,18 +474,35 @@ export class HUD {
       ['quickref', 'quickref', 'Quick Reference'],
       ['options', 'options', 'Game Options'],
     ];
+    const ks = this.keyShift;
     defs.forEach(([id, icon, tip], i) => {
-      const x = BUTTON_X[i] + this.dx;
-      const hit = this.region(`hud:${id}`, x, BUTTON_Y, BUTTON_W, BUTTON_H, tip);
+      const x = BUTTON_X[i] + this.dx + ks.x;
+      const y = BUTTON_Y + ks.y;
+      const hit = this.region(`hud:${id}`, x, y, BUTTON_W, BUTTON_H, tip);
       if (UI.drawActionPlate) {
-        UI.drawActionPlate(ctx, x, BUTTON_Y, BUTTON_W, BUTTON_H, icon, hit.down ? 'down' : 'up');
+        UI.drawActionPlate(ctx, x, y, BUTTON_W, BUTTON_H, icon, hit.down ? 'down' : 'up');
       } else {
-        UI.drawButton(ctx, x, BUTTON_Y, BUTTON_W, BUTTON_H, null, hit.down ? 'down' : 'up');
+        UI.drawButton(ctx, x, y, BUTTON_W, BUTTON_H, null, hit.down ? 'down' : 'up');
         const o = hit.down ? 1 : 0;
-        UI.drawIcon(ctx, icon, x + 10 + o, BUTTON_Y + 8 + o, 20);
+        UI.drawIcon(ctx, icon, x + 10 + o, y + 8 + o, 20);
       }
       this.buttons.push({ id, hit });
     });
+
+    // Portrait phones: exact HP/SP under every bust, tap-free (no hover there).
+    if (layout.portrait) {
+      for (let i = 0; i < 4; i++) {
+        const ch = members[i];
+        if (!ch) continue;
+        const px = PORTRAIT_X[i] + bx;
+        const ny = PORTRAIT_Y + PORTRAIT_H + 2;
+        F.drawText(ctx, `${ch.hp | 0}`, px + PORTRAIT_W / 2 - 4, ny,
+          { face: 'small', align: 'right', color: ch.hp > 0 ? '#00E100' : '#FF2300' });
+        F.drawText(ctx, '/', px + PORTRAIT_W / 2, ny, { face: 'small', align: 'center', color: '#8a7a55' });
+        F.drawText(ctx, `${ch.sp | 0}`, px + PORTRAIT_W / 2 + 6, ny,
+          { face: 'small', color: '#00AFFF' });
+      }
+    }
   }
 
   expressionFor(ch) {
@@ -533,16 +571,20 @@ export class HUD {
       return;
     }
 
-    // The message queue: newest at the bottom, up to three fresh lines.
-    const recent = this.session.log.recent(3);
+    // The message queue: newest at the bottom. The band between the view and
+    // the portraits only holds two small rows before the third lands on the
+    // ready gems, so the strip is clamped to two; portrait phones carry the
+    // full three-line log in the control band below instead (and skip the
+    // 0.8mm strip copy entirely - the same words twice read as a stutter).
+    if (layout.portrait && layout.controls) return;
+    const recent = this.session.log.recent(2);
     if (!recent.length) return;
     if (recent.length === 1) {
       F.drawText(ctx, recent[0].text, cx, STATUS_Y, { align: 'center', maxWidth: 450, ...ink });
       return;
     }
-    // Stack in the band between the view and the portraits (357..385).
     const lh = 10;
-    let y = STATUS_Y;
+    let y = STATUS_Y - 1;
     for (const l of recent) {
       F.drawText(ctx, l.text, cx, y, { face: 'small', align: 'center', maxWidth: 450, ...ink });
       y += lh;
@@ -616,6 +658,8 @@ export class HUD {
       return { cx: v.x + r + 14, cy: v.y + v.h - r - 14, r };
     })();
 
+    this.drawPortraitBand(ctx);
+
     // The chrome painter already grounds the portrait control zone in the
     // same ashlar as the rest of the frame; the controls sit straight on it.
     if (!this._stick || this._stickR !== sr.r) {
@@ -648,7 +692,59 @@ export class HUD {
       ctx.fillRect(Math.round(mx) - 1, Math.round(my) - 1, 3, 3);
       F.drawText(ctx, 'LOOK', mx, lp.y + lp.h - 14, { face: 'small', align: 'center', color: '#6a5c40' });
     }
-    for (const b of g.buttons || []) {
+    this._touchButtonsFrom(ctx, g);
+  }
+
+  /**
+   * The portrait dead band earns its keep: the message log (three lines,
+   * larger type than the 0.8mm strip) and thumb-sized copies of the four
+   * action keys live in the space between the frame and the thumb controls.
+   */
+  drawPortraitBand(ctx) {
+    const c = layout.controls;
+    if (!c || c.h < 180) return;
+
+    // Message log: three fresh lines in the body face, readable at arm's length.
+    const recent = this.session.log ? this.session.log.recent(3) : [];
+    let y = c.y + 10;
+    const cx = c.x + c.w / 2;
+    for (const l of recent) {
+      F.drawText(ctx, l.text, cx, y, {
+        face: 'normal', align: 'center', maxWidth: c.w - 24,
+        color: l.color || '#E6D6C1', shadow: '#141008',
+      });
+      y += 15;
+    }
+
+    // The four action keys, grown to a real thumb size (>= 7 mm).
+    const s = Math.max(44, mmToLogical(7.5));
+    if (c.h < s + 260) return;   // shallow band: leave room for the stick row
+    const defs = [
+      ['cast', 'castspell', 'Cast Spell'],
+      ['rest', 'rest', 'Rest'],
+      ['quickref', 'quickref', 'Quick Reference'],
+      ['options', 'options', 'Game Options'],
+    ];
+    const gap = Math.max(10, mmToLogical(2));
+    const total = defs.length * s + (defs.length - 1) * gap;
+    let x = Math.round(c.x + (c.w - total) / 2);
+    const ky = c.y + 58;
+    for (const [id, icon, tip] of defs) {
+      const hit = this.region(`hudb:${id}`, x, ky, s, s, tip);
+      if (UI.drawActionPlate) {
+        UI.drawActionPlate(ctx, x, ky, s, s, icon, hit.down ? 'down' : 'up');
+      } else {
+        UI.drawButton(ctx, x, ky, s, s, null, hit.down ? 'down' : 'up');
+        const o = hit.down ? 1 : 0;
+        UI.drawIcon(ctx, icon, x + ((s - 20) >> 1) + o, ky + ((s - 20) >> 1) + o, 20);
+      }
+      this.buttons.push({ id, hit });
+      x += s + gap;
+    }
+  }
+
+  _touchButtonsFrom(ctx, g) {
+    for (const b of (g && g.buttons) || []) {
       const down = g.pressed && g.pressed[b.id];
       const o = down ? 1 : 0;
       ctx.fillStyle = down ? '#241e14' : '#332a1c';

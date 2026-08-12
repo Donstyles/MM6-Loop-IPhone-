@@ -25,7 +25,7 @@ import {
   HouseScreen, PANEL, A, plate, baked, glow, poly, figure, gold, rngFor, paintWall,
   paintFloor, paintShelf, paintCounter, paintClutter, vignette, activeMember, charName,
   partyGold, spend, earn, say, contactShadow, castShadow, poseSeed, paintMasonry, paintRug,
-  MM6, C_WHITE, C_GOLD, C_CANARY, C_DIM, C_RED,
+  hasCondition, MM6, C_WHITE, C_GOLD, C_CANARY, C_DIM, C_RED,
 } from './dialogue.js';
 
 // ---------------------------------------------------------------------------
@@ -644,6 +644,12 @@ export class ShopScreen extends HouseScreen {
     this.mode = 'buy';
     this.special = false;
     this.shop = this.shopState();
+    /** Page index into lists longer than one wall of shelves. */
+    this.page = 0;
+    /** Touch flow: first tap selects (name+price band), second tap acts. */
+    this._sel = null;
+    /** Refused-purchase flash: { item, until } against this.t. */
+    this._flash = null;
   }
 
   // --- state ---------------------------------------------------------------
@@ -747,6 +753,9 @@ export class ShopScreen extends HouseScreen {
     if (id === 'learn') { this.learnSkill(); return; }
     this.special = id === 'special';
     this.mode = id === 'special' ? 'buy' : id;
+    this.page = 0;
+    this._sel = null;
+    this._sellConfirm = null;
   }
 
   learnSkill() {
@@ -797,7 +806,11 @@ export class ShopScreen extends HouseScreen {
     }[this.mode] || '';
 
     const gx = GRID.x, gy = GRID.y;
-    const rows = Math.max(1, Math.min(GRID.rows, Math.ceil(list.length / GRID.cols)));
+    const pageSize = GRID.cols * GRID.rows;
+    const pages = Math.max(1, Math.ceil(list.length / pageSize));
+    if (this.page >= pages) this.page = pages - 1;
+    const pageList = list.slice(this.page * pageSize, this.page * pageSize + pageSize);
+    const rows = Math.max(1, Math.min(GRID.rows, Math.ceil(pageList.length / GRID.cols)));
 
     // Painted shelves for the stock to stand on - an object in the room, not a
     // widget. The heading is engraved into the shelf's front edge.
@@ -819,9 +832,11 @@ export class ShopScreen extends HouseScreen {
       }
     }
     F.drawText(ctx, heading, gx - 4, gy - 18, { color: C_CANARY });
-    // The establishment's own name, engraved along the top of the room.
-    F.drawText(ctx, this.title, gx + GRID.cols * GRID.cw + 4, gy - 18,
-      { align: 'right', color: C_GOLD, maxWidth: 220 });
+    // The establishment's own name, engraved along the top of the room -
+    // shrunk to the small face rather than ellipsized when it runs long.
+    const titleFace = F.measure(this.title, 'normal').w > 214 ? 'small' : 'normal';
+    F.drawText(ctx, this.title, gx + GRID.cols * GRID.cw + 4, gy - 18 + (titleFace === 'small' ? 2 : 0),
+      { face: titleFace, align: 'right', color: C_GOLD });
 
     if (!list.length) {
       F.drawText(ctx, this.emptyText(), gx + (GRID.cols * GRID.cw) / 2, gy + 40,
@@ -829,34 +844,78 @@ export class ShopScreen extends HouseScreen {
       return;
     }
 
+    // Pager, when the pack holds more than one wall of shelves can show.
+    if (pages > 1) {
+      // Below the lowest shelf bay (and its touch slop), on the open floor.
+      const pyy = gy + GRID.rows * GRID.ch + 16;
+      const cxm = gx + (GRID.cols * GRID.cw) / 2;
+      const bw = 30, bh = 24;
+      const prev = this.ui.region(`${this.id}:pgprev`, cxm - 70 - bw, pyy, bw, bh, 'Previous shelf');
+      const next = this.ui.region(`${this.id}:pgnext`, cxm + 70, pyy, bw, bh, 'Next shelf');
+      A.button(ctx, cxm - 70 - bw, pyy, bw, bh, null, prev.down ? 'down' : 'up');
+      A.button(ctx, cxm + 70, pyy, bw, bh, null, next.down ? 'down' : 'up');
+      F.drawText(ctx, '<', cxm - 70 - bw / 2, pyy + 5, { align: 'center', color: prev.hover ? C_GOLD : C_WHITE });
+      F.drawText(ctx, '>', cxm + 70 + bw / 2, pyy + 5, { align: 'center', color: next.hover ? C_GOLD : C_WHITE });
+      MM6.stipple(ctx, cxm - 62, pyy + 2, 124, 15, [0, 0, 0], 0.55);
+      F.drawText(ctx, `Shelf ${this.page + 1} of ${pages}`, cxm, pyy + 5,
+        { face: 'small', align: 'center', color: C_CANARY });
+      if (prev.click) { this.page = (this.page + pages - 1) % pages; this._sel = null; this.sound('page_turn'); }
+      if (next.click) { this.page = (this.page + 1) % pages; this._sel = null; this.sound('page_turn'); }
+    }
+
+    const touch = (this.ui.touchSlop || 0) > 0;
     let hover = null;
-    for (let i = 0; i < Math.min(list.length, GRID.cols * GRID.rows); i++) {
-      const item = list[i];
+    for (let i = 0; i < pageList.length; i++) {
+      const item = pageList[i];
       const cx = gx + (i % GRID.cols) * GRID.cw + (GRID.cw - 4) / 2;
       const shelfY = gy + Math.floor(i / GRID.cols) * GRID.ch + GRID.ch - 22;
       const size = itemArtSize(item);
       const cy = shelfY - size / 2 - 2;
 
-      const hit = this.ui.region(`${this.id}:it${i}`, cx - 26, cy - size / 2 - 2, 52, size + 6);
+      // The hot rect is the whole shelf bay, not the object's own silhouette:
+      // a 52px strip came out at ~5mm under a thumb, and misses read as a
+      // dead screen. The bay is ~74x76 logical, a real 7mm+ target.
+      const bx = gx + (i % GRID.cols) * GRID.cw - 2;
+      const by = shelfY - GRID.ch + 22;
+      const hit = this.ui.region(`${this.id}:it${i}`, bx, by, GRID.cw, GRID.ch);
       // Hovering lights the object, the way a painted highlight would - there
       // is no cell to draw a border around.
-      if (hit.hover) {
+      if (hit.hover || (touch && this._sel === item)) {
         MM6.stipple(ctx, cx - 26, cy - size / 2 - 2, 52, size + 6, [255, 232, 150], 0.30);
-        hover = item;
+        if (hit.hover) hover = item;
       }
       drawItemIcon(ctx, item, cx, cy, size);
-      if (hit.click) this.act(item);
+      // A refused purchase flashes the object red - the message alone was
+      // invisible at arm's length.
+      if (this._flash && this._flash.item === item && this.t < this._flash.until) {
+        MM6.stipple(ctx, cx - 26, cy - size / 2 - 2, 52, size + 6, [255, 32, 16],
+          0.55 * (0.5 + 0.5 * Math.sin(this.t * 24)));
+      }
+      if (hit.click) {
+        if (touch && this._sel !== item) {
+          // First tap shows the goods; the second tap commits the purchase.
+          this._sel = item;
+          this.sound('click_soft');
+        } else {
+          this.act(item);
+          if (touch) this._sel = null;
+        }
+      }
     }
 
-    // The hovered item's name and price, engraved along the bottom of the room.
-    if (hover) {
-      const price = this.priceFor(hover);
+    // The item's name and price, engraved along the bottom of the room: the
+    // hovered item first, else the touch-selected one.
+    const shown = hover || (touch ? this._sel : null);
+    if (shown && list.indexOf(shown) < 0) this._sel = null;
+    else if (shown) {
+      const price = this.priceFor(shown);
       const affordable = price <= partyGold(this.session) || this.mode === 'sell';
       const y = PANEL.y + PANEL.h - 24;
       MM6.stipple(ctx, PANEL.x + 8, y - 2, PANEL.w - 16, 18, [0, 0, 0], 0.62);
-      F.drawText(ctx, itemName(hover), PANEL.x + 16, y + 2,
+      F.drawText(ctx, itemName(shown), PANEL.x + 16, y + 2,
         { color: C_WHITE, maxWidth: PANEL.w - 130 });
-      F.drawText(ctx, `${gold(price)} gold`, PANEL.x + PANEL.w - 16, y + 2,
+      F.drawText(ctx, `${gold(price)} gold${touch && this._sel === shown && !hover ? '  -  tap again' : ''}`,
+        PANEL.x + PANEL.w - 16, y + 2,
         { align: 'right', color: affordable ? C_CANARY : C_RED });
     }
     this.status = '';
@@ -898,7 +957,14 @@ export class ShopScreen extends HouseScreen {
       case 'buy': {
         const price = this.buyPrice(item);
         if (!Number.isFinite(price) || price <= 0) { this.say('The keeper cannot price that.'); return; }
-        if (partyGold(this.session) < price) { this.say('You cannot afford that.'); return; }
+        if (partyGold(this.session) < price) {
+          // A refusal must be unmissable: flash the goods red, sound the
+          // error, and say it in the message plate.
+          this._flash = { item, until: this.t + 0.8 };
+          this.sound('error');
+          this.say(`You cannot afford that - it costs ${gold(price)} gold.`, C_RED);
+          return;
+        }
         // Deliver first, pay second: gold only leaves the purse for an item
         // that actually made it into a pack.
         if (!this.give(item)) { this.say('Your packs are full.'); return; }
@@ -911,6 +977,17 @@ export class ShopScreen extends HouseScreen {
         return;
       }
       case 'sell': {
+        // Never quietly strip an unconscious companion: the first tap warns,
+        // only a repeated tap on the same item completes the sale.
+        const ch = this.character || activeMember(this.session);
+        const out = ch && (ch.hp <= 0 || hasCondition(ch, 'unconscious') || hasCondition(ch, 'dead'));
+        if (out && this._sellConfirm !== item) {
+          this._sellConfirm = item;
+          this.sound('error');
+          this.say(`${charName(ch)} cannot speak for this sale - tap again to sell it anyway.`, C_RED);
+          return;
+        }
+        this._sellConfirm = null;
         const price = this.sellPrice(item);
         if (!this.take(item)) { this.say('That is not yours to sell.'); return; }
         earn(this.session, price);
@@ -925,7 +1002,12 @@ export class ShopScreen extends HouseScreen {
           return;
         }
         const price = this.idPrice(item);
-        if (!spend(this.session, price)) { this.say('You cannot afford the fee.'); return; }
+        if (!spend(this.session, price)) {
+          this._flash = { item, until: this.t + 0.8 };
+          this.sound('error');
+          this.say(`The appraisal costs ${gold(price)} gold - you cannot afford the fee.`, C_RED);
+          return;
+        }
         item.identified = true;
         this.say(`It is ${itemName(item)}.`);
         return;
@@ -936,7 +1018,12 @@ export class ShopScreen extends HouseScreen {
           return;
         }
         const price = this.repairPrice(item);
-        if (!spend(this.session, price)) { this.say('You cannot afford the repair.'); return; }
+        if (!spend(this.session, price)) {
+          this._flash = { item, until: this.t + 0.8 };
+          this.sound('error');
+          this.say(`The repair costs ${gold(price)} gold - you cannot afford it.`, C_RED);
+          return;
+        }
         item.broken = false;
         this.say(`${itemName(item)} is whole again.`);
         return;
