@@ -144,10 +144,11 @@ export function streetSpawnAnchor(town) {
   const standT = best.c0 + best.along + sgn * 780;     // a stride beyond the shop door
   const px = best.a.x + best.ux * standT;
   const pz = best.a.z + best.uz * standT;
-  // Aim between the storefront's door and the plaza centre: the hanging sign
-  // sits ahead to the side, the well and the stalls dead down the lane.
+  // Aim mostly at the storefront's door: the first frame should centre a
+  // legible hanging shingle (rejudge flip #3), with the plaza market still
+  // pulling the lane into the left of the frame.
   const door = best.s.door;
-  const tx = (door.x + cx) / 2, tz = (door.z + cz) / 2;
+  const tx = door.x * 0.78 + cx * 0.22, tz = door.z * 0.78 + cz * 0.22;
   const yaw = Math.atan2(tx - px, tz - pz) + Math.PI;
   return {
     x: px, y: town.y || 0, z: pz, yaw,

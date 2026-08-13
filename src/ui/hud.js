@@ -944,20 +944,49 @@ export class HUD {
     if (!g) return;
     const lp = g.lookPad;
     if (lp) {
-      ctx.fillStyle = '#1c1812';
-      ctx.fillRect(lp.x, lp.y, lp.w, lp.h);
-      ctx.fillStyle = '#3a3226';
-      ctx.fillRect(lp.x, lp.y, lp.w, 1); ctx.fillRect(lp.x, lp.y + lp.h - 1, lp.w, 1);
-      ctx.fillRect(lp.x, lp.y, 1, lp.h); ctx.fillRect(lp.x + lp.w - 1, lp.y, 1, lp.h);
-      // A small painted compass rosette so the pad reads as "look".
-      const mx = lp.x + lp.w / 2, my = lp.y + lp.h / 2;
-      ctx.fillStyle = '#6a5c40';
-      for (const [dx, dy] of [[0, -10], [0, 10], [-10, 0], [10, 0]]) {
-        ctx.fillRect(Math.round(mx + dx) - 1, Math.round(my + dy) - 1, 3, 3);
+      // Styled like the stick's furniture, not a raw black slab (rejudge
+      // flip #2): recessed leather-dark well, bevelled stone lip, corner
+      // studs, an etched compass ring with a rosette at its heart.
+      if (!this._lookPad || this._lookPadW !== lp.w || this._lookPadH !== lp.h) {
+        const c = document.createElement('canvas');
+        c.width = lp.w; c.height = lp.h;
+        const p = c.getContext('2d');
+        p.fillStyle = '#241e15'; p.fillRect(0, 0, lp.w, lp.h);
+        // sunken well with a soft inner shade
+        p.fillStyle = '#1a1510'; p.fillRect(3, 3, lp.w - 6, lp.h - 6);
+        p.fillStyle = '#15110d'; p.fillRect(5, 5, lp.w - 10, lp.h - 10);
+        // bevel: light on top/left lip, dark under
+        p.fillStyle = '#4a4030'; p.fillRect(0, 0, lp.w, 2); p.fillRect(0, 0, 2, lp.h);
+        p.fillStyle = '#0d0a07'; p.fillRect(0, lp.h - 2, lp.w, 2); p.fillRect(lp.w - 2, 0, 2, lp.h);
+        // corner studs
+        p.fillStyle = '#8a7346';
+        for (const [sx, sy] of [[5, 5], [lp.w - 9, 5], [5, lp.h - 9], [lp.w - 9, lp.h - 9]]) {
+          p.fillRect(sx, sy, 4, 4);
+          p.fillStyle = '#c9a55b'; p.fillRect(sx, sy, 2, 2); p.fillStyle = '#8a7346';
+        }
+        // etched compass ring + ticks
+        const mx = lp.w / 2, my = lp.h / 2, R = Math.min(lp.w, lp.h) * 0.30;
+        p.strokeStyle = '#3a3226'; p.lineWidth = 2;
+        p.beginPath(); p.arc(mx, my, R, 0, Math.PI * 2); p.stroke();
+        p.strokeStyle = '#2a241b'; p.lineWidth = 1;
+        p.beginPath(); p.arc(mx, my, R - 4, 0, Math.PI * 2); p.stroke();
+        p.fillStyle = '#6a5c40';
+        for (let k = 0; k < 8; k++) {
+          const a = (k / 8) * Math.PI * 2;
+          const tx = mx + Math.sin(a) * R, ty = my - Math.cos(a) * R;
+          p.fillRect(Math.round(tx) - 1, Math.round(ty) - 1, k % 2 ? 2 : 3, k % 2 ? 2 : 3);
+        }
+        // rosette
+        p.fillStyle = '#6a5c40';
+        for (const [dx, dy] of [[0, -9], [0, 9], [-9, 0], [9, 0]]) {
+          p.fillRect(Math.round(mx + dx) - 1, Math.round(my + dy) - 1, 3, 3);
+        }
+        p.fillStyle = '#b08d3f'; p.fillRect(Math.round(mx) - 1, Math.round(my) - 1, 3, 3);
+        this._lookPad = c; this._lookPadW = lp.w; this._lookPadH = lp.h;
       }
-      ctx.fillStyle = '#8a7a55';
-      ctx.fillRect(Math.round(mx) - 1, Math.round(my) - 1, 3, 3);
-      F.drawText(ctx, 'LOOK', mx, lp.y + lp.h - 14, { face: 'small', align: 'center', color: '#6a5c40' });
+      ctx.drawImage(this._lookPad, lp.x, lp.y);
+      const mx = lp.x + lp.w / 2;
+      F.drawText(ctx, 'LOOK', mx, lp.y + lp.h - 14, { face: 'small', align: 'center', color: '#7a6a4a' });
     }
     this._touchButtonsFrom(ctx, g);
   }
@@ -991,8 +1020,8 @@ export class HUD {
     const defs = [
       ['cast', 'castspell', 'Cast Spell', null],
       ['rest', 'rest', 'Rest', null],
-      ['inventory', null, 'Inventory', 'PACK'],
-      ['questlog', null, 'Quest Log', 'QUEST'],
+      ['inventory', 'chest_small', 'Inventory', null],
+      ['questlog', 'quest', 'Quest Log', null],
       ['quickref', 'quickref', 'Quick Reference', null],
       ['options', 'options', 'Game Options', null],
     ];

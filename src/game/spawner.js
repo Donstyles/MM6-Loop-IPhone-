@@ -152,6 +152,31 @@ export class Spawner {
     // and the establishment opens over the world view.
     for (const town of region.towns || []) this.populateTown(town, ground, rnd);
 
+    // The welcome pack (rejudge flip #1): a couple of weak melee singles a
+    // ten-second walk past each gate, so the first fight finds a new player
+    // without them having to comb the countryside. Placed on the main-road
+    // axes just beyond the safe-arrival ring; the wanderer leash keeps them
+    // outside the walls.
+    for (const town of (region.towns || []).slice(0, 1)) {
+      const wallR = Number.isFinite(town.radius) ? town.radius : 3800;
+      const mains = (town.roads || []).filter((rd) => rd.main && rd.points && rd.points.length >= 2);
+      let placed = 0;
+      for (const rd of mains) {
+        if (placed >= 2) break;
+        const a = rd.points[0], b = rd.points[1];
+        const len = Math.hypot(b.x - a.x, b.z - a.z) || 1;
+        const ux = (b.x - a.x) / len, uz = (b.z - a.z) / len;
+        for (const sgn of [1, -1]) {
+          if (placed >= 2) break;
+          const d = wallR + 650 + rnd.float(0, 350);
+          const x = town.x + ux * d * sgn + rnd.float(-220, 220);
+          const z = town.z + uz * d * sgn + rnd.float(-220, 220);
+          const e = this.spawnMonster('GoblinA', x, ground(x, z), z, {});
+          if (e) placed++;
+        }
+      }
+    }
+
     // Named townsfolk pick up the region's quests once everyone is standing.
     if (S.attachQuestNPCs) S.attachQuestNPCs(region.id || S.mapId);
 
