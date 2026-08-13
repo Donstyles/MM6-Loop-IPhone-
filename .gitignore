@@ -18,6 +18,7 @@ vite.*.config.js
 !vite.capture.config.js
 !vite.single.config.js
 tools/_*.mjs
+tools/_*.sh
 tools/mycap.sh
 .mkshot.sh
 dist-single/
