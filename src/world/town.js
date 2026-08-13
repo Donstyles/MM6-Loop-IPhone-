@@ -4,7 +4,7 @@ import {
   heightAt, flattenArea, carveRoad, stampTiles, makeBillboardField, makeGlowField,
   floraTexture, placeableOnLand,
 } from './terrain.js';
-import { buildHouse, buildWall, buildBridge, MeshBuilder, addProp, materialFor } from './building.js';
+import { buildHouse, buildWall, buildBridge, MeshBuilder, addProp, materialFor, obbAabbs } from './building.js';
 
 // ---------------------------------------------------------------------------
 // Towns.
@@ -202,17 +202,27 @@ export function generateTown(spec = {}, seed = 1) {
   }
 
   // --- plaza dressing -----------------------------------------------------
+  // Solid dressing gets a collider. Baked props had none at all, so the
+  // party could stand INSIDE the town well with the camera in the water
+  // plane - same family as the crypt near-plane void.
+  const propBox = (x, z, half, y0, y1) => colliders.push({
+    minX: x - half, maxX: x + half, minZ: z - half, maxZ: z + half,
+    minY: y0, maxY: y1, src: 'prop',
+  });
   const centrepiece = size === 'city' ? 'fountain' : 'well';
   addProp(master, centrepiece, cx, baseY, cz, r.float(0, 6.28), r);
   props.push({ kind: centrepiece, x: cx, y: baseY, z: cz });
+  propBox(cx, cz, centrepiece === 'fountain' ? 280 : 170, baseY - 100, baseY + (centrepiece === 'fountain' ? 340 : 620));
 
   const stallCount = size === 'village' ? 2 : size === 'town' ? 4 : 7;
   for (let i = 0; i < stallCount; i++) {
     const a = (i / stallCount) * Math.PI * 2 + r.float(-0.2, 0.2);
     const rr = plazaR * r.float(0.55, 0.82);
     const x = cx + Math.cos(a) * rr, z = cz + Math.sin(a) * rr;
-    addProp(master, 'stall', x, baseY, z, -a + Math.PI / 2, r);
+    const rot = -a + Math.PI / 2;
+    addProp(master, 'stall', x, baseY, z, rot, r);
     props.push({ kind: 'stall', x, y: baseY, z });
+    for (const bb of obbAabbs({ x, z, hw: 280, hd: 200, rot, y0: baseY - 100, y1: baseY + 460 })) colliders.push(bb);
   }
   for (let i = 0; i < (size === 'village' ? 3 : 8); i++) {
     const a = r.float(0, 6.283), rr = plazaR * r.float(0.85, 0.98);
@@ -239,6 +249,7 @@ export function generateTown(spec = {}, seed = 1) {
       const y = hm ? heightAt(hm, x, z) : baseY;
       addProp(master, 'lamppost', x, y, z, 0, r);
       props.push({ kind: 'lamppost', x, y, z });
+      propBox(x, z, 58, y - 100, y + 520);
       lanterns.push({ x, y: y + 462, z, ground: y, r: 240 });
     }
   }
@@ -253,6 +264,10 @@ export function generateTown(spec = {}, seed = 1) {
     const y = hm ? heightAt(hm, x, z) : baseY;
     addProp(master, kind, x, y, z, r.float(0, 6.283), r);
     props.push({ kind, x, y, z });
+    // Chest-high or taller clutter blocks; low beds and benches stay open.
+    if (kind === 'cart' || kind === 'haystack') propBox(x, z, 230, y - 100, y + 260);
+    else if (kind === 'barrel' || kind === 'crate') propBox(x, z, 100, y - 100, y + 160);
+    else if (kind === 'signpost') propBox(x, z, 40, y - 100, y + 340);
   }
 
   // --- town wall ----------------------------------------------------------

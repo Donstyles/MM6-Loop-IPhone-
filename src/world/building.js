@@ -41,6 +41,60 @@ export function setBuildingLight(hours) {
 }
 
 /**
+ * Turn an oriented box collider into axis-aligned boxes the game side's
+ * ColliderGrid can actually ingest.
+ *
+ * The collision broadphase (game/maps.js) consumes `{minX..maxZ}` records,
+ * `THREE.Box3`s and Object3Ds - it silently DROPS `{type:'obb'}` and
+ * `{type:'grid'}` entries, which is how every building, wall and dungeon
+ * shipped with no wall collision at all: the camera could be walked into a
+ * facade until the near plane crossed it and the viewport filled with void
+ * (perfection-panel crypt bug). Until the grid grows native OBB support, a
+ * rotated box is covered here by a row/grid of squares laid along its local
+ * axes, each exported as its own AABB. `pad` inflates every square a little
+ * so the cover has no gaps and the camera's near-plane corner (~40 units at
+ * radius 37) can never poke through a wall plane.
+ */
+export function obbAabbs(o, pad = 10) {
+  const out = [];
+  const cos = Math.cos(o.rot || 0), sin = Math.sin(o.rot || 0);
+  // Grid pitch: squares roughly as deep as the box's thin axis, so a thin
+  // wall stays thin and a fat keep gets an interior fill (which also plugs
+  // the "hollow shell" a teleport could fall into).
+  const thin = Math.max(60, Math.min(140, Math.min(o.hw, o.hd)));
+  const nx = Math.max(1, Math.ceil(o.hw / thin));
+  const nz = Math.max(1, Math.ceil(o.hd / thin));
+  const sx = o.hw / nx, sz = o.hd / nz;
+  // AABB half-size of one rotated sx-by-sz cell.
+  const hx = Math.abs(cos) * sx + Math.abs(sin) * sz + pad;
+  const hz = Math.abs(sin) * sx + Math.abs(cos) * sz + pad;
+  for (let i = 0; i < nx; i++) {
+    for (let j = 0; j < nz; j++) {
+      const lx = -o.hw + (2 * i + 1) * sx;
+      const lz = -o.hd + (2 * j + 1) * sz;
+      // Local (lx,lz) rotated into world. rot is a yaw used with
+      // Matrix4.makeRotationY, so world = (x*cos + z*sin, -x*sin + z*cos).
+      const wx = o.x + lx * cos + lz * sin;
+      const wz = o.z - lx * sin + lz * cos;
+      out.push({
+        minX: wx - hx, maxX: wx + hx,
+        minZ: wz - hz, maxZ: wz + hz,
+        minY: o.y0 === undefined ? -1e7 : o.y0,
+        maxY: o.y1 === undefined ? 1e7 : o.y1,
+        src: 'obb-approx',
+      });
+    }
+  }
+  return out;
+}
+
+/** Push an obb collider AND its ingestible AABB cover onto a collider list. */
+function pushObb(list, o, pad) {
+  list.push(o);
+  for (const b of obbAabbs(o, pad)) list.push(b);
+}
+
+/**
  * Flat grey shade for a face normal, on MM6's 32-step ladder, in linear space
  * ready for a colour attribute. `extra` is the artist's own face darkening
  * (overhang undersides, back walls) applied before quantisation.
@@ -445,10 +499,23 @@ export function buildHouse(spec = {}, rand) {
     };
     dmesh.name = 'door';
     doors.push(dmesh);
-    // Recessed frame around it so the door does not look pasted on.
+    // Recessed frame around it so the door does not look pasted on - and a
+    // LIT dressed-stone surround over that, a full value step brighter than
+    // the wall, so "this is enterable" reads from across the street
+    // (iPhone flip #2). Two jamb strips and a lintel, not a floodlight.
     b.quad('wall_stone_block', [-doorW * 0.72, 0, hd + 1], [doorW * 0.72, 0, hd + 1],
       [doorW * 0.72, doorH + 60, hd + 1], [-doorW * 0.72, doorH + 60, hd + 1],
       { uu: 0.8, vv: 1.1, extra: 0.8 });
+    for (const sx of [-1, 1]) {
+      const xl = Math.min(sx * doorW * 0.72, sx * doorW * 0.96);
+      const xr = Math.max(sx * doorW * 0.72, sx * doorW * 0.96);
+      b.quad('wall_marble', [xl, 0, hd + 2], [xr, 0, hd + 2],
+        [xr, doorH + 44, hd + 2], [xl, doorH + 44, hd + 2],
+        { uu: 0.2, vv: 1.0, extra: 1.18 });
+    }
+    b.quad('wall_marble', [-doorW * 0.96, doorH + 44, hd + 2], [doorW * 0.96, doorH + 44, hd + 2],
+      [doorW * 0.96, doorH + 78, hd + 2], [-doorW * 0.96, doorH + 78, hd + 2],
+      { uu: 0.9, vv: 0.2, extra: 1.22 });
   } else {
     // Open-fronted stable: dark interior slot.
     b.quad('dun_cave_dark', [-hw * 0.7, 0, hd + 1], [hw * 0.7, 0, hd + 1],
@@ -532,15 +599,28 @@ export function buildHouse(spec = {}, rand) {
     // perch put the whole board behind the roof overhang on every tall
     // single-storey style (smithy, temple, stable) - which is why the judge
     // found the storefronts unlabelled.
-    const sw = 190, shh = 190;
-    const y = 130;
-    const zz = hd + 58;
-    const xc = -(doorW * 0.72 + 30 + sw / 2);
+    // UNMISSABLE on approach (iPhone flip #2): a third bigger than before,
+    // gilt-rimmed art, and hung with a slight seeded swing off its bracket
+    // so it reads as a hanging board rather than a decal.
+    const sw = 236, shh = 236;
+    const y = 128;
+    const zz = hd + 62;
+    const xc = -(doorW * 0.72 + 34 + sw / 2);
     const st = signTexFor(spec.shop);
-    // Bracket arm from the wall out over the board.
-    b.box('wall_stone_block', xc - 14, y + shh, hd, xc + 14, y + shh + 18, zz + 14, { sides: 'nsewt', uu: 0.2, vv: 0.1 });
-    b.quad(st, [xc - sw / 2, y, zz], [xc + sw / 2, y, zz], [xc + sw / 2, y + shh, zz], [xc - sw / 2, y + shh, zz], { uu: 1, vv: 1 });
-    b.quad(st, [xc + sw / 2, y, zz - 12], [xc - sw / 2, y, zz - 12], [xc - sw / 2, y + shh, zz - 12], [xc + sw / 2, y + shh, zz - 12], { uu: 1, vv: 1, extra: 0.7 });
+    // Bracket arm from the wall out over the board, with a hanger strap.
+    b.box('wall_stone_block', xc - 14, y + shh + 8, hd, xc + 14, y + shh + 26, zz + 14, { sides: 'nsewt', uu: 0.2, vv: 0.1 });
+    b.box('wall_stone_block', xc - 5, y + shh - 4, zz - 8, xc + 5, y + shh + 10, zz + 2, { sides: 'nsew', uu: 0.1, vv: 0.1 });
+    // The swing: corners rotated a few degrees round the hanger point.
+    const sway = ((r.float(0, 1) < 0.5 ? -1 : 1) * r.float(0.05, 0.09));
+    const cs = Math.cos(sway), sn = Math.sin(sway);
+    const hangX = xc, hangY = y + shh + 2;
+    const cnr = (dx, dy) => [hangX + dx * cs - dy * sn, hangY + dx * sn + dy * cs];
+    const [ax, ay] = cnr(-sw / 2, -(shh + 2));
+    const [bx2, by2] = cnr(sw / 2, -(shh + 2));
+    const [cx2, cy2] = cnr(sw / 2, -2);
+    const [dx2, dy2] = cnr(-sw / 2, -2);
+    b.quad(st, [ax, ay, zz], [bx2, by2, zz], [cx2, cy2, zz], [dx2, dy2, zz], { uu: 1, vv: 1 });
+    b.quad(st, [bx2, by2, zz - 12], [ax, ay, zz - 12], [dx2, dy2, zz - 12], [cx2, cy2, zz - 12], { uu: 1, vv: 1, extra: 0.7 });
   }
 
   // --- banners ------------------------------------------------------------
@@ -600,9 +680,14 @@ export function buildHouse(spec = {}, rand) {
   }
 
   const cos = Math.cos(rot), sin = Math.sin(rot);
-  const colliders = [{
-    type: 'obb', x: px, z: pz, hw: topHW, hd: topHD, rot, y0: py, y1: py + height,
-  }];
+  // The obb record is kept for a future native consumer; the AABB cover is
+  // what the ColliderGrid actually ingests today. Covering the FULL footprint
+  // (not just the perimeter) also seals the hollow interior a stray teleport
+  // could fall into (collision-audit y=-352 note).
+  const colliders = [];
+  pushObb(colliders, {
+    type: 'obb', x: px, z: pz, hw: topHW, hd: topHD, rot, y0: py - 200, y1: py + height,
+  });
 
   const ext = Math.hypot(topHW, topHD);
   const bounds = {
@@ -674,7 +759,7 @@ export function buildWall(spec = {}, rand) {
       }
       const m = new THREE.Matrix4().makeRotationY(ang).setPosition(cx, spec.y || 0, cz);
       b.absorb(sub, m);
-      colliders.push({ type: 'obb', x: cx, z: cz, hw: rl / 2, hd: th / 2, rot: ang, y0: spec.y || 0, y1: (spec.y || 0) + h });
+      pushObb(colliders, { type: 'obb', x: cx, z: cz, hw: rl / 2, hd: th / 2, rot: ang, y0: (spec.y || 0) - 200, y1: (spec.y || 0) + h });
     }
     if (gate) {
       const gx = a.x + dx * gate.t, gz = a.z + dz * gate.t;
@@ -702,7 +787,7 @@ export function buildWall(spec = {}, rand) {
       sub.box(tex, x, thh, -tw / 2 - 20, x + tw / 8, thh + 110, tw / 2 + 20, { sides: 'nsewt', uu: 0.3, vv: 0.4 });
     }
     b.absorb(sub, new THREE.Matrix4().setPosition(t.x, spec.y || 0, t.z));
-    colliders.push({ type: 'obb', x: t.x, z: t.z, hw: tw / 2, hd: tw / 2, rot: 0, y0: spec.y || 0, y1: thh });
+    pushObb(colliders, { type: 'obb', x: t.x, z: t.z, hw: tw / 2, hd: tw / 2, rot: 0, y0: (spec.y || 0) - 200, y1: thh });
   }
 
   let _group = null;
@@ -783,7 +868,7 @@ export function buildRuins(spec = {}, rand) {
     sub.box(tex, 0, 0, -th / 2, w / 2, h * r.float(0.4, 0.9), th / 2, { sides: 'nsewt', vv: h / 240 });
     const ang = a + Math.PI / 2 + r.float(-0.4, 0.4);
     b.absorb(sub, new THREE.Matrix4().makeRotationY(ang).setPosition(px + x, py, pz + z));
-    colliders.push({ type: 'obb', x: px + x, z: pz + z, hw: w / 2, hd: th / 2, rot: ang, y0: py, y1: py + h });
+    pushObb(colliders, { type: 'obb', x: px + x, z: pz + z, hw: w / 2, hd: th / 2, rot: ang, y0: py - 200, y1: py + h });
   }
   // A couple of fallen columns.
   for (let i = 0; i < (spec.columns || 2); i++) {
@@ -876,12 +961,15 @@ export function addProp(b, kind, x, y, z, rot = 0, rand) {
     case 'stall': {
       const w = 260, d = 180;
       sub.box('wall_wood_plank', -w, 180, -d, w, 220, d, { sides: 'nsewt', uu: 1.5, vv: 0.2 });
+      // Posts tall enough to PIERCE the sloped awning plane (the plane sits
+      // at ~444 over the post line): the old 420 tops stopped a body-width
+      // short and the canopy floated disconnected above them (panel #4).
       for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
-        sub.box('wall_wood_plank', sx * w - 18, 0, sz * d - 18, sx * w + 18, 420, sz * d + 18, { sides: 'nsew' });
+        sub.box('wall_wood_plank', sx * w - 18, 0, sz * d - 18, sx * w + 18, 462, sz * d + 18, { sides: 'nsewt' });
       }
-      // Striped awning, two slopes.
-      sub.quad('wall_banner', [-w - 60, 420, d + 80], [w + 60, 420, d + 80], [w + 60, 520, 0], [-w - 60, 520, 0], { uu: 2, vv: 0.5 });
-      sub.quad('wall_banner', [w + 60, 420, -d - 80], [-w - 60, 420, -d - 80], [-w - 60, 520, 0], [w + 60, 520, 0], { uu: 2, vv: 0.5, extra: 0.7 });
+      // Striped awning, two slopes, eaves drooping just past the posts.
+      sub.quad('wall_banner', [-w - 60, 412, d + 80], [w + 60, 412, d + 80], [w + 60, 520, 0], [-w - 60, 520, 0], { uu: 2, vv: 0.5 });
+      sub.quad('wall_banner', [w + 60, 412, -d - 80], [-w - 60, 412, -d - 80], [-w - 60, 520, 0], [w + 60, 520, 0], { uu: 2, vv: 0.5, extra: 0.7 });
       break;
     }
     case 'cart':

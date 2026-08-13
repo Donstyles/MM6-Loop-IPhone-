@@ -433,9 +433,19 @@ const BUILDERS = {
           { pivot: 'bottom', x: sx * H * 0.37, y: H * 0.19 * i }));
       }
     }
-    // Lintel and a keystone.
-    g.add(box(H * 1.06, H * 0.16, H * 0.24, mulHex(stone, 1.1), { y: H * 0.84 }));
-    g.add(box(H * 0.20, H * 0.22, H * 0.26, mulHex(stone, 1.25), { y: H * 0.90 }));
+    // Corbelled arch: two stepped blocks closing over the opening, then the
+    // lintel and a keystone. A flat square lintel over a square sheet read as
+    // an abstract purple box; the corbel steps are what make it read as a
+    // GATEWAY (panel note: "exit should read as a door/stairs").
+    for (const sx of [-1, 1]) {
+      g.add(box(H * 0.20, H * 0.12, H * 0.23, mulHex(stone, 0.94), { x: sx * H * 0.30, y: H * 0.72 }));
+      g.add(box(H * 0.16, H * 0.11, H * 0.23, mulHex(stone, 1.05), { x: sx * H * 0.19, y: H * 0.80 }));
+    }
+    g.add(box(H * 1.06, H * 0.16, H * 0.24, mulHex(stone, 1.1), { y: H * 0.90 }));
+    g.add(box(H * 0.20, H * 0.22, H * 0.26, mulHex(stone, 1.25), { y: H * 0.97 }));
+    // Three worn steps up to the threshold: an exit reads as stairs out.
+    g.add(box(H * 0.88, H * 0.055, H * 0.62, mulHex(stone, 0.72), { pivot: 'bottom', z: H * 0.30 }));
+    g.add(box(H * 0.96, H * 0.055, H * 0.50, mulHex(stone, 0.82), { pivot: 'bottom', z: H * 0.22, y: H * 0.05 }));
     // The gate itself: concentric arcane sheets stepping rim -> hot core, so
     // the surface bands like a vortex instead of one flat purple rect. Kept
     // bright overall: the dungeon's runtime lightAt() multiplies the whole

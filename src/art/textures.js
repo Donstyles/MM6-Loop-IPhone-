@@ -816,7 +816,10 @@ function tSwampMuck() {
 
 function tFarmland() {
   const p = P();
-  const dk = [72, 58, 40], md = [118, 96, 66], lt = [150, 126, 92];
+  // Lifted from [72,58,40]: at range the old base averaged down to a near
+  // black patch and every field read as a burn scar on the meadow (panel
+  // #11). Turned earth is brown, not charcoal.
+  const dk = [92, 74, 52], md = [138, 114, 80], lt = [172, 148, 110];
   paint(p, (x, y) => {
     // four ploughed furrows; the ridge line wanders and its height varies, so
     // it reads as turned earth rather than a sine grating
@@ -2011,12 +2014,15 @@ function signBase(seed = 1021) {
   });
   const rnd = new Rand(seed);
   for (let i = 0; i < 3; i++) knot(p, rnd.int(64), rnd.int(64), rnd.float(1.6, 2.6), [40, 26, 14], [146, 108, 64]);
-  // iron border and corner brackets
-  const iron = [58, 56, 58];
-  frameRect(p, 0, 0, 64, 64, [22, 22, 24]);
-  frameRect(p, 1, 1, 62, 62, iron);
-  frameRect(p, 2, 2, 60, 60, scaleC(iron, 1.5));
-  for (const [cx, cy] of [[5, 5], [58, 5], [5, 58], [58, 58]]) stud(p, cx, cy, [120, 118, 118], 1);
+  // Gilded border inside a dark outline: a hanging sign has to POP off a
+  // timber facade from across the street (iPhone judge: "storefronts show
+  // only a tiny white arrow"). Iron alone vanished against the walls.
+  const gilt = [186, 152, 74], giltHi = [232, 206, 122];
+  frameRect(p, 0, 0, 64, 64, [18, 14, 10]);
+  frameRect(p, 1, 1, 62, 62, gilt);
+  frameRect(p, 2, 2, 60, 60, giltHi);
+  frameRect(p, 3, 3, 58, 58, [52, 40, 22]);
+  for (const [cx, cy] of [[5, 5], [58, 5], [5, 58], [58, 58]]) stud(p, cx, cy, [220, 196, 116], 1);
   return p;
 }
 
@@ -2553,12 +2559,15 @@ function tDunTomb() {
     colA: [128, 116, 92], colB: [196, 184, 156], mortar: [104, 96, 78],
     bevel: 0.24, chip: 0.3, grain: 0.14,
   });
-  // carved funerary glyphs on some blocks
+  // Carved funerary RUNES on some blocks. Angular staves and diagonals only
+  // (thorn, algiz, ansuz, gebo): the old triple-bar-and-box marks read as
+  // CJK characters (the panel saw 王 on a crypt wall - #7). No closed boxes,
+  // no stacked horizontal bars.
   const glyphs = [
-    ['  ggg  ', ' g   g ', 'g  g  g', 'g ggg g', 'g  g  g', ' g   g ', '  ggg  '],
-    ['ggggggg', '   g   ', '   g   ', ' ggggg ', '   g   ', '   g   ', 'ggggggg'],
-    [' g   g ', ' ggggg ', 'g g g g', 'g ggg g', ' g   g ', '  g g  ', ' g   g '],
-    ['  ggg  ', ' gg gg ', 'g g g g', 'g  g  g', 'g g g g', ' gg gg ', '  ggg  '],
+    ['g      ', 'g gg   ', 'g   g  ', 'g    g ', 'g   g  ', 'g gg   ', 'g      '],
+    ['g  g  g', ' g g g ', '  ggg  ', '   g   ', '   g   ', '   g   ', '   g   '],
+    [' g     ', ' gg    ', ' g g   ', ' g  g  ', ' gg    ', ' g g   ', ' g     '],
+    ['g     g', ' g   g ', '  g g  ', '   g   ', '  g g  ', ' g   g ', 'g     g'],
   ];
   const bh = 16, bw = 32;
   for (let r = 0; r < 4; r++) {

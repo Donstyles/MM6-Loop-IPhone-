@@ -981,6 +981,62 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
     solidGrid[k] = 0; floorGrid[k] = c.fy; ceilGrid[k] = c.fy + c.h;
   }
 
+  // Ingestible wall colliders. The shell's ColliderGrid consumes plain
+  // {minX..maxZ} AABBs and drops the {type:'grid'} record below, so the grid
+  // alone left dungeon walls with NO radius collision: the party could press
+  // its eye flush against (and past) a wall plane, and the camera's near
+  // plane crossed into solid rock - the perfection panel's "crypt void"
+  // (viewport 50-90% untextured black on a wall-hug turn). One box per solid
+  // cell that borders an open cell, inflated by WALL_INSET into the open
+  // space so the near-plane corner (~40 units at player radius 37) can never
+  // reach the visible wall quad.
+  const WALL_INSET = 26;
+  const wallBoxes = [];
+  {
+    const solidAt = (i, j) => i < 0 || j < 0 || i >= GRID || j >= GRID || !cells.has(key(i, j));
+    for (const [, c] of cells) {
+      for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+        const si = c.i + di, sj = c.j + dj;
+        if (!solidAt(si, sj)) continue;
+        const k2 = key(si, sj);
+        if (k2 >= 0 && k2 < GRID * GRID && solidGrid[k2] === 2) continue;   // already emitted
+        if (k2 >= 0 && k2 < GRID * GRID) solidGrid[k2] = 2;                 // mark, keep truthy
+        wallBoxes.push({
+          minX: si * CELL - WALL_INSET + OX, maxX: (si + 1) * CELL + WALL_INSET + OX,
+          minZ: sj * CELL - WALL_INSET + OZ, maxZ: (sj + 1) * CELL + WALL_INSET + OZ,
+          minY: -1e7, maxY: 1e7,
+          src: 'dungeon-wall',
+        });
+      }
+    }
+    // Restore the exported grid to strict 0/1.
+    for (let i = 0; i < solidGrid.length; i++) if (solidGrid[i] === 2) solidGrid[i] = 1;
+    // Pillars, chests and floor braziers: solid furniture the camera must
+    // also never enter.
+    for (const p of pillarColliders) {
+      wallBoxes.push({
+        minX: p.x - p.hw - WALL_INSET + OX, maxX: p.x + p.hw + WALL_INSET + OX,
+        minZ: p.z - p.hd - WALL_INSET + OZ, maxZ: p.z + p.hd + WALL_INSET + OZ,
+        minY: p.y0, maxY: p.y1, src: 'pillar',
+      });
+    }
+    for (const ch of chests) {
+      wallBoxes.push({
+        minX: ch.x - 150 + OX, maxX: ch.x + 150 + OX,
+        minZ: ch.z - 150 + OZ, maxZ: ch.z + 150 + OZ,
+        minY: ch.y - 50, maxY: ch.y + 170, src: 'chest',
+      });
+    }
+    for (const t of torches) {
+      if (t.kind !== 'brazier') continue;
+      wallBoxes.push({
+        minX: t.x - 110 + OX, maxX: t.x + 110 + OX,
+        minZ: t.z - 110 + OZ, maxZ: t.z + 110 + OZ,
+        minY: t.y - 320, maxY: t.y + 40, src: 'brazier',
+      });
+    }
+  }
+
   let minX = 1e9, maxX = -1e9, minZ = 1e9, maxZ = -1e9, minY = 1e9, maxY = -1e9;
   for (const [, c] of cells) {
     minX = Math.min(minX, c.i * CELL); maxX = Math.max(maxX, (c.i + 1) * CELL);
@@ -1141,7 +1197,10 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
       type: 'grid', cell: CELL, w: GRID, h: GRID,
       originX: OX, originZ: OZ,          // worldX = i * cell + originX
       solid: solidGrid, floor: floorGrid, ceil: ceilGrid,
-    }].concat(pillarColliders.map((c) => ({ ...c, x: c.x + OX, z: c.z + OZ }))),
+    }].concat(pillarColliders.map((c) => ({ ...c, x: c.x + OX, z: c.z + OZ })))
+      // The AABBs are what the shell's ColliderGrid actually ingests; the
+      // grid/obb records above are kept for a future native consumer.
+      .concat(wallBoxes),
     start: startPos, startFloor, startYaw,
     // Exit marker sits on the FLOOR: startPos carries the party's 160u eye
     // height, and a portal sprite anchored there hovers a body-length off the

@@ -10,7 +10,7 @@ import { buildSky, FAR_CLIP, SHADE_DIST, timeTint, sunTerms, sunDirection, quant
 import { SFX_IDS } from '../core/audio.js';
 import { generateTown } from './town.js';
 import { monstersInLevelRange, MONSTER_IDS } from '../game/monsters.js';
-import { MeshBuilder, buildRuins, buildHouse, addProp, materialFor, setBuildingLight, setWindowsLit } from './building.js';
+import { MeshBuilder, buildRuins, buildHouse, addProp, materialFor, setBuildingLight, setWindowsLit, obbAabbs } from './building.js';
 
 // ---------------------------------------------------------------------------
 // Regions.
@@ -707,7 +707,11 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
     sub.quad('door_dungeon', [-160, 0, 145], [160, 0, 145], [160, 600, 145], [-160, 600, 145], { uu: 1, vv: 2, extra: 0.55 });
     sub.box('wall_stone_block', -520, 0, 140, 520, 60, 420, { sides: 'nsewt', uu: 3, vv: 0.2 });
     propBuilder.absorb(sub, new THREE.Matrix4().makeRotationY(rot).setPosition(d.x, y, d.z));
-    colliders.push({ type: 'obb', x: d.x, z: d.z, hw: 430, hd: 150, rot, y0: y, y1: y + 820 });
+    {
+      const o = { type: 'obb', x: d.x, z: d.z, hw: 430, hd: 150, rot, y0: y - 200, y1: y + 820 };
+      colliders.push(o);
+      for (const bb of obbAabbs(o)) colliders.push(bb);
+    }
     const dseed = r.int(1e9);
     dungeons.push({
       id: `${id}:${d.name}`.replace(/\s+/g, '_').toLowerCase(),

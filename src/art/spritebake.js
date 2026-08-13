@@ -900,8 +900,13 @@ export function bakeCreatureSheet(renderer, kind, seed = 1, opts = {}) {
 }
 
 export function bakeNPCSheet(renderer, archetype, seed = 1, opts = {}) {
+  // NPCs are the sprites the player parks two metres from to talk. At the
+  // old 1024/128 budget the atlas fitter settled on ~102px cells, which a
+  // conversation-distance projection magnified ~2.8x into undithered slabs
+  // (panel #10). 1280/176 lets the same fitter reach 128px cells - the same
+  // ceiling the bestiary gets - for one extra half-megatexel per archetype.
   return bakeSheet(renderer, (s) => buildNPC(archetype, s), {
-    kind: archetype, seed, actions: ACTIONS, maxCellH: 128, maxAtlas: 1024,
+    kind: archetype, seed, actions: ACTIONS, maxCellH: 176, maxAtlas: 1280,
     margin: 1.03, dither: 0, aspect: 0.60, bloodPool: true, ...opts,
   });
 }

@@ -238,6 +238,8 @@ const SKY_FRAG = /* glsl */`
   uniform vec3 uHaze;        // sub-horizon fill / fog target
   uniform vec3 uWarm;        // horizon-band tint (dawn/dusk warmth)
   uniform float uNight;      // 0 = day, 1 = deep night
+  uniform float uDusk;       // 0 = high sun, 1 = sun on the horizon
+  uniform float uSunX;       // sun azimuth east-west sign (+1 dawn, -1 dusk)
   uniform vec3 uMoonDir;
   uniform vec2 uDrift;       // self-scroll of the cloud plate
   uniform vec2 uCamXZ;
@@ -301,6 +303,24 @@ const SKY_FRAG = /* glsl */`
         vec3 moonC = mix(vec3(0.97, 0.98, 0.92), vec3(0.58, 0.60, 0.57), bite * 0.72);
         c = mix(c, moonC, (disc + halo) * uNight * (1.0 - cover * 0.7));
       }
+      // Dawn/dusk: the banded amber sky the title screen promises. A stack of
+      // HARD value bands (MM6 skies band, they never gradient) climbing from
+      // deep orange on the horizon to gold, strongest toward the sun's own
+      // side of the sky, warming the cloud plate on its way. uDusk dies at
+      // night and at high sun, so noon and midnight are untouched.
+      if (uDusk > 0.01) {
+        float ht = 1.0 - clamp(horizonPx / (uBandPx * 7.0), 0.0, 1.0);
+        float az = 0.5 + 0.5 * (d.x * uSunX) / max(1e-4, length(d.xz));
+        float tq = floor(ht * 5.0 + 0.001) / 5.0;
+        // Hottest AND brightest right on the horizon: the post pass dims the
+        // whole frame to ~45% at these hours, so the bands are painted well
+        // past "tasteful" or they grey out into mud.
+        vec3 amber = mix(vec3(0.95, 0.72, 0.34), vec3(1.35, 0.58, 0.16), tq);
+        float a = uDusk * (0.40 + 0.60 * tq) * (0.35 + 0.65 * az);
+        // Clouds catch fire a little even outside the band stack.
+        c *= mix(vec3(1.0), vec3(1.30, 0.92, 0.60), uDusk * 0.65);
+        c = mix(c, amber, clamp(a, 0.0, 0.92));
+      }
       // Two-stage haze. The engine draws a hard 39px fade band at the horizon;
       // on its own that leaves the sky above it still fully saturated and the
       // world ends on a visible line. A broad soft ramp over roughly a quarter
@@ -344,6 +364,8 @@ export function buildSky(scene, opts = {}) {
       uHaze: { value: new THREE.Color(0.62, 0.67, 0.73) },
       uWarm: { value: new THREE.Color(1, 1, 1) },
       uNight: { value: 0 },
+      uDusk: { value: 0 },
+      uSunX: { value: 1 },
       // Elevation ~28 deg: high enough to sit over the rooftops, low enough
       // that the +-22 deg pitch clamp can still frame it.
       uMoonDir: { value: new THREE.Vector3(0.42, 0.44, -0.62).normalize() },
@@ -514,21 +536,38 @@ export function buildSky(scene, opts = {}) {
     const nightK = clamp((0.92 - daylightFactor(state.tod)) / 0.30, 0, 1);
     mat.uniforms.uNight.value = nightK;
 
-    // Horizon warmth: amber at dawn/dusk while the sun sits low, fading to a
-    // whisper at noon and to nothing at night. Applied only to the broad ramp
-    // above the horizon - the fog target itself stays neutral, so distance
-    // haze and the sky can never seam.
+    // Dawn/dusk warmth. One strength value drives the banded amber stack in
+    // the shader, the broad-ramp tint AND the haze/fog target itself, so the
+    // terrain dissolves into the same warmed horizon the sky paints and the
+    // two can never seam. Night keeps its own look: the factor dies with the
+    // sun and is throttled as nightK comes up.
     {
       const h = state.tod;
       const minutes = clamp((h - 5) * 60, 0, 960);
       const sunY = Math.sin(minutes * Math.PI / 960);
-      const low = st.night ? 0 : clamp(1 - sunY / 0.55, 0, 1);
-      const w = Math.pow(low, 1.5);
+      // Golden hour opens as the sun drops through ~30 degrees - the judge's
+      // 19:40 "grey dims of noon" reading sat exactly in the window the old
+      // 0.45 threshold left cold.
+      const low = st.night ? 0 : clamp(1 - sunY / 0.62, 0, 1);
+      const w = Math.pow(low, 1.3) * (1 - 0.55 * nightK);
+      mat.uniforms.uDusk.value = w;
+      mat.uniforms.uSunX.value = Math.cos(minutes * Math.PI / 960) >= 0 ? 1 : -1;
       mat.uniforms.uWarm.value.setRGB(
-        1.04 + 0.24 * w,
-        1.01 + 0.02 * w,
-        0.98 - 0.22 * w,
+        1.05 + 0.50 * w,
+        1.01 + 0.05 * w,
+        0.98 - 0.42 * w,
       );
+      // Warm the haze/fog pair (clear days only - a wall of fog stays grey).
+      // Strong on purpose: this is the colour the 39px horizon band and the
+      // distance fade both resolve to, and it has to survive the ~45% global
+      // dim of these hours still reading amber.
+      if (!use.on && w > 0.001) {
+        state.haze.r = Math.min(1, state.haze.r * (1 + 0.62 * w));
+        state.haze.g = state.haze.g * (1 + 0.06 * w);
+        state.haze.b = state.haze.b * (1 - 0.44 * w);
+        fog.color.copy(state.haze);
+        mat.uniforms.uHaze.value.copy(state.haze);
+      }
     }
 
     // Cloud plate self-drift; MM6's sky moves even when you stand still.

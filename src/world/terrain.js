@@ -155,7 +155,7 @@ const FALLBACK = {
   gravel: { k: 'grain', ramp: 'stone', lo: 0.28, hi: 0.66, period: 16, speck: 500 },
   moss_rock: { k: 'grain', ramp: 'foliage', lo: 0.22, hi: 0.62, period: 9, crack: 1 },
   swamp_muck: { k: 'grain', ramp: 'swamp', lo: 0.14, hi: 0.46, period: 6, blot: 0.4 },
-  farmland: { k: 'furrow', ramp: 'dirt', lo: 0.24, hi: 0.64 },
+  farmland: { k: 'furrow', ramp: 'dirt', lo: 0.32, hi: 0.68 },
   ash: { k: 'grain', ramp: 'grey', lo: 0.14, hi: 0.42, period: 8, speck: 200 },
   volcanic_rock: { k: 'grain', ramp: 'grey', lo: 0.08, hi: 0.34, period: 7, crack: 1 },
   beach_wet: { k: 'grain', ramp: 'sand', lo: 0.30, hi: 0.62, period: 12 },
@@ -788,10 +788,20 @@ function faceGrey(nx, ny, nz, sun, ambient, diffuse, upness) {
   // sun only models the slopes.
   const up = Math.max(0.30, sun.y);
   const rel = clamp(ndl / up, 0, 1);
+  // Facets deviate AROUND the flat-ground level for the hour, with the upward
+  // swing capped and the whole amplitude rolled off as the sun drops. Raw
+  // rel at a low sun let any gently sun-facing pair of triangles jump a third
+  // brighter than the road around them - the "pale triangle fans" flashing on
+  // road/sand blends at dusk (perfection panel #3). The cap only squeezes the
+  // brightening side; shadows keep their full fall so the landform stays.
+  const relFlat = clamp(Math.max(0, sun.y) / up, 0, 1);
+  const amp = 0.45 + 0.55 * clamp(Math.max(0, sun.y) / 0.30, 0, 1);
+  let dev = (rel - relFlat) * amp;
+  if (dev > 0.26) dev = 0.26;
   // 0.62 floor, matching sky.daylightFactor exactly (the two must stay one
   // curve). Raised from 0.5: under the global night multiply the old floor
   // put midnight ground at ~5% luminance and streets were unwalkable.
-  const lit = 0.62 + 0.38 * rel;
+  const lit = 0.62 + 0.38 * clamp(relFlat + dev, 0, 1);
   // MM6's sun has no north/south component at all, so a north- or south-facing
   // slope shades identically to flat ground and the landform vanishes. A small
   // steepness term stands in for the occlusion the engine baked per-vertex.
@@ -860,6 +870,28 @@ export function waterFrames(id = 'water') {
 // --- mesh building ---------------------------------------------------------
 
 const CHUNK_TILES = 8;
+
+/**
+ * The lighting normal for one terrain triangle: horizontal component
+ * exaggerated (MM6's hand-built terrain is steeper than a noise field), then
+ * QUANTISED - azimuth to 16 directions, steepness to 1/7 steps - so two
+ * nearly-coplanar triangles always land on the *same* grey. Un-quantised,
+ * the road-carving jitter gave every pair of triangles its own normal and
+ * grazing light fanned them into visible light/dark patchwork.
+ */
+function lightNormal(nx, ny, nz) {
+  const ex = 2.4;
+  let lx = nx * ex, ly = ny, lz = nz * ex;
+  const il = 1 / (Math.hypot(lx, ly, lz) || 1);
+  lx *= il; ly *= il; lz *= il;
+  const m = Math.hypot(lx, lz);
+  if (m < 0.06) return [0, 1, 0];
+  const qm = Math.min(1, Math.round(m * 7) / 7);
+  if (qm === 0) return [0, 1, 0];
+  const az = Math.round(Math.atan2(lz, lx) / (Math.PI / 8)) * (Math.PI / 8);
+  const qy = Math.sqrt(Math.max(0, 1 - qm * qm));
+  return [Math.cos(az) * qm, qy, Math.sin(az) * qm];
+}
 
 /**
  * Turn a heightmap into renderable chunks.
@@ -977,14 +1009,8 @@ export function buildTerrain(hm, opts = {}) {
             const il = 1 / (Math.hypot(nx, ny, nz) || 1);
             nx *= il; ny *= il; nz *= il;
             if (ny < 0) { nx = -nx; ny = -ny; nz = -nz; }
-            // Exaggerate the horizontal component for lighting only. MM6's
-            // hand-built terrain is steeper than a noise field, and with the
-            // sun high in the sky a gentle slope otherwise shades almost
-            // identically to flat ground and the landform disappears.
-            const ex = 2.4;
-            let lx = nx * ex, ly = ny, lz = nz * ex;
-            const li2 = 1 / (Math.hypot(lx, ly, lz) || 1);
-            faceInfo.push(lx * li2, ly * li2, lz * li2, (isCliff ? cliffDark : 1) * wetK, ny);
+            const ln = lightNormal(nx, ny, nz);
+            faceInfo.push(ln[0], ln[1], ln[2], (isCliff ? cliffDark : 1) * wetK, ny);
             for (const vi of tri) {
               pos[vp++] = P[vi][0]; pos[vp++] = P[vi][1]; pos[vp++] = P[vi][2];
               const u = UVS[(vi + rot) & 3];
@@ -1052,10 +1078,8 @@ export function buildTerrain(hm, opts = {}) {
             const il = 1 / (Math.hypot(nx, ny, nz) || 1);
             nx *= il; ny *= il; nz *= il;
             if (ny < 0) { nx = -nx; ny = -ny; nz = -nz; }
-            const ex = 2.4;
-            let lx = nx * ex, ly = ny, lz = nz * ex;
-            const li2 = 1 / (Math.hypot(lx, ly, lz) || 1);
-            faceInfo.push(lx * li2, ly * li2, lz * li2, wetK, ny);
+            const ln = lightNormal(nx, ny, nz);
+            faceInfo.push(ln[0], ln[1], ln[2], wetK, ny);
             for (const vi of tri) {
               pos[vp++] = P[vi][0]; pos[vp++] = P[vi][1]; pos[vp++] = P[vi][2];
               uv[vu++] = cuv[vi][0]; uv[vu++] = cuv[vi][1];
