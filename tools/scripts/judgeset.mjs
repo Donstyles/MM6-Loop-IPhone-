@@ -20,14 +20,21 @@ export default [
   ['07-outdoor-dusk', '__mm6.clearView(); __mm6.setTime(19,45)', 900],
   ['08-outdoor-night', '__mm6.clearView(); __mm6.setTime(23,30)', 900],
   // Night town: lit windows and lantern halos are the whole point of the
-  // frame, so shoot it from inside the walls looking across the plaza.
-  // Vantage: on the main street, camera on the nearest lamppost, so the frame
-  // carries what night towns are about - lit windows and lantern halos.
-  // Street-by-lamplight: stand ON the main street between two lampposts and
-  // look down the row, so the frame carries the pools on the cobbles, the
-  // halos, and the lit windows all at once - the walk-the-street-at-night
-  // reading the wow gate asks for.
-  ['08b-night-town', '(function(){ const m = __mm6.session.map; const t = (m.towns || (m.region && m.region.towns) || [])[0]; if (!t) return; const lamps = t.props.filter((p) => p.kind === "lamppost"); const a = lamps[0] || { x: t.x + 900, z: t.z }; const b = lamps[1] || { x: t.x, z: t.z }; const x = a.x + (b.x - a.x) * -0.25, z = a.z + (b.z - a.z) * -0.25; __mm6.teleport(x, m.groundAt(x, z, t.y || 0), z, Math.atan2(x - b.x, z - b.z)); __mm6.session.player.pitch = 0; })()', 900],
+  // frame. Street-by-lamplight: stand ON the main street between two
+  // lampposts and look down the row, so the frame carries the pools on the
+  // cobbles, the halos, and the lit windows all at once.
+  // Vantage mechanics: lampposts are planted in road order, offset ~500u to
+  // one side of the road's centreline (town.js: width/2 + 90), so an
+  // *adjacent* pair (same road, ~900u apart, list-consecutive) defines both
+  // the row direction and which side the street is on. Of those pairs, take
+  // the one *farthest* from the plaza, stand at its midpoint pushed sideways
+  // onto the roadway, and face along the street toward the town centre: the
+  // whole lamp row recedes ahead and the lit town fills the distance. (The
+  // nearest-the-plaza pair was tried first and put the market stalls two
+  // steps in front of the lens.) The old script extrapolated 25% past
+  // lamps[0] on the lamp line itself - the sidewalk against the house
+  // fronts - and ended wedged in an alley.
+  ['08b-night-town', '(function(){ const m = __mm6.session.map; const t = (m.towns || (m.region && m.region.towns) || [])[0]; if (!t) return; const lamps = t.props.filter((p) => p.kind === "lamppost"); let a = null, b = null, best = -1; for (let i = 0; i + 1 < lamps.length; i++) { const d = Math.hypot(lamps[i + 1].x - lamps[i].x, lamps[i + 1].z - lamps[i].z); if (d < 600 || d > 1100) continue; const mx = (lamps[i].x + lamps[i + 1].x) / 2, mz = (lamps[i].z + lamps[i + 1].z) / 2; const dc = Math.hypot(mx - t.x, mz - t.z); if (dc > best) { best = dc; a = lamps[i]; b = lamps[i + 1]; } } if (!a) { a = lamps[0] || { x: t.x + 900, z: t.z }; b = lamps[1] || { x: t.x, z: t.z }; } const dx = b.x - a.x, dz = b.z - a.z, L = Math.hypot(dx, dz) || 1; const ux = dx / L, uz = dz / L; const off = 460; const px = (a.x + b.x) / 2 + uz * off, pz = (a.z + b.z) / 2 - ux * off; const s = (t.x - px) * ux + (t.z - pz) * uz >= 0 ? 1 : -1; __mm6.teleport(px, m.groundAt(px, pz, t.y || 0), pz, Math.atan2(-s * ux, -s * uz)); __mm6.session.player.pitch = 0; })()', 900],
   ['09-outdoor-dawn', '__mm6.clearView(); __mm6.setTime(5,45)', 900],
   // Re-seat before spawning: frame 06 often ends with the camera inside a
   // canopy or against a building corner, and monsters spawned straight ahead

@@ -60,6 +60,7 @@ uniform vec3 fogColor;
 uniform float fogNear;
 uniform float fogFar;
 uniform float alphaTest;
+uniform float uAdditive;
 
 in vec2 vUv;
 in vec4 vTint;
@@ -76,12 +77,19 @@ void main() {
   // Partial opacity on an opaque, alpha-tested batch: an ordered-dither
   // screen door, the era's own transparency. This is what lets an effect
   // sprite dissolve as it closes on the camera without any blending state.
+  // Additive batches are the exception: they already blend, and adding black
+  // is adding nothing, so a fading trail darkens smoothly instead of being
+  // punched into dots.
   if (vTint.a < 0.996) {
-    const float B[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0,
-                                  3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
-    vec2 q = floor(gl_FragCoord.xy);
-    int bi = int(mod(q.x, 4.0)) + int(mod(q.y, 4.0)) * 4;
-    if (vTint.a < (B[bi] + 0.5) / 16.0) discard;
+    if (uAdditive > 0.5) {
+      c.rgb *= vTint.a;
+    } else {
+      const float B[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0,
+                                    3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+      vec2 q = floor(gl_FragCoord.xy);
+      int bi = int(mod(q.x, 4.0)) + int(mod(q.y, 4.0)) * 4;
+      if (vTint.a < (B[bi] + 0.5) / 16.0) discard;
+    }
   }
   // Sprites take the same 32-step greyscale multiply the world does; the
   // banding that produces is authentic, not an artefact.
@@ -141,6 +149,7 @@ export class SpriteBatch {
         fogNear: { value: 2000 },
         fogFar: { value: 6000 },
         alphaTest: { value: this.additive ? 0.12 : 0.5 },
+        uAdditive: { value: this.additive ? 1 : 0 },
       },
       transparent: this.additive,
       blending: this.additive ? THREE.AdditiveBlending : THREE.NormalBlending,

@@ -336,11 +336,29 @@ function fireBall(p, f, n, o) {
 }
 
 function fireBurst(p, f, n) {
+  // The detonation is a 470-unit quad that routinely fills a third of the
+  // frame, so every texel is several screen pixels wide: any baked stipple
+  // (checker smoke, erode fade) blows up into a field of fat polka dots
+  // (wowcheck 10b). This burst therefore uses opaque pixels only - it grows
+  // as a solid fireball and dies by shrinking, never by dissolving.
   const cx = p.w / 2, cy = p.h / 2;
   const R = p.w * 0.46;
   const t = f / (n - 1);
   const r = R * (0.18 + 0.82 * Math.pow(t, 0.5));
   const ph = t * 5;
+  // Solid smoke puffs ride the rim outward from mid-life and shrink away.
+  if (t > 0.5) {
+    const s = (t - 0.5) / 0.5;
+    for (let i = 0; i < 7; i++) {
+      const a = (i / 7) * Math.PI * 2 + 0.6;
+      const rr = r * (0.32 + 0.55 * s);
+      const pr = r * 0.26 * (1 - s * 0.82);
+      if (pr < 0.6) continue;
+      blob(p, cx + Math.cos(a) * rr, cy + Math.sin(a) * rr - s * R * 0.22, pr,
+        (v) => lut(LUT_SMOKE, 0.06 + v * 0.4 * (1 - s * 0.4)),
+        { wob: 0.36, lobes: 4, phase: a + s * 3, bands: 4, seed: i * 3, mode: SET });
+    }
+  }
   if (t < 0.72) {
     // Outer orange bloom.
     blob(p, cx, cy, r, (v) => lut(LUT_FIRE, 0.12 + v * 0.62), { wob: 0.24, lobes: 6, phase: ph, bands: 6, seed: 3 });
@@ -353,20 +371,28 @@ function fireBurst(p, f, n) {
     // White-yellow core, biggest at the front of the blast then eaten away.
     const cr = r * (0.72 - t * 1.05);
     if (cr > 0.6) blob(p, cx, cy, cr, (v) => lut(LUT_FIRE, 0.72 + v * 0.35), { wob: 0.16, lobes: 4, phase: -ph, bands: 4 });
-  }
-  if (t > 0.5) {
-    // Smoke takes over: small dark puffs punched through the flame, stippled so
-    // the fire behind them still shows.
-    const s = (t - 0.5) / 0.5;
+  } else {
+    // Dissipation: the ball breaks into separate clumps of flame that drift
+    // outward and shrink to embers. Solid filled blobs only - an expanding
+    // thin shell was tried here and at two steps' distance it rendered as a
+    // giant orange lasso, not a blast.
+    const s = (t - 0.72) / 0.28;
+    const die = 1 - s * 0.92;
+    const cr = r * 0.5 * die;
+    if (cr > 0.6) {
+      blob(p, cx, cy, cr, (v) => lut(LUT_FIRE, 0.08 + v * 0.42 * (1 - s * 0.4)),
+        { wob: 0.3, lobes: 5, phase: ph, bands: 4, seed: 8 });
+    }
     for (let i = 0; i < 7; i++) {
-      const a = (i / 7) * Math.PI * 2 + 0.6;
-      const rr = r * (0.3 + 0.5 * s);
-      blob(p, cx + Math.cos(a) * rr, cy + Math.sin(a) * rr - s * R * 0.22, r * (0.2 + 0.14 * s),
-        (v) => lut(LUT_SMOKE, 0.06 + v * 0.4 * (1 - s * 0.4)),
-        { wob: 0.36, lobes: 4, phase: a + s * 3, bands: 4, seed: i * 3, mode: SET, checker: true });
+      const a = (i / 7) * Math.PI * 2 + ph * 0.4;
+      const pr = r * 0.3 * die;
+      if (pr < 0.6) continue;
+      const d = r * (0.8 + 0.25 * s);
+      blob(p, cx + Math.cos(a) * d, cy + Math.sin(a) * d - s * R * 0.08, pr,
+        (v) => lut(LUT_FIRE, 0.12 + v * 0.45 * (1 - s * 0.45)),
+        { wob: 0.4, lobes: 3, phase: a * 2 + ph, bands: 3, seed: i });
     }
   }
-  if (t > 0.75) erode(p, 1 - (t - 0.75) / 0.25 * 0.85);
 }
 
 function flamePillar(p, f, n) {

@@ -628,11 +628,15 @@ export class VFXSystem {
       if (dx * dx + dz * dz > far2) continue;
       // Near-camera behaviour: an effect flying at the lens must never become
       // a screen-filling starburst. It dissolves out (ordered-dither in the
-      // batch shader) from ~380 units and is fully invisible under ~120 - the
-      // hit itself is the party's problem to show, not the world's.
+      // batch shader) over a *short* band just outside the lens - invisible
+      // under ~120 units, fully solid again by ~200. The band used to reach
+      // 380 units, which is ordinary melee range: every detonation on a
+      // nearby monster rendered at 50-90% dither and the fireball came out
+      // as a screen of orange polka dots (wowcheck 10b). Camera protection
+      // is a lens-distance concern only; mid-distance impacts stay solid.
       const dyc = s.y - cy;
       const dist = Math.sqrt(dx * dx + dyc * dyc + dz * dz);
-      const nearK = (dist - 120) / 260;
+      const nearK = (dist - 120) / 80;
       if (nearK <= 0.02) continue;
       const nearFade = nearK >= 1 ? 1 : nearK;
 
