@@ -68,6 +68,9 @@ export function installCombat(session) {
   session.attack = () => {
     const party = session.party;
     const members = party.members || [];
+    // Swinging a weapon is unambiguously an input: it ends the safe-arrival
+    // aggro hold (wowjudge #1) the same way the first step does.
+    session._awaitFirstMove = false;
     const target = pickTarget(session);
 
     let acted = false;
@@ -87,7 +90,15 @@ export function installCombat(session) {
         break;
       }
     }
-    if (!acted && session.audio) session.audio.play('error', { volume: 0.3 });
+    // A not-ready swing is SILENT, as MM6 is - mashing attack printed 31
+    // error beeps per fight (audio3 #5). At most one quiet cue every 2s.
+    if (!acted && session.audio) {
+      const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      if (!session._errBeepAt || now - session._errBeepAt > 2000) {
+        session._errBeepAt = now;
+        session.audio.play('error', { volume: 0.2 });
+      }
+    }
     return acted;
   };
 
@@ -143,6 +154,7 @@ export function installCombat(session) {
     if (combat && combat.resolveAttack && e.mon) {
       const entry = combat.resolveAttack(e.mon, victim, rnd, {});
       hit = entry.hit; dmg = entry.damage;
+      if (hit) announceInflicts(session, victim, entry.notes);
     } else {
       hit = rnd.float() > 0.35;
       dmg = hit ? rnd.dice(1, 6) + (def.level || 1) : 0;
@@ -230,6 +242,12 @@ export function installCombat(session) {
         townhall: 'dialogue', stable: 'transfer', stables: 'transfer', docks: 'transfer',
       };
       const screen = k.startsWith('guild') ? 'guild' : (screenFor[k] || 'shop');
+      // PROGRESSION BEAT (playtest3 #4): a tier-1 guild membership is an
+      // hour-one purchase - 150 gold, not 1000 - scaling steeply with tier so
+      // the deep guilds still gate. The guild screen honours opts.fee.
+      const shopRec = s.shop || s;
+      const guildTier = Math.max(1, (shopRec && shopRec.tier) || 1);
+      const guildFee = s.fee !== undefined ? s.fee : Math.round(150 * Math.pow(3, guildTier - 1));
       // Every house screen reads its own fields off the top of `opts` - the
       // shop reads `opts.kind`, the guild `opts.school`. Passing only
       // `{ shop: s }` left all of them undefined, so *every* shop in the game
@@ -239,6 +257,7 @@ export function installCombat(session) {
         kind: k,
         school: k.startsWith('guild_') ? k.slice(6) : s.school,
         shop: s.shop || s,
+        fee: screen === 'guild' ? guildFee : s.fee,
         entity: e,
       });
     } else if (kind === 'transition') {
@@ -256,15 +275,21 @@ export function installCombat(session) {
    * is seeded, so the pool regenerates identically for save/restore.
    */
   session.ensureQuestPool = (regionId, seed) => {
-    // A LOADED save may carry a different world seed than this boot rolled;
-    // quests must regenerate from the save's seed or none of the saved pool
-    // state lines up. Seed change = rebuild from scratch.
-    if (session._questPoolSeed !== undefined && session._questPoolSeed !== seed) {
+    // QUEST STATE IS SACRED (playtest3 #1). The pool is keyed to the WORLD
+    // seed, never the per-call seed: region reloads, defeat reloads and
+    // dungeon doors all funnel through here with whatever seed the map was
+    // built from, and NONE of them may rebuild a pool that already exists
+    // for this world. The only legal rebuild is a genuinely different world
+    // - a loaded save under another seed - and restoreState drives that
+    // explicitly (it sets worldSeed first, then calls back in here).
+    const worldSeed = session.worldSeed !== null && session.worldSeed !== undefined
+      ? session.worldSeed : seed;
+    if (session._questPoolSeed !== undefined && session._questPoolSeed !== worldSeed) {
       session.questPool = null;
       session._questRegions = null;
       session._mainChainMade = false;
     }
-    session._questPoolSeed = seed;
+    session._questPoolSeed = worldSeed;
     if (!session.questPool) session.questPool = [];
     if (!session._questRegions) session._questRegions = new Set();
     if (!session._mainChainMade) {
@@ -274,9 +299,12 @@ export function installCombat(session) {
     if (regionId && !session._questRegions.has(regionId)) {
       session._questRegions.add(regionId);
       resetQuestIds(1);
-      const qs = generateQuestsForRegion(regionId, seed, 6) || [];
+      const qs = generateQuestsForRegion(regionId, worldSeed, 6) || [];
       for (const q of qs) { q.id = `${regionId}:${q.id}`; session.questPool.push(q); }
     }
+    // The journal is a VIEW over the pool: any journal entry whose id exists
+    // in the pool points at the pool object itself, one source of truth.
+    syncQuestJournal(session);
   };
 
   /**
@@ -332,6 +360,25 @@ export function installCombat(session) {
     }
   };
 
+  /**
+   * The pool was rebuilt under a restored world seed: every NPC binding made
+   * against the OLD pool objects is stale. Release them and re-bind against
+   * the live pool so givers offer (and pay out) the real quests.
+   */
+  session.reattachQuestNPCs = (regionId) => {
+    for (const e of session.entities.list) {
+      if (e.category !== CATEGORY.NPC || !e.data) continue;
+      if ((e.data.questRefs || []).length || e.data.reserved) {
+        e.data.questRefs = [];
+        e.data.reserved = false;
+      }
+    }
+    session.attachQuestNPCs(regionId);
+  };
+
+  // Probe/debug hook: what would a blind swing target right now?
+  session._pickTarget = () => pickTarget(session);
+
   /** Spawn the person an escort quest protects; they trail the party. */
   session.spawnEscort = (quest) => {
     const o = (quest.objectives || []).find((x) => x.kind === 'escort');
@@ -340,9 +387,9 @@ export function installCombat(session) {
     const e = session.spawner.spawnNPC({
       x: p.x + 160, z: p.z + 160, archetype: 'peasant',
       npc: {
-        name: o.target, npcId: o.target, title: 'Traveller', sex: 'm',
+        name: o.target, npcId: o.target, title: 'Traveler', sex: 'm',
         portraitSeed: 777, greeting: `"Stay close," says ${o.target}. "Please."`,
-        rumours: [], questRefs: [],
+        rumours: [], rumors: [], questRefs: [],
       },
     }, (x, z) => session.collision.groundAt(x, z, p.y));
     if (!e) return null;
@@ -390,6 +437,13 @@ export function installCombat(session) {
   session.update = (dt, input) => {
     normalizeQuestContainers(session);
     baseUpdate(dt, input);
+    // Accepting a kill quest tops its targets up in the town ring right away
+    // - no region reload required (playtest3 #2).
+    const active = Object.values(session.party.quests || {}).filter((q) => q && q.state === 'active').length;
+    if (active !== session._lastActiveQuests) {
+      session._lastActiveQuests = active;
+      if (session.spawner && session.spawner.topUpQuestTargets) session.spawner.topUpQuestTargets();
+    }
     // While the world is frozen under a panel, recovery and defeat checks
     // freeze with it - no free recovery, no dying behind a shop screen.
     if (session.worldFrozen && session.worldFrozen()) return;
@@ -432,18 +486,65 @@ function normalizeQuestContainers(session) {
   if (!party.quests || Array.isArray(party.quests)) party.quests = {};
   if (!party.killsByKind) party.killsByKind = {};
   if (Array.isArray(session.quests)) session.quests = null;
+  syncQuestJournal(session);
 }
 
-function pickTarget(session) {
-  if (session.hoverEntity && session.hoverEntity.category === CATEGORY.MONSTER && !session.hoverEntity.dead) {
-    return session.hoverEntity;
+const QUEST_STATE_RANK = { unavailable: 0, available: 1, active: 2, complete: 3, rewarded: 4, failed: 5 };
+
+/**
+ * ONE SOURCE OF TRUTH (playtest3 #1): the pool owns every quest object; the
+ * journal (party.quests) is a keyed view over it. A journal entry that is a
+ * detached copy - a restored save, a stale pre-defeat clone - first donates
+ * any FURTHER progress it carries to the pool object, then is replaced by it,
+ * so giver NPCs, the quest log and turn-in all read the same object.
+ */
+function syncQuestJournal(session) {
+  const party = session.party;
+  const pool = session.questPool;
+  if (!party || !party.quests || Array.isArray(party.quests) || !Array.isArray(pool)) return;
+  for (const q of pool) {
+    const j = party.quests[q.id];
+    if (!j) {
+      // Journal derives from pool: anything the party has engaged with is in
+      // the log even if the entry itself was lost (post-wipe party swap).
+      if (q.state === 'active' || q.state === 'complete' || q.state === 'rewarded' || q.state === 'failed') {
+        party.quests[q.id] = q;
+      }
+      continue;
+    }
+    if (j === q) continue;
+    if ((QUEST_STATE_RANK[j.state] || 0) > (QUEST_STATE_RANK[q.state] || 0) && j.state !== 'failed') {
+      q.state = j.state;
+      for (const o of q.objectives || []) {
+        const jo = (j.objectives || []).find((x) => x.id === o.id || (o.target && x.target === o.target));
+        if (jo && (jo.progress | 0) >= (o.progress | 0)) { o.progress = jo.progress; o.done = jo.done; }
+      }
+    }
+    party.quests[q.id] = q;
   }
-  // Otherwise the nearest live monster roughly in front of the party.
+}
+
+/**
+ * TAP SAFETY (mobile3 #1): a swing may only ever land on something the party
+ * is honestly at war with. Non-hostile townsfolk are invisible to target
+ * acquisition - hover, cone and surround scan alike - UNLESS they are already
+ * aggroed at the party (a mugger mid-retaliation is fair game). One stray tap
+ * must never one-shot a peasant and start a town massacre.
+ */
+function attackable(e) {
+  if (!e || e.category !== CATEGORY.MONSTER || e.dead) return false;
+  if (e.data && e.data.hostile === false && e.state !== 'chase' && e.state !== 'flee') return false;
+  return true;
+}
+
+export function pickTarget(session) {
+  if (attackable(session.hoverEntity)) return session.hoverEntity;
+  // Otherwise the nearest live hostile roughly in front of the party.
   const p = session.player;
   const fx = -Math.sin(p.yaw), fz = -Math.cos(p.yaw);
   let best = null, bestScore = -Infinity;
   for (const e of session.entities.list) {
-    if (e.category !== CATEGORY.MONSTER || e.dead || !e.visible) continue;
+    if (!e.visible || !attackable(e)) continue;
     const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z;
     const d = Math.hypot(dx, dz);
     if (d > 5000) continue;
@@ -457,8 +558,7 @@ function pickTarget(session) {
     // at the nearest hostile in arm's reach and square up to face it.
     let near = null, nd = Infinity;
     for (const e of session.entities.list) {
-      if (e.category !== CATEGORY.MONSTER || e.dead || !e.visible) continue;
-      if (e.data && e.data.hostile === false) continue;
+      if (!e.visible || !attackable(e)) continue;
       const d = Math.hypot(e.pos.x - p.pos.x, e.pos.z - p.pos.z);
       if (d <= 700 && d < nd) { nd = d; near = e; }
     }
@@ -774,6 +874,27 @@ function castSupport(session, ch, charIndex, spell, target, rnd) {
 
 // --- damage to the party ------------------------------------------------------
 
+/**
+ * A condition just landed on a party member: SAY SO, with its cost (playtest3
+ * #9 - Weak silently shaved max HP/SP and the player was never told).
+ */
+const INFLICT_ANNOUNCE = {
+  weak: 'is Weakened: -2 max HP/SP until cured',
+  drunk: 'is Drunk',
+  afraid: 'is Afraid: cannot close with the enemy',
+  poisoned_weak: 'is Poisoned', poisoned_severe: 'is badly Poisoned', poisoned_deadly: 'is deathly Poisoned',
+  diseased_weak: 'is Diseased', diseased_severe: 'is badly Diseased', diseased_deadly: 'is deathly Diseased',
+  cursed: 'is Cursed', asleep: 'is knocked senseless', paralyzed: 'is Paralyzed',
+  stoned: 'is turned to stone', insane: 'goes Insane',
+};
+
+function announceInflicts(session, victim, notes) {
+  for (const n of notes || []) {
+    const line = INFLICT_ANNOUNCE[n];
+    if (line) session.message(`${victim.name} ${line}!`, '#e04030');
+  }
+}
+
 /** Announce damage the rules layer has already applied. */
 function reportPartyDamage(session, ch, dmg) {
   if (dmg <= 0) return;
@@ -819,6 +940,7 @@ function rangedHitParty(session, e, combat, rnd) {
         continue;
       }
       reportPartyDamage(session, victim, en.damage);
+      announceInflicts(session, victim, en.notes);
       if (session.audio) session.audio.play(r.spell ? 'party_hurt' : 'arrow_hit', { volume: 0.6 });
       session.engine.setFlash(Math.min(0.45, en.damage / 60), 0xd02020);
       setTimeout(() => session.engine.setFlash(0), 90);
@@ -887,6 +1009,17 @@ export function checkPartyDefeat(session) {
     const party = session.party;
     const lost = Math.floor((party.gold | 0) * 0.1);
     party.gold = (party.gold | 0) - lost;
+    // MONEY PRINTER CLOSED (systems3 #2): the 10% penalty reaches the BANK
+    // too, and the defeat-added week never accrues interest - the account's
+    // settlement anchor is pushed past it. Wipe-spamming beside a full vault
+    // now costs 10% a wipe instead of minting 5% a wipe.
+    let bankLost = 0;
+    if (party.bank && (party.bank.balance | 0) > 0) {
+      bankLost = Math.floor(party.bank.balance * 0.1);
+      party.bank.balance -= bankLost;
+      party.bank.lastMinutes = (Number.isFinite(party.bank.lastMinutes)
+        ? party.bank.lastMinutes : session.clock.minutes) + 7 * 24 * 60;
+    }
     party.deaths = (party.deaths | 0) + 1;
     for (const c of party.members || []) {
       c.deaths = (c.deaths | 0) + 1;
@@ -916,13 +1049,17 @@ export function checkPartyDefeat(session) {
       if (session.clearHostilesNear) {
         session.clearHostilesNear(session.player.pos.x, session.player.pos.z, 1500);
       }
-      if (session.beginGrace) session.beginGrace(2);
+      // Safe-spawn grace (wowjudge #1): nothing within 2500u, and nothing
+      // engages until the player's first movement input.
+      if (session.applySafeArrival) session.applySafeArrival(2500);
+      else if (session.beginGrace) session.beginGrace(2);
     } catch (err) { console.warn('defeat respawn failed', err); }
     session.inCombat = false;
     session.turnBased = false;
     session._combatLinger = 0;
-    session.message(`You come to by the fountain in New Sorpigal, a week later and ${lost} gold poorer.`, '#ffd84a');
-    session.message('The party is weak from the ordeal. The temple can restore them.', '#ffd84a');
+    const lostMsg = bankLost > 0 ? `${lost} gold (and ${bankLost} from the bank) poorer` : `${lost} gold poorer`;
+    session.message(`You come to by the fountain in New Sorpigal, a week later and ${lostMsg}.`, '#ffd84a');
+    session.message('Weakened: -2 max HP/SP and dulled stats until cured - rest, or pay the temple.', '#ffd84a');
     // Music: the dirge is still holding the deck; the director takes over
     // when the override clears. No forced 'field' here (audio #2/#3).
     session._defeatCooldown = 3;

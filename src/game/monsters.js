@@ -588,11 +588,16 @@ family('Medusa', ['Medusa', 'Medusa Enchantress', 'Gorgon'], [35, 40, 45], {
   desc: 'Do not look at it. It is very hard not to look at it.',
 });
 
-family('Merchant', ['Peasant', 'Peasant', 'Peasant'], [4, 5, 6], {
+// Tier B is a mugger in a trader's coat, not a civilian: anything that can end
+// up fighting the party must never wear a townsperson's nameplate (playtest3
+// #8, wowjudge #1). Tiers A and C stay honest non-hostile filler.
+family('Merchant', ['Peasant', 'Highwayman', 'Peasant'], [4, 5, 6], {
   kind: 'human', size: 185, speed: 120, moveType: 'short', aiType: 'wary',
-  groupSize: [1, 2], hostile: false, fleeAtHP: 0.6, dmgMul: 0.5, goldMul: 1.5,
-  aggroRange: 700, spawnRegions: ['town', 'free_haven', 'castle_ironfist', 'new_sorpigal'],
-  desc: 'Townsfolk in tunic and apron. They would rather you did not.',
+  groupSize: [1, 2], hostile: [false, true, false], fleeAtHP: 0.6, dmgMul: 0.5, goldMul: 1.5,
+  aggroRange: [700, 1100, 700], spawnRegions: ['town', 'free_haven', 'castle_ironfist', 'new_sorpigal'],
+  desc: ['Townsfolk in tunic and apron. They would rather you did not.',
+    'A trader\'s coat over a cudgel. The prices are extortionate.',
+    'Townsfolk in tunic and apron. They would rather you did not.'],
 });
 
 family('Minotaur', ['Minotaur', 'Minotaur Mage', 'Minotaur King'], [39, 59, 79], {
@@ -637,17 +642,26 @@ family('Ogre', ['Ogre', 'Ogre Raider', 'Ogre Chieftain'], [15, 20, 28], {
   desc: 'Grey-brown, pot-bellied, tusked, and carrying a tree.',
 });
 
-family('PeasantF1', ['Peasant', 'Peasant', 'Peasant'], [1, 2, 3], {
-  kind: 'human', size: 180, speed: 120, moveType: 'short', aiType: 'wary',
-  groupSize: [1, 3], hostile: false, fleeAtHP: 0.7, dmgMul: 0.6, aggroRange: 600,
+// PeasantF1C and PeasantF2A were the "Peasant"-labelled muggers of playtest3
+// #8: hostile variants now carry bandit names and an honest hostile flag,
+// while the remaining tiers stay true civilians.
+family('PeasantF1', ['Peasant', 'Peasant', 'Cutpurse'], [1, 2, 3], {
+  kind: 'human', size: 180, speed: [120, 120, 200], moveType: 'short', aiType: ['wary', 'wary', 'aggress'],
+  groupSize: [1, 3], hostile: [false, false, true], fleeAtHP: 0.7, dmgMul: [0.6, 0.6, 1],
+  aggroRange: [600, 600, 1100],
   spawnRegions: ['town', 'new_sorpigal', 'free_haven', 'castle_ironfist'],
-  desc: 'A woman in a long skirt and shawl. Non-hostile filler.',
+  desc: ['A woman in a long skirt and shawl. Non-hostile filler.',
+    'A woman in a long skirt and shawl. Non-hostile filler.',
+    'Skirt hitched for running, and your purse strings already cut.'],
 });
-family('PeasantF2', ['Peasant', 'Peasant', 'Peasant'], [1, 2, 3], {
-  kind: 'human', size: 180, speed: 120, moveType: 'short', aiType: 'wary',
-  groupSize: [1, 3], hostile: false, fleeAtHP: 0.7, dmgMul: 0.6, aggroRange: 600,
+family('PeasantF2', ['Footpad', 'Peasant', 'Peasant'], [1, 2, 3], {
+  kind: 'human', size: 180, speed: [190, 120, 120], moveType: 'short', aiType: ['aggress', 'wary', 'wary'],
+  groupSize: [1, 3], hostile: [true, false, false], fleeAtHP: 0.7, dmgMul: [0.9, 0.6, 0.6],
+  aggroRange: [1100, 600, 600],
   spawnRegions: ['town', 'new_sorpigal', 'free_haven', 'silver_cove'],
-  desc: 'Another townswoman. Enroth is full of them.',
+  desc: ['Desperate, quick, and after whatever is loose in your pockets.',
+    'Another townswoman. Enroth is full of them.',
+    'Another townswoman. Enroth is full of them.'],
 });
 family('PeasantF3', ['Cutpurse', 'Bounty Hunter', 'Assassin'], [3, 5, 7], {
   kind: 'human', size: 180, speed: 210, moveType: 'long', aiType: 'aggress',
@@ -812,12 +826,26 @@ unique('zReactor', 'Reactor', 100, {
 export const MONSTERS = M;
 const BY_ID = new Map(M.map((m) => [m.id, m]));
 
+// Display name -> id, mirroring creatures.js's CREATURE_TIER_BY_NAME contract
+// (first declaration wins for duplicated civilian names). The sprite baker
+// resolves 'Goblin Shaman' to a real sheet; the bestiary must resolve it to
+// the REAL def too, or every name-based spawn is a stat-less L1 husk with no
+// ranged attack (visuals3 #1).
+const BY_NAME = new Map();
+for (const m of M) if (!BY_NAME.has(m.name)) BY_NAME.set(m.name, m.id);
+
 export const MONSTER_IDS = M.map((m) => m.id);
 /** { Goblin: { id, names, tiers } } - the sprite families. */
 export const MONSTER_FAMILIES = FAMILY_INDEX;
 export const FAMILY_IDS = Object.keys(FAMILY_INDEX);
 
-export function monsterById(id) { return BY_ID.get(id) || null; }
+/** Look a monster up by id OR display name ('Goblin Shaman' -> GoblinB). */
+export function monsterById(id) {
+  const d = BY_ID.get(id);
+  if (d) return d;
+  const named = BY_NAME.get(id);
+  return named ? BY_ID.get(named) || null : null;
+}
 
 /** The three tiers of a sprite family. */
 export function tiersOf(familyId) {
@@ -946,7 +974,9 @@ export function monsterPlural(name) {
 let MUID = 1;
 
 export function spawnMonster(id, opts) {
-  const def = BY_ID.get(id);
+  // Route through the same id-or-name resolution as monsterById, so a spawn
+  // script that says 'Goblin Shaman' gets a real combatant, not null.
+  const def = monsterById(id);
   if (!def) return null;
   const o = opts || {};
   return {

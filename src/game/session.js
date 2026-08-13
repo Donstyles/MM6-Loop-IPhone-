@@ -241,6 +241,7 @@ export class Session {
     if (this.map && this.map.dispose) this.map.dispose();
     this.mapGroup.clear();
     this.entities.clear();
+    this._unspawned = [];
     this.sprites.begin();
     this.sprites.end();
 
@@ -546,6 +547,13 @@ export class Session {
     // Move
     const axes = input.axes();
     const wantJump = input.pressed('jump');
+    // The first real movement input ends the safe-arrival hold: from here on
+    // the world is allowed to notice the party (wowjudge #1).
+    if (this._awaitFirstMove
+      && (Math.abs(axes.forward) > 0.05 || Math.abs(axes.strafe) > 0.05
+        || Math.abs(axes.turn) > 0.05 || wantJump)) {
+      this._awaitFirstMove = false;
+    }
     const prevVy = this.player.vel.y;
     const wasGround = this.player.onGround;
     const prevX = this.player.pos.x, prevZ = this.player.pos.z;
@@ -555,19 +563,28 @@ export class Session {
       indoor: this.map ? this.map.indoor : false,
     });
     this.clampToBounds(dt);
-    this.player.applyTo(this.engine.camera);
 
-    // In turns, walking is not free: a couple of steps per round pass, then
-    // every stride spends action points, and running dry hands the round to
-    // the enemy (systems #2 - TB was a stealth cloak).
-    if (this.turnBased && this.turnActor === 'party' && this.countHostiles() > 0) {
+    // In turns, walking is not free - IN ANY PHASE (systems3 #5: the monster
+    // phase was a free-sprint window; a party fled 5000u through three
+    // goblins untouched). A couple of strides per round pass, then every
+    // stride spends action points, and with the pool dry movement is BLOCKED
+    // outright: fleeing costs the same points as fighting.
+    if (this.turnBased && this.countHostiles() > 0) {
       this._tbMoved = (this._tbMoved || 0) + Math.hypot(this.player.pos.x - prevX, this.player.pos.z - prevZ);
       const FREE = 520;              // ~two strides on the house
-      while (this._tbMoved > FREE + 260 && this.turnBased && this.turnActor === 'party') {
+      while (this._tbMoved > FREE + 260) {
         this._tbMoved -= 260;
-        this.spendTurnPoints(26);
+        if (this.turnActor === 'party') this.spendTurnPoints(26);
+        else this.turnPoints = Math.max(0, (this.turnPoints | 0) - 26);
+      }
+      if ((this.turnPoints | 0) <= 0 && this._tbMoved > FREE) {
+        this.player.pos.x = prevX;
+        this.player.pos.z = prevZ;
+        this.player.vel.x = 0;
+        this.player.vel.z = 0;
       }
     }
+    this.player.applyTo(this.engine.camera);
 
     if (this.audio) {
       if (wantJump && wasGround && !this.player.onGround) this.audio.play('jump', { volume: 0.5 });
@@ -583,6 +600,7 @@ export class Session {
     const ectx = this.entityCtx(dt);
     ectx.frozen = this.turnBased;
     this.entities.update(dt, ectx);
+    this.enforceTownLeash();
     this.updateTurns(dt);
     if (this.vfx) this.vfx.update(dt, ectx);
 
@@ -997,6 +1015,11 @@ export class Session {
     meta.kind = meta.kind || meta.type || (this.map && this.map.indoor ? 'dungeon' : 'region');
     meta.type = meta.type || meta.kind;
     if (meta.id === undefined || meta.id === null) meta.id = this.mapId;
+    // The dungeon's way home rides in the save even when a loader rewrote
+    // mapMeta without it (systems3 #3): _dungeonBack is the live truth.
+    if (meta.kind === 'dungeon' && !meta.back && this._dungeonBack) {
+      meta.back = JSON.parse(JSON.stringify(this._dungeonBack));
+    }
     return {
       v: 2,
       worldSeed: this.worldSeed ?? null,
@@ -1043,6 +1066,8 @@ export class Session {
         label: e.label !== (e.data && e.data.name) ? e.label : null,
       });
     }
+    // Records a previous restore could not spawn ride along unchanged.
+    for (const m of this._unspawned || []) monsters.push(m);
     return monsters;
   }
 
@@ -1085,9 +1110,27 @@ export class Session {
         party.monstersKilled = s.stats.monstersKilled | 0;
       }
     }
-    // The pool regenerates deterministically with the world seed; fold the
-    // saved progress back onto the regenerated quest objects in place, so the
-    // NPCs already holding references see the restored states.
+    // QUEST STATE IS SACRED (playtest3 #1): the pool must exist FOR THIS
+    // WORLD SEED before any state is folded onto it. The boot flow builds a
+    // pool for the title world's random seed; a cross-boot load carries a
+    // different seed, and until now the mismatched pool lingered until the
+    // next defeat reload nuked it mid-game. Rebuild it here, explicitly, for
+    // every region the save had visited (recovered from the pool ids).
+    const poolWasForThisWorld = this._questPoolSeed === this.worldSeed;
+    if (this.ensureQuestPool) {
+      const regions = new Set();
+      for (const q of s.questPool || []) {
+        const at = String(q.id).indexOf(':');
+        if (at > 0) regions.add(String(q.id).slice(0, at));
+      }
+      if (s.mapMeta && (s.mapMeta.kind === 'region' || s.mapMeta.type === 'region') && s.mapMeta.id) {
+        regions.add(s.mapMeta.id);
+      }
+      if (!regions.size) this.ensureQuestPool(null, this.worldSeed);
+      for (const rid of regions) this.ensureQuestPool(rid, this.worldSeed);
+    }
+    // Fold the saved progress back onto the (regenerated) quest objects in
+    // place, so the NPCs already holding references see the restored states.
     if (Array.isArray(s.questPool) && Array.isArray(this.questPool)) {
       const by = new Map(s.questPool.map((q) => [q.id, q]));
       for (const q of this.questPool) {
@@ -1103,6 +1146,37 @@ export class Session {
         if (party && party.quests && party.quests[q.id]) {
           Object.assign(q, party.quests[q.id]);
           party.quests[q.id] = q;
+        }
+      }
+    }
+    // The current map's NPCs were bound to the discarded pool's objects:
+    // release and re-bind them against the live pool.
+    if (!poolWasForThisWorld && this.reattachQuestNPCs && this.map && !this.map.indoor) {
+      try { this.reattachQuestNPCs((s.mapMeta && s.mapMeta.id) || this.mapId); } catch (e) { /* best effort */ }
+    }
+    // SAVE SEAM (systems3 #1): the shell rebuilt the map BEFORE this ran, so
+    // populate applied whatever stale/empty ledger this boot was carrying.
+    // Now that the SAVED worldState is installed, re-impose it: opened chests
+    // stay empty, dropped loot returns, kills stay killed - no chest faucet.
+    this.reapplyMapState();
+    // A dungeon save remembers the door it came in through (systems3 #3):
+    // restore the exit origin and re-aim the already-spawned exit markers,
+    // or every exit dumps the party at the region fallback 20k units away.
+    if (s.mapMeta && (s.mapMeta.kind === 'dungeon' || s.mapMeta.type === 'dungeon')) {
+      this._dungeonBack = s.mapMeta.back || null;
+      if (this.mapMeta) {
+        this.mapMeta.back = this._dungeonBack;
+        if (this.mapMeta.id === undefined || this.mapMeta.id === null) {
+          this.mapMeta.id = s.mapMeta.id !== undefined ? s.mapMeta.id : this.mapId;
+        }
+      }
+      const back = this._dungeonBack;
+      if (back) {
+        for (const e of this.entities.list) {
+          if (e.kind !== 'dungeon_exit' || !e.interact) continue;
+          if (back.region) e.interact.toRegion = back.region;
+          e.interact.entry = { x: back.x, y: back.y, z: back.z, yaw: back.yaw || 0 };
+          e.interact.seed = this.worldSeed || e.interact.seed;
         }
       }
     }
@@ -1126,7 +1200,26 @@ export class Session {
     this._accMin = 0;
     this._tickAnchor = this.clock.minutes;
     if (party) party._tickedTo = this.clock.minutes;
+    // Loading is an arrival: nothing hostile inside 2500u, nothing engages
+    // until the player actually moves (wowjudge #1).
+    if (this.map && !this.map.indoor && this.applySafeArrival) this.applySafeArrival(2500);
     return true;
+  }
+
+  /**
+   * Re-impose the world ledger on the live map AFTER worldState has been
+   * (re)installed - the load path rebuilds the map before restoreState runs,
+   * so populate's own applyMapState saw the wrong ledger. Ground loot from
+   * the stale application is cleared and chest flags reset first, so the
+   * restored ledger applies to a clean slate (systems3 #1).
+   */
+  reapplyMapState() {
+    if (!this.map) return false;
+    for (const e of [...this.entities.list]) {
+      if (e.category === CATEGORY.ITEM) this.entities.removeEntity(e);
+      else if (e.interact && e.interact.kind === 'chest') e.interact.opened = false;
+    }
+    return this.applyMapState();
   }
 
   /** Rebuild the monster/corpse population of the current map from a snapshot. */
@@ -1134,9 +1227,14 @@ export class Session {
     for (const e of [...this.entities.list]) {
       if (e.category === CATEGORY.MONSTER || e.category === CATEGORY.CORPSE) this.entities.removeEntity(e);
     }
+    // Records that fail to spawn (a baker hiccup right after boot, systems3
+    // #6) are PARKED, not dropped: the next snapshot writes them back out, so
+    // a transient throw can no longer erase a third of a map's population.
+    this._unspawned = [];
     for (const m of list) {
-      const e = this.spawner.spawnMonster(m.kind, m.x, m.y, m.z, {});
-      if (!e) continue;
+      let e = this.spawner.spawnMonster(m.kind, m.x, m.y, m.z, {});
+      if (!e) e = this.spawner.spawnMonster(m.kind, m.x, m.y, m.z, { seed: 2 });
+      if (!e) { this._unspawned.push(JSON.parse(JSON.stringify(m))); continue; }
       if (e.mon) e.mon.hp = m.hp;
       e.hp = m.hp;
       if (m.group !== null && m.group !== undefined) e.spawnGroup = m.group;
@@ -1301,6 +1399,73 @@ export class Session {
   /** Monsters hold their swings for a beat after the party wakes. */
   beginGrace(seconds = 2) { this._graceT = Math.max(this._graceT || 0, seconds); }
 
+  /**
+   * TOWN SANITY (playtest3 #8, wowjudge #1): hostile wanderers never path
+   * inside the town wall. A soft leash, applied every frame: any hostile in
+   * idle/wander that has drifted inside the wall radius (and is not right on
+   * top of the party - a debug spawn or an active scrap stays honest) is
+   * projected back to the wall line and gives up the approach.
+   */
+  enforceTownLeash() {
+    const towns = this.regionTowns;
+    if (!towns || !towns.length || (this.map && this.map.indoor)) return;
+    const px = this.player.pos.x, pz = this.player.pos.z;
+    for (const e of this.entities.list) {
+      if (e.category !== CATEGORY.MONSTER || e.dead) continue;
+      if (e.data && e.data.hostile === false) continue;
+      if (e.state === 'chase' || e.state === 'flee') continue;   // engaged: the fight is the fight
+      if (Math.hypot(e.pos.x - px, e.pos.z - pz) < 1400) continue; // near the party: aggro handles it
+      for (const t of towns) {
+        // regionTowns pads the circle by +400 for the audio director; the
+        // WALL stands at the town's own radius.
+        const wallR = Math.max(800, (t.r || 2000) - 400);
+        const dx = e.pos.x - t.x, dz = e.pos.z - t.z;
+        const d = Math.hypot(dx, dz);
+        if (d >= wallR) continue;
+        const k = d < 1 ? 0 : (wallR + 60) / d;
+        const nx = d < 1 ? t.x + wallR + 60 : t.x + dx * k;
+        const nz = d < 1 ? t.z : t.z + dz * k;
+        e.pos.x = nx;
+        e.pos.z = nz;
+        e.pos.y = this.collision.groundAt(nx, nz, e.pos.y);
+        if (e.home) e.home.set(nx, e.pos.y, nz);
+        break;
+      }
+    }
+  }
+
+  /**
+   * SAFE ARRIVAL (wowjudge #1): after newGame / load / defeat-respawn the
+   * plaza is calm - hostiles inside `radius` are pushed out to its rim, and
+   * nothing engages until the player's first movement (or attack) input.
+   */
+  applySafeArrival(radius = 2500) {
+    const px = this.player.pos.x, pz = this.player.pos.z;
+    let n = 0;
+    for (const e of this.entities.list) {
+      if (e.category !== CATEGORY.MONSTER || e.dead) continue;
+      if (e.data && e.data.hostile === false) continue;
+      const dx = e.pos.x - px, dz = e.pos.z - pz;
+      const d = Math.hypot(dx, dz);
+      if (d >= radius) continue;
+      const k = d < 1 ? 0 : (radius + 150) / d;
+      const nx = d < 1 ? px + radius + 150 : px + dx * k;
+      const nz = d < 1 ? pz : pz + dz * k;
+      e.pos.x = nx;
+      e.pos.z = nz;
+      e.pos.y = this.collision.groundAt(nx, nz, e.pos.y);
+      if (e.home) e.home.set(nx, e.pos.y, nz);
+      e.state = 'idle';
+      n++;
+    }
+    this._awaitFirstMove = true;
+    this.beginGrace(2);
+    return n;
+  }
+
+  /** True while nothing hostile may engage the party. */
+  aggroSuppressed() { return (this._graceT || 0) > 0 || !!this._awaitFirstMove; }
+
   /** An escorted NPC trails the party; if it dies, the quest fails. */
   updateEscort(dt) {
     const es = this.escort;
@@ -1326,7 +1491,10 @@ export class Session {
   // --- combat hooks (wired to game/combat.js by the shell) ------------------
 
   onAggro(e) {
-    if (this._graceT > 0) return;        // post-respawn beat: nothing engages
+    if (this.aggroSuppressed()) {        // arrival hold: nothing engages yet
+      if (e && e.state === 'chase') e.state = 'idle';
+      return;
+    }
     this.inCombat = true;
     this._combatLinger = 1.5;
     this.onCombatChange(true);
@@ -1362,6 +1530,21 @@ export class Session {
     const was = this.inCombat;
     this.inCombat = n > 0 || this._combatLinger > 0;
     if (was !== this.inCombat) this.onCombatChange(this.inCombat);
+    // The ride rides the THREAT COUNT, not a binary (audio3): one straggler
+    // simmers, a pack boils. Held steady while the dirge owns the deck; a
+    // fight that outlives the dirge picks its track up here.
+    if (this.music && this._defeatMusicT <= 0) {
+      if (this.inCombat && !this._musicCombatOn) {
+        this._musicCombatOn = true;
+        this._victoryT = 0;
+        this.music.play('combat');
+      }
+      const target = this.inCombat ? Math.min(1, 0.4 + 0.2 * n) : 0;
+      if (this._musicIntensity !== target) {
+        this._musicIntensity = target;
+        this.music.setIntensity(target);
+      }
+    }
     // How long this engagement has actually run, and whether the party bled:
     // the victory sting is EARNED, not handed out for one idle pot-shot.
     if (this.inCombat) {
@@ -1399,11 +1582,36 @@ export class Session {
   /** Swords out: combat music in; on the way out the DIRECTOR picks the track. */
   onCombatChange(on) {
     if (!this.music) return;
-    this.music.setIntensity(on ? 1 : 0);
+    // The defeat dirge OWNS the deck: respawning into a stray aggro must not
+    // cut it with the combat track (audio3 #1).
+    if (on && this._defeatMusicT > 0) return;
+    // Debounce: aggro events re-fire this several times per fight (audio3
+    // #8); only a real state flip touches the deck.
+    if (on === !!this._musicCombatOn) return;
+    this._musicCombatOn = on;
     if (on) { this._victoryT = 0; this.music.play('combat'); }
+    else this.music.setIntensity(0);
     // Post-combat the session deliberately plays NOTHING: combatMusicOverride
     // goes null (or 'victory' briefly) and the audio director chooses the
     // situational track. session.musicTrack was a stale memo (audio #2).
+  }
+
+  /**
+   * Everything the shell's quitGame needs cleared so combat music can never
+   * loop over the title screen (audio3 #2).
+   */
+  clearCombatState() {
+    this.inCombat = false;
+    this.turnBased = false;
+    this.turnActor = null;
+    this.turnQueue.length = 0;
+    this._combatLinger = 0;
+    this._victoryT = 0;
+    this._defeatMusicT = 0;
+    this._combatT = 0;
+    this._partyHurt = false;
+    this._musicCombatOn = false;
+    if (this.music) this.music.setIntensity(0);
   }
 
   /**
@@ -1427,13 +1635,13 @@ export class Session {
   }
 
   monsterAttack(e) {
-    if (this._graceT > 0) return;
+    if (this.aggroSuppressed()) return;
     this._partyHurt = true;
     if (this.onMonsterAttackCb) this.onMonsterAttackCb(e);
   }
 
   monsterRanged(e) {
-    if (this._graceT > 0) return;
+    if (this.aggroSuppressed()) return;
     this._partyHurt = true;
     if (this.onMonsterRangedCb) this.onMonsterRangedCb(e);
   }
@@ -1519,7 +1727,7 @@ export class Session {
    * tool, not a cloak of invisibility (systems #2).
    */
   scanAggro() {
-    if (this._graceT > 0) return;
+    if (this.aggroSuppressed()) return;
     for (const e of this.entities.list) {
       if (e.category !== CATEGORY.MONSTER || e.dead || e.state !== 'idle') continue;
       if (e.data && e.data.hostile === false) continue;
@@ -1533,11 +1741,12 @@ export class Session {
 
   /**
    * How patient the enemy is while the party dithers. MM6's turns wait
-   * forever; ours wait twelve seconds of UNPAUSED time - the timer never runs
+   * forever; ours wait six seconds of UNPAUSED time (~1 enemy action / 6s -
+   * systems3 #5 measured 1/12.5s, glacial) - the timer never runs
    * while a screen is open (update() returns before reaching here), so
    * reading the spellbook costs nothing (playtest #3).
    */
-  static get TB_HESITATION() { return 12; }
+  static get TB_HESITATION() { return 6; }
 
   updateTurns(dt) {
     if (!this.turnBased) return;
@@ -1591,9 +1800,24 @@ export class Session {
 
   takeMonsterTurn(e) {
     const px = this.player.pos.x, pz = this.player.pos.z;
-    const dist = Math.hypot(e.pos.x - px, e.pos.z - pz);
+    let dist = Math.hypot(e.pos.x - px, e.pos.z - pz);
     const reach = (e.data?.reach || 260) + 90;
+    const step = (e.speed || 260) * 0.9;
     e.yaw = Math.atan2(px - e.pos.x, pz - e.pos.z) + Math.PI;
+
+    // LUNGE (systems3 #5): a target within reach-plus-one-step is closed on
+    // AND struck in the same turn - backpedalling one stride per round no
+    // longer keeps a melee monster permanently out of its own reach.
+    if (dist > reach && dist <= reach + step) {
+      const stepLen = dist - reach * 0.85;
+      const nx = e.pos.x + ((px - e.pos.x) / dist) * stepLen;
+      const nz = e.pos.z + ((pz - e.pos.z) / dist) * stepLen;
+      if (!this.map.blocked(nx, e.pos.y, nz, e.radius, 100)) {
+        e.pos.x = nx; e.pos.z = nz;
+        e.pos.y = this.map.groundAt(nx, nz, e.pos.y);
+        dist = Math.hypot(e.pos.x - px, e.pos.z - pz);
+      }
+    }
 
     if (dist <= reach) {
       e.setAction('attack');
@@ -1603,7 +1827,7 @@ export class Session {
       this.monsterRanged(e);
     } else {
       // One turn buys one step of movement.
-      const stepLen = Math.min(dist - reach, (e.speed || 260) * 0.9);
+      const stepLen = Math.min(dist - reach, step);
       const nx = e.pos.x + ((px - e.pos.x) / dist) * stepLen;
       const nz = e.pos.z + ((pz - e.pos.z) / dist) * stepLen;
       if (!this.map.blocked(nx, e.pos.y, nz, e.radius, 100)) {
@@ -1615,13 +1839,15 @@ export class Session {
   }
 
   footsteps(dt) {
+    // Grounded, audible footfalls (audio3 #3): ~0.45s cadence at walk speed
+    // and enough level to actually register under the music bed.
     this._stepT = (this._stepT || 0) + dt * (this.player.vel.length() / 500);
-    if (this._stepT > 0.62) {
+    if (this._stepT > 0.45) {
       this._stepT = 0;
       const surf = this.map && this.map.surfaceAt
         ? this.map.surfaceAt(this.player.pos.x, this.player.pos.z)
         : 'grass';
-      this.audio.play(`step_${surf}`, { volume: 0.35, rate: 0.9 + Math.random() * 0.2 });
+      this.audio.play(`step_${surf}`, { volume: 0.55, rate: 0.9 + Math.random() * 0.2 });
     }
   }
 

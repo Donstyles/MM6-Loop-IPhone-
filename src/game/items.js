@@ -9,6 +9,7 @@
 // `def` is the template id, never the object, so instances serialise cleanly.
 
 import { Rand } from '../core/rng.js';
+import { SPELLS } from './spells.js';
 
 // ---------------------------------------------------------------------------
 // Slots and types
@@ -590,7 +591,9 @@ export function itemValue(item) {
   const art = item.artifactId ? artifactById(item.artifactId) : null;
   if (art) return art.value;
   const def = itemDef(item.def);
-  if (!def) return 1;
+  // Def-less instances (scrolls, wands, spellbooks) carry their own value;
+  // returning a flat 1 made every spellbook a one-gold item in the shop.
+  if (!def) return Math.max(1, item.value | 0 || 1);
   let v = def.value || 1;
   if (item.bonus) v += item.bonus * item.bonus * 100;
   let mult = 1;
@@ -701,6 +704,13 @@ export function itemDescription(item) {
   if (bits.length) lines.push(bits.join(', '));
   if (mods.elemental) for (const e of mods.elemental) lines.push(`+${e.dice.n}d${e.dice.s} ${e.element} damage`);
   if (mods.vampiric) lines.push(`Drains ${Math.round(mods.vampiric * 100)}% of damage as health.`);
+  if (item.type === 'spellbook' && item.spellId) {
+    lines.push(`Teaches ${item.name} (${item.school || 'arcane'} magic). Use it to learn the spell.`);
+  } else if (item.type === 'scroll' && item.spellId) {
+    lines.push('A single casting, no skill required. Use it.');
+  } else if (item.type === 'wand' && item.spellId) {
+    lines.push(`${item.charges}/${item.maxCharges} charges.`);
+  }
   if (art) lines.push(art.desc);
   else if (def && def.desc) lines.push(def.desc);
   if (item.broken) lines.push('BROKEN - it must be repaired before it will work.');
@@ -793,6 +803,36 @@ export function makeSpellbook(spellId, spellName, school, value) {
     spellId, school, name: `${spellName}`, value: value || 500,
     gw: 2, gh: 2, x: -1, y: -1,
   };
+}
+
+/** Schools a starter party can actually learn from (light/dark gate later). */
+const BOOK_SCHOOLS = ['fire', 'air', 'water', 'earth', 'spirit', 'mind', 'body'];
+
+/**
+ * 2-3 learnable spellbooks for a magic shop's shelves: low-tier spells of the
+ * base schools, priced 50-150 gold so they land inside hour-one income.
+ * Higher-tier shops rack deeper spells (their prices scale with the spell).
+ */
+export function spellbookStock(rand, tier) {
+  const maxTier = Math.min(4, 1 + (tier | 0));
+  const pool = SPELLS.filter((s) => BOOK_SCHOOLS.includes(s.school) && s.tier <= maxTier && s.tier >= 1);
+  const out = [];
+  const seen = new Set();
+  const n = 2 + rand.int(2);   // 2-3 books
+  for (let i = 0; i < n && pool.length; i++) {
+    let sp = null;
+    for (let tries = 0; tries < 8; tries++) {
+      const cand = rand.pick(pool);
+      if (!seen.has(cand.id)) { sp = cand; break; }
+      sp = cand;
+    }
+    seen.add(sp.id);
+    // Tier 1-2 books sit inside hour-one income (50-150g); deeper books climb.
+    const cap = sp.tier <= 2 ? 150 : 150 + (sp.tier - 2) * 200;
+    const value = Math.min(cap, 50 + sp.tier * 30 + (sp.sp | 0) * 5 + rand.int(0, 15));
+    out.push(makeSpellbook(sp.id, sp.name, sp.school, Math.max(50, value)));
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -999,6 +1039,13 @@ export function shopStock(rand, kind, tier, count) {
     magic: ['amulet', 'ring'],
     alchemy: null,
   };
+  // PROGRESSION BEAT (playtest3 #4): a magic shop always racks 2-3 learnable
+  // spellbooks at 50-150 gold - low-tier, base-school - so hour one contains
+  // a spell purchase, not just rings the party cannot afford.
+  if (kind === 'magic') {
+    const books = spellbookStock(rand, tier);
+    for (const b of books) out.push(b);
+  }
   for (let i = 0; i < count; i++) {
     if (kind === 'alchemy') {
       const pool = P.filter((p) => p.layer <= Math.min(2, tier)).concat(REAGENTS.filter((r) => r.tier <= tier).map((r) => DEFS.get(r.id)));

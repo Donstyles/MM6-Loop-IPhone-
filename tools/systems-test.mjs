@@ -186,6 +186,28 @@ try {
 }
 ok(Monsters.spawnTableFor('new_sorpigal', 3).length > 0, 'New Sorpigal spawn table is empty');
 ok(Monsters.spawnTableFor('lair', 60).length > 0, 'lair spawn table is empty');
+// Display-name resolution mirrors the sprite baker's map (visuals3 #1): a
+// name-based spawn gets the REAL def, ranged attack and all.
+{
+  const shamanByName = Monsters.monsterById('Goblin Shaman');
+  ok(!!shamanByName && shamanByName.id === 'GoblinB', 'monsterById resolves display names');
+  ok(!!(shamanByName && shamanByName.ranged), 'the name-resolved shaman keeps its ranged attack');
+  const inst = Monsters.spawnMonster('Goblin Shaman');
+  ok(!!inst && inst.id === 'GoblinB' && inst.hp === 21, 'spawnMonster accepts display names too');
+  ok(Monsters.monsterById('GoblinB') === shamanByName, 'name and id resolve to the same def');
+}
+// Civilian-labelled hostiles are gone (playtest3 #8): everything hostile
+// wears a name that reads hostile.
+for (const m of Monsters.MONSTERS) {
+  if (m.hostile) ok(m.name !== 'Peasant', `${m.id} is hostile but labelled Peasant`);
+}
+ok(Monsters.monsterById('PeasantF1C').name === 'Cutpurse' && Monsters.monsterById('PeasantF1C').hostile,
+  'PeasantF1C renamed to a hostile Cutpurse');
+ok(Monsters.monsterById('PeasantF2A').name === 'Footpad' && Monsters.monsterById('PeasantF2A').hostile,
+  'PeasantF2A renamed to a hostile Footpad');
+ok(Monsters.monsterById('MerchantB').name === 'Highwayman' && Monsters.monsterById('MerchantB').hostile,
+  'MerchantB renamed to a hostile Highwayman');
+ok(Monsters.monsterById('PeasantM1A').hostile === false, 'true civilians stay non-hostile');
 say(`173 monsters, ${Monsters.FAMILY_IDS.length} sprite families, levels 1-100, HP curve verified`);
 
 // ---------------------------------------------------------------------------
@@ -229,6 +251,23 @@ for (const e of Items.ENCHANTMENTS) {
 }
 // Artifacts must reference a real base item.
 for (const a of Items.ARTIFACTS) ok(!!Items.itemDef(a.base), `artifact ${a.id} has no base item`);
+// Magic shops rack learnable spellbooks at hour-one prices (playtest3 #4).
+{
+  const srand = new Rand('books');
+  for (let t = 0; t < 6; t++) {
+    const stock = Items.shopStock(srand, 'magic', 1, 6);
+    const books = stock.filter((it) => it && it.type === 'spellbook');
+    ok(books.length >= 2 && books.length <= 3, `tier-1 magic shop racks ${books.length} spellbooks (want 2-3)`);
+    for (const b of books) {
+      ok(b.spellId && b.school, `spellbook ${b.name} names its spell and school`);
+      const v = Items.itemValue(b);
+      ok(v >= 50 && v <= 150, `tier-1 spellbook ${b.name} priced ${v} (want 50-150)`);
+    }
+  }
+  // Def-less instances keep their own value (spellbooks were 1 gold).
+  const scroll = Items.makeScroll('fire_bolt', 'Fire Bolt', 120);
+  ok(Items.itemValue(scroll) === 120, 'scroll value survives itemValue');
+}
 say(`${generated} items generated across levels 1-60; ${seenTypes.size} distinct types; alchemy lattice ok`);
 
 // ---------------------------------------------------------------------------
@@ -886,6 +925,25 @@ section('economy guards');
       }
     }
   }
+  // Cross-town clamp (systems3 #7a): across the SHIPPED town factors
+  // (village 1.1, town 1.0, city 0.9) the best SELL anywhere sits at or
+  // below 95% of the best BUY anywhere at the same skill - hauling between
+  // towns can never mint gold.
+  const shipped = [0.9, 1, 1.1];
+  for (let lv = 0; lv <= 14; lv += 2) {
+    for (let mastery = 1; mastery <= 3; mastery++) {
+      const c = Party.createCharacter(new Rand('x' + lv + mastery), 'knight', { name: 'X' });
+      if (lv > 0) c.skills.merchant = { level: lv, mastery };
+      let bestSell = 0, bestBuy = Infinity;
+      for (const tf of shipped) {
+        const p = Stats.priceMultipliers(c, tf);
+        bestSell = Math.max(bestSell, p.sell);
+        bestBuy = Math.min(bestBuy, p.buy);
+      }
+      ok(bestSell <= bestBuy * 0.951 + 1e-9,
+        `cross-town arbitrage open at merchant ${lv}/${mastery}: sell ${bestSell.toFixed(3)} vs best buy ${bestBuy.toFixed(3)}`);
+    }
+  }
   // Master's atCost: buys at cost (multiplier capped at 1), never below-cost.
   const m = Party.createCharacter(new Rand('mm'), 'knight', { name: 'MM' });
   m.skills.merchant = { level: 10, mastery: Skills.MASTERY.MASTER };
@@ -1052,10 +1110,13 @@ try {
     ok(Session.DUNGEON_RESPAWN_MINUTES >= 5 * 28 * 24 * 60, 'dungeon respawn is months');
   }
 
-  // TB fairness: hesitation is long, and there is a movement/points tax.
+  // TB fairness: hesitation hands the round over on a ~6s cadence (systems3
+  // #5 measured one enemy action per 12.5s - glacial), and there is a
+  // movement/points tax in EVERY phase.
   {
     const s = makeSession('tb');
-    ok(Session.TB_HESITATION >= 10, 'TB hesitation must be >= 10s');
+    ok(Session.TB_HESITATION >= 5 && Session.TB_HESITATION <= 8,
+      `TB hesitation should be ~6s, is ${Session.TB_HESITATION}`);
     s.enterTurnBased();
     ok(s.turnBased && s.turnPoints === 130, 'TB engages');
     s.spendTurnPoints(26);
@@ -1063,7 +1124,227 @@ try {
     s.leaveTurnBased();
   }
 
-  say('session-level checks complete (one clock, rng streams, defeat, ledger, TB)');
+  // TB movement billing/blocking in the MONSTER phase (systems3 #5): fleeing
+  // costs the same points as fighting, and a dry pool stops the sprint.
+  {
+    const s = makeSession('tbmove');
+    const gob = s.entities.add(new Entity({
+      category: CATEGORY.MONSTER, kind: 'GoblinA', sheet: null, x: 0, y: 0, z: -2000,
+    }));
+    gob.data = Monsters.monsterById('GoblinA');
+    gob.state = 'chase';
+    s._awaitFirstMove = false;
+    s._graceT = 0;
+    s.enterTurnBased();
+    s.beginMonsterTurn();
+    ok(s.turnActor === 'monsters', 'monster phase engaged');
+    s.turnPoints = 26;
+    s._tbMoved = 770;          // free allowance walked off, one stride banked
+    const input = {
+      takeLook: () => ({ x: 0, y: 0 }),
+      down: () => false,
+      pressed: () => false,
+      axes: () => ({ forward: 1, strafe: 0, turn: 0 }),
+      pointer: null,
+    };
+    for (let i = 0; i < 3; i++) s.update(0.05, input);
+    ok(s.turnPoints === 0, `monster-phase movement drains the SAME pool (left ${s.turnPoints})`);
+    const x1 = s.player.pos.x, z1 = s.player.pos.z;
+    for (let i = 0; i < 5; i++) s.update(0.05, input);
+    const crept = Math.hypot(s.player.pos.x - x1, s.player.pos.z - z1);
+    ok(crept < 4, `with the pool dry, movement is BLOCKED, not billed (crept ${crept.toFixed(1)}u)`);
+    s.leaveTurnBased();
+  }
+
+  // Monster TB lunge: a target one step past reach is closed on AND struck in
+  // the same turn - backpedalling no longer outranges melee forever.
+  {
+    const s = makeSession('lunge');
+    const gob = s.entities.add(new Entity({
+      category: CATEGORY.MONSTER, kind: 'GoblinA', sheet: null, x: 0, y: 0, z: -480,
+    }));
+    gob.data = Monsters.monsterById('GoblinA');
+    gob.mon = Monsters.spawnMonster('GoblinA');
+    gob.state = 'chase';
+    gob.speed = 260;
+    s._awaitFirstMove = false;
+    s._graceT = 0;
+    let struck = 0;
+    s.onMonsterAttackCb = () => { struck++; };
+    s.takeMonsterTurn(gob);
+    ok(struck === 1, `monster within reach+step lunges and strikes (struck=${struck})`);
+  }
+
+  // Safe arrival (wowjudge #1): hostiles inside 2500u are pushed to the rim
+  // and nothing engages until the first movement input.
+  {
+    const s = makeSession('arrival');
+    const near = s.entities.add(new Entity({
+      category: CATEGORY.MONSTER, kind: 'GoblinA', sheet: null, x: 400, y: 0, z: 300,
+    }));
+    near.data = Monsters.monsterById('GoblinA');
+    const civ = s.entities.add(new Entity({
+      category: CATEGORY.MONSTER, kind: 'PeasantM1A', sheet: null, x: 200, y: 0, z: 100,
+    }));
+    civ.data = Monsters.monsterById('PeasantM1A');
+    s.applySafeArrival(2500);
+    const d = Math.hypot(near.pos.x - s.player.pos.x, near.pos.z - s.player.pos.z);
+    ok(d >= 2500, `hostile pushed out to ${Math.round(d)}u (needs >= 2500)`);
+    const dc = Math.hypot(civ.pos.x - s.player.pos.x, civ.pos.z - s.player.pos.z);
+    ok(dc < 2500, 'civilians stay put on arrival');
+    ok(s.aggroSuppressed(), 'aggro suppressed after arrival');
+    near.state = 'chase';
+    s.onAggro(near);
+    ok(near.state === 'idle' && s.inCombat === false, 'aggro during the hold is stood down');
+    const input = {
+      takeLook: () => ({ x: 0, y: 0 }), down: () => false, pressed: () => false,
+      axes: () => ({ forward: 1, strafe: 0, turn: 0 }), pointer: null,
+    };
+    s.update(0.05, input);
+    for (let i = 0; i < 50; i++) s.update(0.05, input);   // walk off the grace beat too
+    ok(!s.aggroSuppressed(), 'first movement input ends the hold');
+  }
+
+  // Town leash: a hostile wanderer inside the wall is projected back out.
+  {
+    const s = makeSession('leash');
+    s.regionTowns = [{ x: 0, z: 0, r: 2800 }];             // wall at 2400
+    s.player.pos.set(6000, 0, 6000);
+    const g = s.entities.add(new Entity({
+      category: CATEGORY.MONSTER, kind: 'GoblinA', sheet: null, x: 500, y: 0, z: 500,
+    }));
+    g.data = Monsters.monsterById('GoblinA');
+    g.state = 'wander';
+    s.enforceTownLeash();
+    ok(Math.hypot(g.pos.x, g.pos.z) >= 2400, `wanderer expelled to ${Math.round(Math.hypot(g.pos.x, g.pos.z))}u (wall 2400)`);
+    const npc = s.entities.add(new Entity({
+      category: CATEGORY.MONSTER, kind: 'PeasantM1A', sheet: null, x: 300, y: 0, z: 300,
+    }));
+    npc.data = Monsters.monsterById('PeasantM1A');
+    s.enforceTownLeash();
+    ok(Math.hypot(npc.pos.x, npc.pos.z) < 2400, 'civilians are not leashed');
+  }
+
+  // ------------------------------------------------------------------------
+  // QUEST STATE IS SACRED (playtest3 #1): the pool survives defeat and every
+  // repopulate; the journal mirrors it; turn-in still pays after a wipe.
+  // ------------------------------------------------------------------------
+  {
+    const s = makeSession('qdef');
+    s.ensureQuestPool('new_sorpigal', 12345);
+    const pool0 = s.questPool;
+    const q = pool0.find((x) => x.type === 'kill' && x.region === 'new_sorpigal' && x.state === 'available');
+    ok(!!q, 'the pool offers a starter kill quest');
+    ok(CG.giveQuest(s.party, q), 'quest accepted');
+    ok(q.state === 'active' && s.party.quests[q.id] === q, 'journal points at the POOL object');
+    const target = q.objectives[0].target;
+    Quests.dispatchQuestEvent(s.party, { type: 'kill', monsterId: target, count: 1 });
+    const prog0 = q.objectives[0].progress;
+    ok(prog0 >= 1, 'progress ticked before the wipe');
+
+    // Bank rides into the wipe too (systems3 #2).
+    s.party.bank = { balance: 5000, lastMinutes: s.clock.minutes, earned: 0 };
+    const bankAnchor0 = s.party.bank.lastMinutes;
+
+    for (const c of s.party.members) c.hp = 0;
+    for (let i = 0; i < 5; i++) CG.checkPartyDefeat(s);
+    s.transition.update(1.2);
+    await new Promise((r) => setTimeout(r, 20));
+    ok(s.party.deaths === 1, 'defeat fired');
+    ok(s.party.bank.balance === 4500, `defeat penalty reaches the bank (balance ${s.party.bank.balance})`);
+    ok(s.party.bank.lastMinutes >= bankAnchor0 + 7 * 24 * 60,
+      'the defeat-added week never accrues interest (anchor pushed past it)');
+
+    // The defeat reload re-runs ensureQuestPool - it must be a no-op.
+    s.ensureQuestPool('new_sorpigal', s.worldSeed);
+    s.ensureQuestPool('new_sorpigal', 999);   // even a stale per-call seed
+    ok(s.questPool === pool0, 'pool array survives repopulation untouched');
+    ok(s.questPool.indexOf(q) >= 0 && q.state === 'active' && q.objectives[0].progress === prog0,
+      'accepted quest keeps its state and progress through defeat');
+    ok(s.party.quests[q.id] === q, 'journal still mirrors the pool after defeat');
+
+    // Finish and turn in: the pipeline still pays.
+    Quests.dispatchQuestEvent(s.party, { type: 'kill', monsterId: target, count: 999 });
+    ok(q.state === 'complete', 'kill events still drive the quest');
+    const gold0 = s.party.gold;
+    const reward = CG.turnInQuest(s.party, q.id, (m, xp) => Combat.awardXP(m, xp));
+    ok(!!reward && s.party.gold === gold0 + reward.gold && q.state === 'rewarded',
+      'turn-in pays after a wipe');
+
+    // Cross-boot: a fresh session restoring the blob folds the same states.
+    const blob = JSON.parse(JSON.stringify(s.saveState()));
+    const s2 = makeSession('qdef2');
+    s2.worldSeed = null;                       // fresh boot: seed comes from the save
+    s2.restoreState(blob);
+    const q2 = (s2.questPool || []).find((x) => x.id === q.id);
+    ok(!!q2 && q2.state === 'rewarded', `restored pool keeps the rewarded state (${q2 && q2.state})`);
+    ok(s2.party.quests[q.id] === q2, 'restored journal points at the restored pool object');
+  }
+
+  // ------------------------------------------------------------------------
+  // TAP SAFETY (mobile3 #1): pickTarget never acquires a non-aggroed civilian.
+  // ------------------------------------------------------------------------
+  {
+    const s = makeSession('tap');
+    s._awaitFirstMove = false;
+    const peasant = s.entities.add(new Entity({
+      category: CATEGORY.MONSTER, kind: 'PeasantM1A', sheet: null, x: 0, y: 0, z: -400,
+    }));
+    peasant.data = Monsters.monsterById('PeasantM1A');
+    peasant.visible = true;
+    ok(CG.pickTarget(s) === null, 'cone scan skips a peaceful peasant dead ahead');
+    s.hoverEntity = peasant;
+    ok(CG.pickTarget(s) === null, 'hover on a peaceful peasant is not a target either');
+    s.hoverEntity = null;
+    peasant.state = 'chase';                       // a mugger mid-retaliation
+    ok(CG.pickTarget(s) === peasant, 'an aggroed civilian IS attackable');
+    peasant.state = 'idle';
+    const gob = s.entities.add(new Entity({
+      category: CATEGORY.MONSTER, kind: 'GoblinA', sheet: null, x: 0, y: 0, z: -700,
+    }));
+    gob.data = Monsters.monsterById('GoblinA');
+    gob.visible = true;
+    ok(CG.pickTarget(s) === gob, 'the hostile behind the peasant is picked instead');
+  }
+
+  // ------------------------------------------------------------------------
+  // Quest targets in the ring (playtest3 #2/#3, systems3 #4).
+  // ------------------------------------------------------------------------
+  {
+    const s = makeSession('ring');
+    s.spawner.sheets = { getSheet: () => ({ actions: {}, height: 100, worldH: 100, scaleFor: () => 1 }) };
+    s.spawner._townCenters = [{ x: 0, z: 0, radius: 2400 }];
+    const mk = (id, state, target, extra) => Object.assign({
+      id, region: 'new_sorpigal', type: 'kill', state, title: id, text: 'Out past the fields.',
+      objectives: [{ id: `${id}_o`, kind: 'kill', target, count: 3, progress: 0, done: false, text: `Kill 3 ${target}` }],
+    }, extra || {});
+    const active = mk('new_sorpigal:qa', 'active', 'BatA');
+    const offered = mk('new_sorpigal:qb', 'available', 'RatA');
+    const bossy = mk('new_sorpigal:qc', 'active', 'GoblinC');
+    bossy.objectives.push({ id: 'qc_clear', kind: 'clear', target: 'goblinwatch', count: 1, progress: 0, done: false, text: 'Clear' });
+    s.questPool = [active, offered, bossy];
+    s.spawner.ensureQuestTargets({ id: 'new_sorpigal' }, new Rand(7), () => 0);
+    const bats = s.entities.list.filter((e) => e.kind === 'BatA');
+    ok(bats.length === 3, `active cull topped to need (${bats.length}/3 bats)`);
+    for (const b of bats) {
+      const d = Math.hypot(b.pos.x, b.pos.z);
+      ok(d >= 2800 - 1 && d <= 5200, `ring target at ${Math.round(d)}u - inside wall+400..5200`);
+    }
+    ok(s.entities.list.filter((e) => e.kind === 'RatA').length === 0,
+      'an un-accepted board quest gets NO free spawns');
+    ok(s.entities.list.filter((e) => e.kind === 'GoblinC').length === 0,
+      'a dungeon-bound boss kill NEVER spawns in the overworld ring');
+    ok(/ of town\./.test(active.text) && !!active.direction,
+      `kill quest text names a bearing ("...${active.text.slice(-28)}")`);
+    // Corpses count toward need: kill two, reload-alike top-up mints none.
+    bats[0].dead = true; bats[0].category = CATEGORY.CORPSE;
+    bats[1].dead = true; bats[1].category = CATEGORY.CORPSE;
+    s.spawner.ensureQuestTargets({ id: 'new_sorpigal' }, new Rand(8), () => 0);
+    ok(s.entities.list.filter((e) => e.kind === 'BatA').length === 3,
+      'fresh corpses are not "missing" targets - no re-mint over them');
+  }
+
+  say('session-level checks complete (one clock, rng streams, defeat, ledger, TB, quests, tap safety)');
 } catch (e) {
   failures++;
   console.error('  FAIL  session-level harness crashed:', e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : e);

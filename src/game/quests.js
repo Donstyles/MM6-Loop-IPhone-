@@ -636,10 +636,29 @@ export function notesOf(party, category) {
 // Party quest bookkeeping
 // ---------------------------------------------------------------------------
 
+/** Rank of a quest state along its lifecycle, for merging stale copies. */
+function stateRank(s) { const i = QUEST_STATES.indexOf(s); return i < 0 ? 0 : i; }
+
 /** Install a quest on the party. */
 export function giveQuest(party, quest) {
   party.quests = party.quests || {};
-  if (party.quests[quest.id]) return false;
+  const prev = party.quests[quest.id];
+  if (prev === quest) return false;
+  if (prev) {
+    // A stale copy from an older pool generation (playtest3 #1): the POOL
+    // object is the one source of truth, so the journal adopts it - carrying
+    // forward whichever side had progressed further, so a completed quest is
+    // never quietly reset by re-accepting it.
+    if (stateRank(prev.state) > stateRank(quest.state) && prev.state !== 'failed') {
+      quest.state = prev.state;
+      for (const o of quest.objectives || []) {
+        const po = (prev.objectives || []).find((x) => x.id === o.id || x.target === o.target);
+        if (po && (po.progress | 0) > (o.progress | 0)) { o.progress = po.progress; o.done = po.done; }
+      }
+    }
+    party.quests[quest.id] = quest;
+    return false;
+  }
   quest.state = quest.state === 'available' ? 'active' : quest.state;
   party.quests[quest.id] = quest;
   if (quest.autonote) note(party, quest.autonote, 'quest');

@@ -65,10 +65,12 @@ export class Spawner {
     this._npcSeq = 0;
     if (S.ensureQuestPool) S.ensureQuestPool(region.id || S.mapId, seed);
 
-    // Town centres, for the opening-ring spawn contract below.
+    // Town centres (and wall radii), for the opening-ring spawn contract and
+    // the quest-target ring below.
     this._townCenters = (region.towns || [])
       .filter((t) => Number.isFinite(t.x) && Number.isFinite(t.z))
-      .map((t) => ({ x: t.x, z: t.z }));
+      .map((t) => ({ x: t.x, z: t.z, radius: Number.isFinite(t.radius) ? t.radius : 2400 }));
+    this._lastRegionRef = region;
 
     // Flora is the region's own batched billboard field - see loadRegion. Only
     // place trees here if it did not, so the two can never both plant a wood.
@@ -144,6 +146,11 @@ export class Spawner {
     // board's culls are completable within a short walk of town.
     if (S.applyMapState) S.applyMapState();
     this.ensureQuestTargets(region, rnd, ground);
+
+    // Every arrival in a region - new game, load, defeat reload, walking in
+    // through a door - opens calm: hostiles within 2500u of the party are
+    // pushed to the rim and nothing engages until the first movement input.
+    if (S.applySafeArrival) S.applySafeArrival(2500);
   }
 
   populateTown(town, ground, rnd) {
@@ -255,6 +262,38 @@ export class Spawner {
       if (s.boss) kind = this.bossTierOf(kind);
       const e = this.spawnMonster(kind, s.x, s.y ?? ground(s.x, s.z), s.z, s);
       if (e && s.boss) e.label = `${e.label} (leader)`;
+      // DUNGEON FEEL (playtest3 #6): pair the singles. Generated populations
+      // ran 22 monsters over 20k units of corridor - a slog of empty spans.
+      // Every non-boss spawn brings a companion of its own kind.
+      if (e && !s.boss) {
+        const cx = s.x + rnd.float(140, 280) * (rnd.bool() ? 1 : -1);
+        const cz = s.z + rnd.float(140, 280) * (rnd.bool() ? 1 : -1);
+        this.spawnMonster(kind, cx, ground(cx, cz), cz, {});
+      }
+    }
+
+    // Never bounce straight back out (playtest3 #7): if the arrival spot sits
+    // on an exit trigger (radius 220), step the party >=300u into the dungeon
+    // and face it that way.
+    const pp = S.player && S.player.pos;
+    if (pp) {
+      for (const ex of exits) {
+        const exX = ex.x, exZ = ex.z;
+        if (Math.hypot(pp.x - exX, pp.z - exZ) >= 300) continue;
+        const baseYaw = (dungeon.start && dungeon.start.yaw) || S.player.yaw || 0;
+        for (const off of [0, Math.PI / 2, -Math.PI / 2, Math.PI]) {
+          const a = baseYaw + off;
+          const nx = exX - Math.sin(a) * 340;
+          const nz = exZ - Math.cos(a) * 340;
+          const ny = ground(nx, nz);
+          if (S.map.blocked && S.map.blocked(nx, ny + 8, nz, 40, 190)) continue;
+          pp.set(nx, ny, nz);
+          S.player.vel.set(0, 0, 0);
+          S.player.yaw = a;
+          break;
+        }
+        break;
+      }
     }
 
     // Cleared stays cleared: the ledger replaces the fresh population with
@@ -299,6 +338,7 @@ export class Spawner {
     const sex = /_f|woman|matron/.test(arch) ? 'f' : /_m|man\b/.test(arch) ? 'm' : (rnd.bool() ? 'm' : 'f');
     const prof = n.profession || profession(rnd);
     const name = n.name || npcName(rnd, sex, { epithet: false, title: false });
+    const rumorPair = [rumour(rnd), rumour(rnd)];
     return Object.assign({
       name,
       npcId: name,
@@ -309,11 +349,14 @@ export class Spawner {
       greeting: rnd.pick([
         `"Well met. I am ${name}, ${prof.toLowerCase()} here."`,
         `${name} looks up from their work. "Yes? Be quick about it."`,
-        `"A good day to you, travellers." ${name} gives a small nod.`,
+        `"A good day to you, travelers." ${name} gives a small nod.`,
         `"${prof}s see everything that passes through this town," says ${name}.`,
       ]),
       talk: professionTalk(rnd, prof),
-      rumours: [rumour(rnd), rumour(rnd)],
+      // Both spellings: the dialogue screen reads `rumours` (kept for API
+      // compat); `rumors` is the canonical field going forward.
+      rumours: rumorPair,
+      rumors: rumorPair,
       questRefs: [],
     }, n.npc || {});
   }
@@ -356,31 +399,55 @@ export class Spawner {
   }
 
   /**
-   * Make every kill/bounty quest of this region completable within a short
-   * walk: spawn its targets in a ring 3200-4800 units out from the first town
-   * (past the weak-melee inner ring, well inside ~5000). Bounty uniques get
-   * their posted name on the plate.
+   * Make every ACCEPTED kill/bounty quest of this region completable within a
+   * short walk: targets spawn in a ring just past the town wall (walls run
+   * 2400-5600 units by settlement size, so the ring hugs wall+400..wall+1200,
+   * within the 5200-unit "close" contract for starter towns). Rules learned
+   * the hard way (playtest3 #2/#3, systems3 #4):
+   *   - only quests the party has taken get topped up - the board is not a
+   *     free-XP vending machine refilled on every door-hop;
+   *   - the count compares against IN-RING stock, live AND recently dead:
+   *     region-wide naturals 20k out no longer suppress the close spawn, and
+   *     fresh corpses are not "missing" targets to re-mint over;
+   *   - boss/dungeon-bound kills (a quest that also carries a clear
+   *     objective, or a unique def) NEVER spawn in the overworld ring - the
+   *     Goblin King lives in Goblinwatch and only there.
+   * Bounty uniques get their posted name on the plate, and the ring bearing
+   * is hashed from the quest id, so the quest text can honestly say which way
+   * to walk.
    */
   ensureQuestTargets(region, rnd, ground) {
     const S = this.session;
     const town = (this._townCenters || [])[0];
     if (!town || !S.questPool) return;
     const regionId = region.id || S.mapId;
+    const wallR = town.radius || 2400;
+    const rMin = wallR + 400, rMax = wallR + 1200;
+    // "Close" is 5200 for a starter town; a city's wall alone is 5600, so the
+    // counting circle always encloses the spawn ring or corpses stop counting.
+    const countR = Math.max(5200, rMax + 400);
     for (const q of S.questPool) {
       if (q.region !== regionId) continue;
-      if (q.state === 'rewarded' || q.state === 'failed') continue;
+      const dungeonBound = (q.objectives || []).some((x) => x.kind === 'clear');
       for (const o of q.objectives || []) {
-        if (o.kind !== 'kill' || o.done || !o.target) continue;
+        if (o.kind !== 'kill' || !o.target) continue;
+        const def = this.monsters && this.monsters.monsterById ? this.monsters.monsterById(o.target) : null;
+        if (dungeonBound || (def && def.unique)) continue;
+        // The heading is stable per quest: text and spawns agree forever.
+        const a0 = (hashStr(String(q.id)) % 6283) / 1000;
+        this.noteQuestDirection(q, o, a0);
+        if (q.state !== 'active' || o.done) continue;
         const need = Math.max(1, (o.count | 0) - (o.progress | 0));
-        const have = S.entities.list.filter(
-          (e) => e.category === CATEGORY.MONSTER && !e.dead && e.kind === o.target,
-        ).length;
-        if (have >= need) continue;
-        const missing = Math.min(need - have, 8);
-        const a0 = rnd.float(0, Math.PI * 2);
+        const inRing = S.entities.list.filter((e) => {
+          if (e.kind !== o.target) return false;
+          if (e.category !== CATEGORY.MONSTER && e.category !== CATEGORY.CORPSE) return false;
+          return Math.hypot(e.pos.x - town.x, e.pos.z - town.z) < countR;
+        }).length;
+        if (inRing >= need) continue;
+        const missing = Math.min(need - inRing, 8);
         for (let i = 0; i < missing; i++) {
-          const a = a0 + (i / Math.max(1, missing)) * Math.PI * 0.9 + rnd.float(-0.15, 0.15);
-          const r = rnd.float(3200, 4800);
+          const a = a0 + (i / Math.max(1, missing)) * 0.9 + rnd.float(-0.12, 0.12);
+          const r = rnd.float(rMin, rMax);
           const x = town.x + Math.cos(a) * r;
           const z = town.z + Math.sin(a) * r;
           const e = this.spawnMonster(o.target, x, ground(x, z), z, { questTarget: true });
@@ -390,8 +457,42 @@ export class Spawner {
     }
   }
 
+  /** 'They were last seen southwest of town.' - from the actual ring bearing. */
+  noteQuestDirection(q, o, angle) {
+    if (q._directionNoted) return;
+    q._directionNoted = true;
+    // Ring maths: x = cos(a), z = sin(a). North is -Z, east is +X.
+    const dx = Math.cos(angle + 0.45), dz = Math.sin(angle + 0.45); // mid-arc
+    const octant = Math.round(((Math.atan2(dx, -dz) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI / 4)) % 8;
+    const dir = ['north', 'northeast', 'east', 'southeast', 'south', 'southwest', 'west', 'northwest'][octant];
+    q.direction = dir;
+    const hint = ` Last seen ${dir} of town.`;
+    if (q.text && q.text.indexOf(' of town.') < 0) q.text += hint;
+    if (o.text && o.text.indexOf(' of town') < 0) o.text += ` (${dir} of town)`;
+  }
+
+  /**
+   * Top-up entry point for mid-session quest acceptance: uses the state the
+   * last populateRegion stashed, so 'Cull the Bats' has bats in the ring the
+   * moment the party takes it, not after the next region reload.
+   */
+  topUpQuestTargets() {
+    const S = this.session;
+    if (!this._lastRegionRef || !S.map || S.map.indoor) return;
+    const rnd = S.rngFor ? S.rngFor('questtargets') : new Rand(1);
+    this.ensureQuestTargets(this._lastRegionRef, rnd, (x, z) => S.collision.groundAt(x, z, 0));
+  }
+
   spawnMonster(kind, x, y, z, s = {}) {
-    const sh = this.sheet('creature', kind, s.seed || 1);
+    let sh = this.sheet('creature', kind, s.seed || 1);
+    // A transient baker throw right after boot must not silently erase the
+    // record (systems3 #6): retry, then borrow the family's base sheet, then
+    // any sheet at all - a mislabeled goblin beats a vanished monster.
+    if (!sh && this.sheets) {
+      sh = this.sheet('creature', kind, (s.seed || 1) + 1);
+      if (!sh && /[ABC]$/.test(String(kind))) sh = this.sheet('creature', String(kind).slice(0, -1) + 'A', 1);
+      if (!sh) sh = this.sheet('creature', 'GoblinA', 1);
+    }
     if (!sh) return null;
     const def = this.monsters && this.monsters.monsterById ? this.monsters.monsterById(kind) : null;
     // Peasants and other non-hostiles must never chase: the entity AI has no

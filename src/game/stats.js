@@ -153,7 +153,7 @@ defClass({
   hpPerLevel: 5, hpDice: { n: 1, s: 9 }, hpBase: 20,
   spPerLevel: 0, spDice: null, spBase: 0, spStat: null,
   startStats: KNIGHT_STATS, startHP: 45, startSP: 0,
-  desc: 'Master of arms. Cannot cast spells, but wears any armour and swings anything.',
+  desc: 'Master of arms. Cannot cast spells, but wears any armor and swings anything.',
   promoQuest: 'Slay the beasts in the Corlagon\'s Estate for Sir Charles Quixote.',
 });
 defClass({
@@ -176,7 +176,7 @@ defClass({
   hpPerLevel: 4, hpDice: { n: 1, s: 7 }, hpBase: 16,
   spPerLevel: 1, spDice: { n: 1, s: 2 }, spBase: 3, spStat: 'personality',
   startStats: PALADIN_STATS, startHP: 35, startSP: 5,
-  desc: 'A holy warrior: plate armour and the Spirit, Mind and Body schools.',
+  desc: 'A holy warrior: plate armor and the Spirit, Mind and Body schools.',
   promoQuest: 'Recover the Hero\'s Blade for the Temple of the Sun.',
 });
 defClass({
@@ -721,7 +721,12 @@ export function priceMultipliers(character, townFactor = 1) {
   let sell = Math.min(1, (0.25 + pct / 200) / townFactor);
   // HARD INVARIANT: whatever the skill, the sell price sits strictly below the
   // effective buy price, or a sell/re-buy loop mints gold (systems #6).
-  sell = Math.min(sell, buy * 0.9, 0.95);
+  // CROSS-TOWN CLAMP (systems3 #7a): it also sits below 95% of the BEST buy
+  // multiplier achievable ANYWHERE at the same skill - the cheapest town
+  // factor shipped is the city's 0.9 - so hauling stock between towns can
+  // never out-earn the trip ("buy in Free Haven, sell in Mist" is dead).
+  const bestBuyAnywhere = Math.max(0.1, 0.9 * (1 - pct / 200));
+  sell = Math.min(sell, buy * 0.9, bestBuyAnywhere * 0.95, 0.95);
   return { buy, sell };
 }
 

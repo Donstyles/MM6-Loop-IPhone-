@@ -110,12 +110,41 @@ export class PlayerController {
     const nz = p.z + this.vel.z * dt;
     let ny = p.y + this.vel.y * dt;
 
-    // Horizontal: try full move, then each axis alone, so we slide along walls.
+    // Horizontal: try the full move, then each axis alone (the classic slide
+    // along axis-aligned walls). When that still leaves the party essentially
+    // parked - a wall at an angle, a corner pocket - project the velocity
+    // along the wall by probing rotated headings instead of stopping dead:
+    // walking into a slanted facade now skims along it (wowjudge #4).
     if (map.blocked && map.blocked(nx, p.y, nz, PLAYER.radius, PLAYER.height)) {
+      const ox = p.x, oz = p.z;
       const okX = !map.blocked(nx, p.y, p.z, PLAYER.radius, PLAYER.height);
       const okZ = !map.blocked(p.x, p.y, nz, PLAYER.radius, PLAYER.height);
-      if (okX) { p.x = nx; } else { this.vel.x *= 0.2; }
-      if (okZ) { p.z = nz; } else { this.vel.z *= 0.2; }
+      if (okX) p.x = nx;
+      if (okZ) p.z = nz;
+      const sp = Math.hypot(this.vel.x, this.vel.z);
+      const wanted = sp * dt;
+      const got = Math.hypot(p.x - ox, p.z - oz);
+      if (sp > 1 && got < wanted * 0.3) {
+        // Barely moved: hunt for the wall tangent. Nearest deflection first;
+        // the tangential share of the speed (cos of the deflection) is kept,
+        // so a grazing angle glides and a head-on push only creeps.
+        const a0 = Math.atan2(this.vel.x, this.vel.z);
+        for (const off of [0.55, -0.55, 0.9, -0.9, 1.25, -1.25]) {
+          const a = a0 + off;
+          const k = Math.max(0.2, Math.cos(off));
+          const sx = ox + Math.sin(a) * sp * k * dt;
+          const sz = oz + Math.cos(a) * sp * k * dt;
+          if (map.blocked(sx, p.y, sz, PLAYER.radius, PLAYER.height)) continue;
+          p.x = sx; p.z = sz;
+          this.vel.x = Math.sin(a) * sp * k;
+          this.vel.z = Math.cos(a) * sp * k;
+          break;
+        }
+        if (p.x === ox && p.z === oz) { this.vel.x *= 0.2; this.vel.z *= 0.2; }
+      } else {
+        if (!okX) this.vel.x *= 0.2;
+        if (!okZ) this.vel.z *= 0.2;
+      }
     } else {
       p.x = nx; p.z = nz;
     }
