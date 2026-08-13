@@ -1996,11 +1996,12 @@ function tFenceWood() {
   return p;
 }
 
-function tSignBoard() {
+/** Weathered plank board with an iron frame - the base every sign shares. */
+function signBase(seed = 1021) {
   const p = P();
   const dk = [46, 30, 16], lt = [138, 100, 58];
   paint(p, (x, y) => {
-    const g = fbmXY(x, y, 26, 4, 1019, 4, 0.55);
+    const g = fbmXY(x, y, 26, 4, 1019 + seed, 4, 0.55);
     let c = mixC(dk, lt, clamp01(0.22 + g * 0.9));
     // plank seams running across the board
     const seam = wrapI(y, 21);
@@ -2008,7 +2009,7 @@ function tSignBoard() {
     else if (seam < 2) c = scaleC(c, 1.15);
     return c;
   });
-  const rnd = new Rand(1021);
+  const rnd = new Rand(seed);
   for (let i = 0; i < 3; i++) knot(p, rnd.int(64), rnd.int(64), rnd.float(1.6, 2.6), [40, 26, 14], [146, 108, 64]);
   // iron border and corner brackets
   const iron = [58, 56, 58];
@@ -2016,9 +2017,40 @@ function tSignBoard() {
   frameRect(p, 1, 1, 62, 62, iron);
   frameRect(p, 2, 2, 60, 60, scaleC(iron, 1.5));
   for (const [cx, cy] of [[5, 5], [58, 5], [5, 58], [58, 58]]) stud(p, cx, cy, [120, 118, 118], 1);
-  // painted emblem: a foaming tankard, the universal MM6 shop sign
+  return p;
+}
+
+const SIGN_OUT = [40, 26, 10];   // painted-emblem outline colour
+
+/** Thick painted line, for emblem strokes. */
+function signStroke(p, x0, y0, x1, y1, w, c) {
+  const n = Math.max(1, Math.round(Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0))));
+  for (let i = 0; i <= n; i++) {
+    const x = x0 + (x1 - x0) * (i / n), y = y0 + (y1 - y0) * (i / n);
+    for (let dy = 0; dy < w; dy++) {
+      for (let dx = 0; dx < w; dx++) {
+        p.setArr(Math.round(x + dx - w / 2), Math.round(y + dy - w / 2), c);
+      }
+    }
+  }
+}
+
+function signDisc(p, cx, cy, r, fn) {
+  for (let y = Math.floor(cy - r) - 1; y <= cy + r + 1; y++) {
+    for (let x = Math.floor(cx - r) - 1; x <= cx + r + 1; x++) {
+      const d = Math.hypot(x - cx, y - cy) / r;
+      if (d > 1.12) continue;
+      const c = fn(d, x, y);
+      if (c) p.setArr(x, y, c);
+    }
+  }
+}
+
+// The foaming tankard - MM6's tavern sign.
+function tSignTavern() {
+  const p = signBase(1021);
   const g1 = [206, 168, 58], g2 = [246, 226, 140], w1 = [230, 230, 216], w2 = [252, 252, 244];
-  const outline = [44, 30, 12];
+  const outline = SIGN_OUT;
   const bodyL = 20, bodyR = 40, bodyT = 26, bodyB = 50;
   // handle first, so the body overlaps it cleanly
   for (let a = -70; a <= 70; a += 3) {
@@ -2044,6 +2076,185 @@ function tSignBoard() {
     p.setArr(x, bodyT - h - 1, outline);
   }
   blotch(p, { period: 3, seed: 1031, amount: 0.24 });
+  return p;
+}
+
+/** Plain board (roadside signposts, unknown shops): a painted direction arrow. */
+function tSignBoard() {
+  const p = signBase(1023);
+  const pale = [214, 202, 174];
+  signStroke(p, 14, 32, 46, 32, 4, SIGN_OUT);
+  signStroke(p, 15, 32, 45, 32, 2, pale);
+  signStroke(p, 38, 25, 47, 32, 3, pale);
+  signStroke(p, 38, 39, 47, 32, 3, pale);
+  blotch(p, { period: 3, seed: 1033, amount: 0.22 });
+  return p;
+}
+
+// Weapon smith: a longsword, point up, on a dark roundel.
+function tSignWeapon() {
+  const p = signBase(1041);
+  signDisc(p, 32, 34, 22, (d) => (d > 0.94 ? SIGN_OUT : d > 0.86 ? [96, 74, 40] : [58, 44, 30]));
+  const steelD = [128, 132, 142], steelL = [214, 220, 232];
+  // blade with a bright edge line
+  signStroke(p, 32, 14, 32, 42, 5, SIGN_OUT);
+  signStroke(p, 32, 15, 32, 42, 3, steelD);
+  for (let y = 16; y <= 41; y++) p.setArr(32, y, steelL);
+  p.setArr(32, 14, steelL); p.setArr(31, 15, steelD); p.setArr(33, 15, steelD);
+  // crossguard and grip
+  signStroke(p, 23, 43, 41, 43, 4, SIGN_OUT);
+  signStroke(p, 24, 43, 40, 43, 2, [206, 168, 58]);
+  signStroke(p, 32, 45, 32, 51, 3, [92, 58, 30]);
+  signDisc(p, 32, 53, 2.4, () => [206, 168, 58]);
+  return p;
+}
+
+// Armourer: a heater shield with a bright boss.
+function tSignArmour() {
+  const p = signBase(1043);
+  const steel = [136, 140, 150], hi = [196, 202, 214], rim = [206, 168, 58];
+  for (let y = 18; y <= 52; y++) {
+    const t = (y - 18) / 34;
+    const hw = t < 0.42 ? 14 : Math.round(14 * (1 - (t - 0.42) / 0.62));
+    for (let x = 32 - hw; x <= 32 + hw; x++) {
+      const edge = Math.abs(x - 32) >= hw - 1 || y <= 19 || y >= 51;
+      p.setArr(x, y, edge ? SIGN_OUT : Math.abs(x - 32) === hw - 2 ? rim : steel);
+    }
+  }
+  for (let y = 22; y <= 46; y += 1) p.setArr(32, y, hi);
+  signStroke(p, 22, 30, 42, 30, 1, hi);
+  signDisc(p, 32, 30, 3, (d) => (d > 0.8 ? SIGN_OUT : rim));
+  return p;
+}
+
+// Magic shop: crescent moon and star on a midnight roundel.
+function tSignMagic() {
+  const p = signBase(1045);
+  signDisc(p, 32, 34, 22, (d) => (d > 0.94 ? SIGN_OUT : d > 0.86 ? [70, 66, 120] : [34, 32, 72]));
+  const pale = [228, 226, 200], gold = [236, 208, 110];
+  signDisc(p, 29, 33, 12, (d, x, y) => {
+    const d2 = Math.hypot(x - 35, y - 30) / 12;
+    return d <= 1 && d2 > 1.02 ? pale : null;
+  });
+  // four-point star
+  signStroke(p, 43, 24, 43, 32, 1, gold);
+  signStroke(p, 39, 28, 47, 28, 1, gold);
+  p.setArr(43, 28, [252, 244, 190]);
+  return p;
+}
+
+// Alchemist: a green potion flask.
+function tSignAlchemist() {
+  const p = signBase(1047);
+  const glass = [120, 168, 130], liq = [70, 150, 66], liqHi = [130, 208, 96];
+  // conical body
+  for (let y = 28; y <= 50; y++) {
+    const t = (y - 28) / 22;
+    const hw = Math.round(3 + t * 10);
+    for (let x = 32 - hw; x <= 32 + hw; x++) {
+      const edge = Math.abs(x - 32) >= hw - 1 || y >= 49;
+      const fill = y > 36 ? (x < 32 ? liqHi : liq) : glass;
+      p.setArr(x, y, edge ? SIGN_OUT : fill);
+    }
+  }
+  // neck, cork, bubble
+  signStroke(p, 32, 20, 32, 28, 5, SIGN_OUT);
+  signStroke(p, 32, 21, 32, 28, 3, glass);
+  signStroke(p, 32, 18, 32, 20, 4, [140, 100, 58]);
+  p.setArr(30, 41, [220, 244, 210]); p.setArr(35, 45, [220, 244, 210]);
+  return p;
+}
+
+// Temple: a gold sun disc with rays.
+function tSignTemple() {
+  const p = signBase(1049);
+  const gold = [226, 188, 74], core = [252, 236, 150];
+  for (let a = 0; a < 12; a++) {
+    const t = (a / 12) * Math.PI * 2;
+    signStroke(p, 32 + Math.cos(t) * 12, 34 + Math.sin(t) * 12,
+      32 + Math.cos(t) * 20, 34 + Math.sin(t) * 20, 2, a % 2 ? gold : SIGN_OUT);
+  }
+  signDisc(p, 32, 34, 11, (d) => (d > 0.9 ? SIGN_OUT : d > 0.55 ? gold : core));
+  return p;
+}
+
+// Bank: a stack of coins and one standing gold piece.
+function tSignBank() {
+  const p = signBase(1051);
+  const gold = [216, 178, 66], goldHi = [250, 228, 128], goldDk = [150, 116, 40];
+  for (let i = 0; i < 4; i++) {
+    const y = 48 - i * 4;
+    signStroke(p, 21, y, 39, y, 4, SIGN_OUT);
+    signStroke(p, 22, y - 1, 38, y - 1, 2, i % 2 ? gold : goldDk);
+    signStroke(p, 22, y - 2, 38, y - 2, 1, goldHi);
+  }
+  signDisc(p, 41, 28, 9, (d) => (d > 0.92 ? SIGN_OUT : d > 0.7 ? gold : goldHi));
+  signDisc(p, 41, 28, 3.2, () => gold);
+  return p;
+}
+
+// Training hall: crossed cudgels over a pale roundel.
+function tSignTraining() {
+  const p = signBase(1053);
+  signDisc(p, 32, 34, 21, (d) => (d > 0.94 ? SIGN_OUT : d > 0.86 ? [150, 60, 40] : [96, 40, 28]));
+  const wood = [168, 124, 66], woodHi = [208, 168, 104];
+  signStroke(p, 20, 48, 44, 22, 5, SIGN_OUT);
+  signStroke(p, 44, 48, 20, 22, 5, SIGN_OUT);
+  signStroke(p, 21, 47, 43, 23, 3, wood);
+  signStroke(p, 43, 47, 21, 23, 3, wood);
+  signStroke(p, 22, 46, 42, 24, 1, woodHi);
+  signStroke(p, 42, 46, 22, 24, 1, woodHi);
+  return p;
+}
+
+// Town hall: a white scroll with lines of writ.
+function tSignTownhall() {
+  const p = signBase(1055);
+  const parch = [222, 210, 178], parchDk = [186, 170, 132];
+  rect(p, 19, 22, 26, 26, parch);
+  frameRect(p, 19, 22, 26, 26, SIGN_OUT);
+  signStroke(p, 17, 22, 47, 22, 3, parchDk);
+  signStroke(p, 17, 48, 47, 48, 3, parchDk);
+  signStroke(p, 17, 21, 47, 21, 1, SIGN_OUT);
+  signStroke(p, 17, 49, 47, 49, 1, SIGN_OUT);
+  for (let i = 0; i < 5; i++) signStroke(p, 23, 27 + i * 4, 40 - (i % 2) * 3, 27 + i * 4, 1, [96, 84, 60]);
+  // wax seal
+  signDisc(p, 39, 44, 3, (d) => (d > 0.85 ? SIGN_OUT : [170, 40, 30]));
+  return p;
+}
+
+// Stables: a gold horseshoe, heels down.
+function tSignStable() {
+  const p = signBase(1057);
+  const gold = [206, 168, 58], hi = [240, 214, 120];
+  for (let a = -25; a <= 205; a += 2) {
+    const t = (a / 180) * Math.PI;
+    const x = 32 + Math.cos(t) * 13, y = 33 - Math.sin(t) * 13;
+    signStroke(p, x, y, x, y, 5, SIGN_OUT);
+  }
+  for (let a = -25; a <= 205; a += 2) {
+    const t = (a / 180) * Math.PI;
+    const x = 32 + Math.cos(t) * 13, y = 33 - Math.sin(t) * 13;
+    signStroke(p, x, y, x, y, 3, a > 40 && a < 140 ? hi : gold);
+  }
+  // nail holes
+  for (const [nx, ny] of [[21, 40], [43, 40], [23, 28], [41, 28], [32, 21]]) p.setArr(nx, ny, SIGN_OUT);
+  return p;
+}
+
+// Magic guild: an arcane orb on a stand, sparking.
+function tSignGuild() {
+  const p = signBase(1059);
+  const orb = [140, 84, 190], orbHi = [200, 150, 240], orbCore = [238, 222, 250];
+  signStroke(p, 26, 52, 38, 52, 3, SIGN_OUT);
+  signStroke(p, 29, 48, 35, 48, 3, [92, 58, 30]);
+  signDisc(p, 32, 35, 12, (d) => (d > 0.92 ? SIGN_OUT : d > 0.6 ? orb : d > 0.3 ? orbHi : orbCore));
+  // sparks
+  for (const [sx, sy] of [[19, 24], [45, 22], [43, 44], [20, 44]]) {
+    p.setArr(sx, sy, orbHi);
+    p.setArr(sx + 1, sy, orbCore); p.setArr(sx - 1, sy, orbCore);
+    p.setArr(sx, sy + 1, orbCore); p.setArr(sx, sy - 1, orbCore);
+  }
   return p;
 }
 
@@ -2931,6 +3142,18 @@ const DEFS = [
   ['shutters', 'trim', 64, 256, 4, tShutters],
   ['fence_wood', 'trim', 64, 256, 4, tFenceWood],
   ['sign_board', 'trim', 64, 256, 4, tSignBoard],
+  // Hanging signs, one emblem per establishment kind (wow-judge #5).
+  ['sign_tavern', 'trim', 64, 256, 4, tSignTavern],
+  ['sign_weapon', 'trim', 64, 256, 4, tSignWeapon],
+  ['sign_armour', 'trim', 64, 256, 4, tSignArmour],
+  ['sign_magic', 'trim', 64, 256, 4, tSignMagic],
+  ['sign_alchemist', 'trim', 64, 256, 4, tSignAlchemist],
+  ['sign_temple', 'trim', 64, 256, 4, tSignTemple],
+  ['sign_bank', 'trim', 64, 256, 4, tSignBank],
+  ['sign_training', 'trim', 64, 256, 4, tSignTraining],
+  ['sign_townhall', 'trim', 64, 256, 4, tSignTownhall],
+  ['sign_stable', 'trim', 64, 256, 4, tSignStable],
+  ['sign_guild', 'trim', 64, 256, 4, tSignGuild],
   ['wall_banner', 'trim', 64, 256, 5, tWallBanner],
   ['barrel_side', 'trim', 64, 256, 5, tBarrelSide],
   ['crate_side', 'trim', 64, 256, 5, tCrateSide],

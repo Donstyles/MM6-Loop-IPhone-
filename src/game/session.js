@@ -403,7 +403,10 @@ export class Session {
    */
   hazeTint() {
     const h = this.clock.hour, m = this.clock.minute;
-    if (h < 5 || h >= 21) return 39 / 255;
+    // 0x3A, not 0x27: the lamp pools, lit windows and moonlight the world
+    // bakes at night live above this multiply, and at 0x27 they were being
+    // crushed back into the dark they exist to relieve.
+    if (h < 5 || h >= 21) return 58 / 255;
     const minutes = 60 * (h - 5) + m;              // 0 at 05:00 .. 960 at 21:00
     const v = minutes >= 480 ? 960 - minutes : minutes;
     const maxDim = 20 - (v / 480) * 20;            // 20 at dawn/dusk, 0 at 13:00

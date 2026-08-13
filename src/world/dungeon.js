@@ -293,6 +293,10 @@ class LightGrid {
  * light anywhere in MM6, so the warmth of a torch-lit corridor comes entirely
  * from the wall texture and the flame sprite, not from the light itself.
  */
+// Scratch for dimAt: how many dimming levels the torches removed at the last
+// queried vertex. Read immediately after the call (single-threaded bake).
+let _torchLevels = 0;
+
 function dimAt(grid, ambDim, x, y, z, nx, ny, nz) {
   // Start at the sector's ambient dimming level (31 = pitch black), biased by
   // which way the facet points.
@@ -303,6 +307,7 @@ function dimAt(grid, ambDim, x, y, z, nx, ny, nz) {
   // it - the judge measured #9A9A9A floor against #6A6A6A wall - which reads as
   // a room lit from underneath.
   let dim = ambDim + (ny > 0.7 ? 3 : ny < -0.7 ? 5 : 0);
+  _torchLevels = 0;
   const list = grid.near(x, z);
   if (list) {
     for (let i = 0; i < list.length; i++) {
@@ -319,6 +324,7 @@ function dimAt(grid, ambDim, x, y, z, nx, ny, nz) {
       const ndl = clamp((dx * nx + dy * ny + dz * nz) / d, 0, 1);
       contrib *= 0.5 + 0.5 * ndl;
       dim += contrib;
+      _torchLevels -= contrib;
     }
   }
   return dim;
@@ -331,7 +337,20 @@ function greyForDim(dim) {
 
 function shadeVertex(grid, ambDim, x, y, z, nx, ny, nz, out) {
   const g = greyForDim(dimAt(grid, ambDim, x, y, z, nx, ny, nz));
-  out[0] = g; out[1] = g; out[2] = g;
+  // MM6's lights are monochrome, but its torch pools *read* orange because the
+  // wall art and flame sprite are warm. Our generated stone families are cool
+  // greys, so bake a fraction of the theme's torch colour into the vertices a
+  // torch actually reaches - radial falloff for free via the dimming levels it
+  // contributed (cycle-3 #7: pools had no warmth and read as a grey brighten).
+  const w = grid.warm ? Math.min(1, _torchLevels / 24) * 0.55 : 0;
+  if (w > 0.01) {
+    const t = grid.warm;
+    out[0] = g * (1 + (t[0] - 1) * w);
+    out[1] = g * (1 + (t[1] - 1) * w);
+    out[2] = g * (1 + (t[2] - 1) * w);
+  } else {
+    out[0] = g; out[1] = g; out[2] = g;
+  }
   return out;
 }
 
@@ -444,11 +463,18 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
   const occupied = new Uint8Array(GRID * GRID);
   const at = (i, j) => (j >= 0 && j < GRID && i >= 0 && i < GRID ? occupied[j * GRID + i] : 1);
 
+  // Compact placement: rooms scatter inside an extent sized to the room count
+  // rather than the whole 56-cell grid. On the full grid a 12-room dungeon
+  // averaged ~5k-unit empty corridor runs between fights (playtest 3 #6,
+  // "Goblinwatch pacing slog"); this cuts the between-room span roughly in
+  // half. The extent widens if placement starves, so dense specs still fit.
   let tries = 0;
+  let extent = clamp(Math.ceil(Math.sqrt(roomTarget * 78)), 22, GRID);
   while (rooms.length < roomTarget && tries < roomTarget * 40) {
     tries++;
+    if (tries % (roomTarget * 8) === 0) extent = Math.min(GRID, extent + 6);
     const w = r.int(3, 7), h = r.int(3, 7);
-    const i0 = r.int(2, GRID - w - 3), j0 = r.int(2, GRID - h - 3);
+    const i0 = r.int(2, extent - w - 3), j0 = r.int(2, extent - h - 3);
     let free = true;
     for (let j = j0 - 2; j < j0 + h + 2 && free; j++) {
       for (let i = i0 - 2; i < i0 + w + 2; i++) if (at(i, j)) { free = false; break; }
@@ -675,6 +701,7 @@ export function generateDungeon(spec = {}, seed = 1, onProgress) {
     if (p.kind === 'lava') addTorch(p.x, -0 + (cells.get(key(Math.floor(p.x / CELL), Math.floor(p.z / CELL))) || { fy: 0 }).fy + 60, p.z, [1.0, 0.42, 0.12], 1.1, 1400, 'lava');
   }
   const grid = new LightGrid(torches);
+  grid.warm = T.torch;   // shadeVertex bakes this into torch-lit vertices
   const exposure = exposureFor(T);
   const ambDim = exposure.ambient;
 

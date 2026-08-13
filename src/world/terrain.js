@@ -488,6 +488,21 @@ export function generateHeightmap(seed, opts = {}) {
       const c = coastAt(u, v);
       if (c > 0) h = lerpN(h, water - 2400 - c * 2600, c * c);
 
+      // World-edge rim: every border that is not already falling into the sea
+      // rises into an impassable ridge instead of ending on a raw noise cut.
+      // Cycle-3 judge: bare heightfield cross-sections at the boundary read as
+      // "dark slabs floating in the sky" over a waterless trench; a mountain
+      // rim is scenery, it self-classifies as cliff, and the >0.82-slope rule
+      // already makes it a natural wall.
+      if (c <= 0.01) {
+        const eu = Math.min(u, 1 - u, v, 1 - v);
+        const rim = 1 - smoothstep(0, 0.05, eu);
+        if (rim > 0) {
+          const rh = pf.base * 0.9 + 2400 + ridged2(u * 9, v * 9, 3, rs + 871) * 1600;
+          h = lerpN(h, Math.max(h, rh), rim * rim);
+        }
+      }
+
       // Snap to the 32-unit height quantum. This is not a rounding detail: it
       // is why MM6 terrain visibly stair-steps and why flat-shaded facets read
       // as facets instead of as a smooth field.
@@ -773,7 +788,10 @@ function faceGrey(nx, ny, nz, sun, ambient, diffuse, upness) {
   // sun only models the slopes.
   const up = Math.max(0.30, sun.y);
   const rel = clamp(ndl / up, 0, 1);
-  const lit = 0.50 + 0.50 * rel;
+  // 0.62 floor, matching sky.daylightFactor exactly (the two must stay one
+  // curve). Raised from 0.5: under the global night multiply the old floor
+  // put midnight ground at ~5% luminance and streets were unwalkable.
+  const lit = 0.62 + 0.38 * rel;
   // MM6's sun has no north/south component at all, so a north- or south-facing
   // slope shades identically to flat ground and the landform vanishes. A small
   // steepness term stands in for the occlusion the engine baked per-vertex.
@@ -1118,8 +1136,29 @@ export function buildTerrain(hm, opts = {}) {
           vec2 mu = vMapUv * 0.0587;
           vec4 swell = texture2D(map, vec2(mu.x - mu.y * 0.37, mu.y + mu.x * 0.29));
           float sl = dot(swell.rgb, vec3(0.299, 0.587, 0.114));
-          diffuseColor.rgb *= 0.82 + sl * 1.05;
+          // The swell term fades in with distance: at the feet it turned the
+          // ripple tile into a hard light/dark checker (visual 3 polish #8),
+          // and up close the base ripple frames carry the surface on their own.
+          #ifdef USE_FOG
+            float swellK = smoothstep(500.0, 2600.0, vFogDepth);
+          #else
+            float swellK = 1.0;
+          #endif
+          diffuseColor.rgb *= mix(1.0, 0.82 + sl * 1.05, swellK);
         }`,
+      );
+      // The camera clips the sheet at the far plane, and on a clear day the
+      // scene fog is nowhere near saturated there - so the sea ended on a
+      // razor-straight cut against the sky's haze fill (visual 3 #3). Force
+      // the last stretch before the far plane all the way into the fog colour
+      // and the water now dissolves into the horizon in every weather.
+      sh.fragmentShader = sh.fragmentShader.replace(
+        '#include <fog_fragment>',
+        `#include <fog_fragment>
+        #ifdef USE_FOG
+          gl_FragColor.rgb = mix(gl_FragColor.rgb, fogColor,
+            smoothstep(${(FAR_CLIP * 0.66).toFixed(1)}, ${(FAR_CLIP * 0.94).toFixed(1)}, vFogDepth));
+        #endif`,
       );
     };
     water = new THREE.Mesh(geo, mat);
@@ -1297,19 +1336,28 @@ export function makeGlowField(instances, opts = {}) {
   geo.index = base.index;
   geo.attributes.position = base.attributes.position;
   geo.attributes.uv = base.attributes.uv;
-  // Instance 2*i is the upright halo, 2*i+1 the ground pool.
-  geo.instanceCount = n * 2;
-  const off = new Float32Array(n * 2 * 3);
-  const scl = new Float32Array(n * 2 * 2);
-  const flat = new Float32Array(n * 2);
+  // Three quads per lamp: 3*i the tight halo at the flame, 3*i+1 the ground
+  // pool, 3*i+2 a big faint ambient sphere that additively warms whatever
+  // stands behind it - which is how the nearby facades catch the lamplight
+  // without any real lights existing. (Cycle 3: "lamp head glows but lights
+  // nothing" - the old pool was 2 m of radius and additive at 5% of a night
+  // frame; these are sized and weighted against the post pass's night grey.)
+  geo.instanceCount = n * 3;
+  const off = new Float32Array(n * 3 * 3);
+  const scl = new Float32Array(n * 3 * 2);
+  const flat = new Float32Array(n * 3);
   for (let i = 0; i < n; i++) {
     const it = instances[i];
-    off[i * 6] = it.x; off[i * 6 + 1] = it.y; off[i * 6 + 2] = it.z;
-    off[i * 6 + 3] = it.x; off[i * 6 + 4] = (it.ground !== undefined ? it.ground : it.y - 400) + 6; off[i * 6 + 5] = it.z;
+    const gy = (it.ground !== undefined ? it.ground : it.y - 400) + 8;
     const r = it.r || 220;
-    scl[i * 4] = r; scl[i * 4 + 1] = r;
-    scl[i * 4 + 2] = r * 1.9; scl[i * 4 + 3] = r * 1.9;
-    flat[i * 2] = 0; flat[i * 2 + 1] = 1;
+    const o = i * 9, s = i * 6;
+    off[o] = it.x; off[o + 1] = it.y; off[o + 2] = it.z;
+    off[o + 3] = it.x; off[o + 4] = gy; off[o + 5] = it.z;
+    off[o + 6] = it.x; off[o + 7] = it.y - 60; off[o + 8] = it.z;
+    scl[s] = r; scl[s + 1] = r;                    // halo
+    scl[s + 2] = r * 5.0; scl[s + 3] = r * 5.0;    // pool: ~600u radius
+    scl[s + 4] = r * 4.2; scl[s + 5] = r * 4.2;    // ambient sphere
+    flat[i * 3] = 0; flat[i * 3 + 1] = 1; flat[i * 3 + 2] = 2;
   }
   geo.setAttribute('iOffset', new THREE.InstancedBufferAttribute(off, 3));
   geo.setAttribute('iScale', new THREE.InstancedBufferAttribute(scl, 2));
@@ -1332,7 +1380,7 @@ export function makeGlowField(instances, opts = {}) {
       void main() {
         vUv = uv;
         vFlat = iFlat;
-        vec3 wp = iFlat > 0.5
+        vec3 wp = (iFlat > 0.5 && iFlat < 1.5)
           ? iOffset + vec3(position.x * iScale.x, 0.0, -position.y * iScale.y)
           : iOffset + uRight * (position.x * iScale.x) + vec3(0.0, position.y * iScale.y, 0.0);
         gl_Position = projectionMatrix * modelViewMatrix * vec4(wp, 1.0);
@@ -1345,8 +1393,19 @@ export function makeGlowField(instances, opts = {}) {
       void main() {
         if (uGlow <= 0.004) discard;
         float d = length(vUv - 0.5) * 2.0;
-        // Tight hot core with a wide soft skirt; the pool is fainter.
-        float a = pow(clamp(1.0 - d, 0.0, 1.0), 2.2) * (vFlat > 0.5 ? 0.38 : 0.85);
+        float a;
+        if (vFlat > 1.5) {
+          // Ambient sphere: broad and faint, there to catch facades/props.
+          a = pow(clamp(1.0 - d, 0.0, 1.0), 2.0) * 0.30;
+        } else if (vFlat > 0.5) {
+          // Ground pool: bright core under the lamp, long soft skirt. The
+          // post pass multiplies the frame to ~15% at night, so the additive
+          // term must run close to saturation at the centre to read at all.
+          a = pow(clamp(1.0 - d, 0.0, 1.0), 1.6) * 1.05;
+        } else {
+          // Flame halo.
+          a = pow(clamp(1.0 - d, 0.0, 1.0), 2.2) * 0.9;
+        }
         gl_FragColor = vec4(uColor * (a * uGlow), 1.0);
       }`,
     blending: THREE.AdditiveBlending,

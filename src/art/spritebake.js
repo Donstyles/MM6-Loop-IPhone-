@@ -457,7 +457,7 @@ const POSE_WEIGHT = [
   ['attack_melee', 0.55, 0.55, 0.25, 0.22], ['attack_ranged', 0.5, 0.5, 0.20, 0.20],
   // The corpse frame lies nearly flat, so it needs real radial room or the
   // keel-over clips at the cell wall and the body vanishes mid-fall.
-  ['dying', 1, 0.25, 0.40, 0.34],
+  ['dying', 1, 0.25, 0.45, 0.50],
 ];
 
 function measure(model, actionList) {
@@ -641,6 +641,10 @@ export function bakeSheet(renderer, builderFn, opts = {}) {
   const img = g.createImageData(lay.atlasW, lay.atlasH);
   flipAndCut(buf, img.data, lay.atlasW, lay.atlasH);
   if (outline) rimOutline(img.data, lay);
+  // A dark blood pool spreads under the dying/dead frames, painted behind the
+  // body (transparent texels only). Cheaper and more robust than a separate
+  // ground decal entity, and it persists exactly as long as the corpse does.
+  if (opts.bloodPool) paintBloodPools(img.data, lay, actionMap, views, seed);
   if (palette) palettise(img, dither);
   g.putImageData(img, 0, 0);
 
@@ -758,6 +762,60 @@ function palettise(img, amount) {
   return img;
 }
 
+/**
+ * Paint a dark blood pool into the transparent texels under the body for the
+ * late dying frames and the dead frame. Runs before palettisation, so the
+ * hand-mixed reds snap onto the blood ramp with everything else. The ellipse
+ * grows with the fall and its edge is ragged by a hash, so no two corpses
+ * carry the same puddle.
+ */
+function paintBloodPools(d, lay, actionMap, views, seed) {
+  const { atlasW: w, cellW, cellH } = lay;
+  const hash = (x, y) => {
+    let h = (x * 374761393 + y * 668265263 + (seed | 0) * 69069) | 0;
+    h = (h ^ (h >> 13)) * 1274126177;
+    return ((h ^ (h >> 16)) >>> 0) / 4294967296;
+  };
+  const pools = [];
+  for (const name of ['dying', 'dead']) {
+    const info = actionMap[name];
+    if (!info) continue;
+    for (let f = 0; f < info.frames; f++) {
+      const t = name === 'dead' ? 1 : (info.frames <= 1 ? 1 : f / (info.frames - 1));
+      if (t < 0.55) continue;
+      pools.push([info.row0 + f, (t - 0.55) / 0.45]);
+    }
+  }
+  for (const [idx, k] of pools) {
+    const row = Math.floor(idx / lay.blocks);
+    const blk = idx % lay.blocks;
+    const y0 = row * cellH;
+    for (let v = 0; v < views; v++) {
+      const x0 = (blk * views + v) * cellW;
+      const cx = cellW / 2;
+      const rx = Math.max(3, cellW * 0.40 * (0.45 + 0.55 * k));
+      const ry = Math.max(2, rx * 0.26);
+      const cy = cellH - 2 - ry;
+      for (let py = Math.floor(cy - ry); py <= Math.min(cellH - 2, Math.ceil(cy + ry)); py++) {
+        for (let px = Math.floor(cx - rx); px <= Math.ceil(cx + rx); px++) {
+          if (px < 1 || px >= cellW - 1) continue;
+          const dx = (px - cx) / rx, dy = (py - cy) / ry;
+          const r2 = dx * dx + dy * dy;
+          const rag = 0.72 + hash(px + x0, py + y0) * 0.42;
+          if (r2 > rag) continue;
+          const o = ((y0 + py) * w + (x0 + px)) * 4;
+          if (d[o + 3] !== 0) continue;         // body pixels stay on top
+          const dark = r2 > rag * 0.45;
+          d[o] = dark ? 66 : 96;
+          d[o + 1] = dark ? 8 : 14;
+          d[o + 2] = dark ? 8 : 12;
+          d[o + 3] = 255;
+        }
+      }
+    }
+  }
+}
+
 /** Bottom-up RGBA -> top-down RGBA with a hard 1-bit alpha cut. */
 function flipAndCut(src, dst, w, h) {
   const rowBytes = w * 4;
@@ -837,14 +895,14 @@ export function bakeCreatureSheet(renderer, kind, seed = 1, opts = {}) {
     // curved mass: a Bayer pattern strong enough to smooth a sky gradient turns
     // a demon's chest into a visible red checkerboard, and MM6's own sprites
     // band rather than dither - spec 16 calls the banding part of the look.
-    margin: 1.03, dither: 0, aspect: def ? def.aspect : 0, ...opts,
+    margin: 1.03, dither: 0, aspect: def ? def.aspect : 0, bloodPool: true, ...opts,
   });
 }
 
 export function bakeNPCSheet(renderer, archetype, seed = 1, opts = {}) {
   return bakeSheet(renderer, (s) => buildNPC(archetype, s), {
     kind: archetype, seed, actions: ACTIONS, maxCellH: 128, maxAtlas: 1024,
-    margin: 1.03, dither: 0, aspect: 0.60, ...opts,
+    margin: 1.03, dither: 0, aspect: 0.60, bloodPool: true, ...opts,
   });
 }
 

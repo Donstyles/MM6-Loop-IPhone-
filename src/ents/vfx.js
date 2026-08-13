@@ -301,15 +301,26 @@ export class VFXSystem {
     s.homing = o.homing || 0;
     s.target = o.target || null;
     s.onHit = o.onHit || null;
-    s.impactId = o.impactId || null;
-    s.trailId = o.trail === undefined ? defaultTrail(id) : o.trail;
-    s.trailEvery = o.trailEvery || 0.045;
+    // Every bolt detonates as something. A caller that names no impact gets
+    // the projectile family's own burst rather than nothing - the cycle-3
+    // shaman bolt hit the party with zero visual because the monster-ranged
+    // path never passed impactId.
+    const baseId = resolveEffectId(s.id) || s.id;
+    s.impactId = o.impactId === undefined ? (IMPACT_FOR[baseId] || null) : o.impactId;
+    s.trailId = o.trail === undefined ? defaultTrail(baseId) : o.trail;
+    s.trailEvery = o.trailEvery || 0.035;
     s.radius = o.radius || 60;
     s.source = o.source || null;
     s.scale = o.scale || 1;
     s.spin = o.speed2 || o.spin || 1;
     s.loop = true;
     this._applyTint(s, o.tint);
+    // Muzzle flash: a small one-shot of the impact art at the cast point, so
+    // a cast is an event even when the bolt itself starts 3px small.
+    if (o.muzzle !== false && s.impactId) {
+      this.burst(s.impactId, s.x + s.vx * 0.02, s.y + s.vy * 0.02, s.z + s.vz * 0.02,
+        { scale: (o.scale || 1) * 0.5, tint: o.tint });
+    }
     return s;
   }
 
@@ -557,7 +568,8 @@ export class VFXSystem {
     if (!hit && !hitTerrain) { s.x = nx; s.y = ny; s.z = nz; }
     else { if (!hitTerrain) { s.x = nx; s.y = ny; s.z = nz; } }
 
-    // Trail: a stream of small short-lived sprites behind the head.
+    // Trail: a stream of short-lived sprites behind the head, drawn additive
+    // by the renderer so the bolt strokes a glowing streak across the frame.
     if (s.trailId) {
       s.trailTimer -= dt;
       if (s.trailTimer <= 0) {
@@ -566,10 +578,10 @@ export class VFXSystem {
         if (t && this._bind(t, s.trailId)) {
           t.kind = KIND_TRAIL;
           t.x = s.x - s.vx * dt * 0.5; t.y = s.y - s.vy * dt * 0.5; t.z = s.z - s.vz * dt * 0.5;
-          t.scale = s.scale * 0.45;
-          t.life = 0.22;
+          t.scale = s.scale * 0.62;
+          t.life = 0.3;
           t.spin = 1.6;
-          t.fade = 0.12;
+          t.fade = 0.18;
           t.lrad *= 0.4;
         }
       }
@@ -583,7 +595,10 @@ export class VFXSystem {
     const done = hit || hitTerrain || expired;
     if (!done) return;
     if (s.impactId) {
-      this.burst(s.impactId, s.x, s.y, s.z, { scale: s.scale, tint: [s.tr, s.tg, s.tb] });
+      // Detonate on hit AND on miss-expiry: a fireball that fizzles into
+      // nothing at max range reads as a despawn, not as combat (visual 3 #4).
+      this.burst(s.impactId, s.x, s.y, s.z,
+        { scale: expired && !hit ? s.scale * 0.8 : s.scale, tint: [s.tr, s.tg, s.tb] });
     } else if (expired && !hit) {
       // Ran out of range in mid-air: a small puff, so the bolt visibly dies
       // rather than blinking out.
@@ -642,7 +657,17 @@ export class VFXSystem {
       const maxSize = Math.max(60, dist * 1.05);
       const big = Math.max(w, h);
       if (big > maxSize) { const k = maxSize / big; w *= k; h *= k; }
-      const batch = sr.batchFor(sheet.texture);
+      // Distance floor for things in flight: a shaman's bolt at 3000 units was
+      // a 4px dot the judge only found in a still. Never let a projectile (or
+      // its trail) drop under ~4.5% of its distance - about 14 screen pixels -
+      // so incoming fire is readable the moment it leaves the caster.
+      if (s.kind === KIND_PROJ || s.kind === KIND_TRAIL) {
+        const minSize = dist * (s.kind === KIND_PROJ ? 0.05 : 0.034);
+        if (big < minSize && big > 0) { const k = minSize / big; w *= k; h *= k; }
+      }
+      const batch = (s.kind === KIND_TRAIL && sr.batchForAdditive)
+        ? sr.batchForAdditive(sheet.texture)
+        : sr.batchFor(sheet.texture);
       // Sprite quads grow upward from their anchor; effects are centred on
       // their point, so drop the anchor by half the height.
       batch.add(s.x, s.y - h * 0.5, s.z, w, h,

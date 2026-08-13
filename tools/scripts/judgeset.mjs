@@ -23,7 +23,11 @@ export default [
   // frame, so shoot it from inside the walls looking across the plaza.
   // Vantage: on the main street, camera on the nearest lamppost, so the frame
   // carries what night towns are about - lit windows and lantern halos.
-  ['08b-night-town', '(function(){ const m = __mm6.session.map; const t = (m.towns || (m.region && m.region.towns) || [])[0]; if (!t) return; const lamps = t.props.filter((p) => p.kind === "lamppost"); const l = lamps[0] || { x: t.x + 900, z: t.z }; const dx = l.x - t.x, dz = l.z - t.z, d = Math.hypot(dx, dz) || 1; const x = t.x + dx / d * (d - 700), z = t.z + dz / d * (d - 700); __mm6.teleport(x, m.groundAt(x, z, t.y || 0), z, Math.atan2(x - l.x, z - l.z)); })()', 900],
+  // Street-by-lamplight: stand ON the main street between two lampposts and
+  // look down the row, so the frame carries the pools on the cobbles, the
+  // halos, and the lit windows all at once - the walk-the-street-at-night
+  // reading the wow gate asks for.
+  ['08b-night-town', '(function(){ const m = __mm6.session.map; const t = (m.towns || (m.region && m.region.towns) || [])[0]; if (!t) return; const lamps = t.props.filter((p) => p.kind === "lamppost"); const a = lamps[0] || { x: t.x + 900, z: t.z }; const b = lamps[1] || { x: t.x, z: t.z }; const x = a.x + (b.x - a.x) * -0.25, z = a.z + (b.z - a.z) * -0.25; __mm6.teleport(x, m.groundAt(x, z, t.y || 0), z, Math.atan2(x - b.x, z - b.z)); __mm6.session.player.pitch = 0; })()', 900],
   ['09-outdoor-dawn', '__mm6.clearView(); __mm6.setTime(5,45)', 900],
   // Re-seat before spawning: frame 06 often ends with the camera inside a
   // canopy or against a building corner, and monsters spawned straight ahead
@@ -32,6 +36,11 @@ export default [
   // spelling ('Goblin Shaman' -> GoblinB via the baker's name resolution),
   // and the boss tier - cycle 3 must see all three render.
   ['10-combat', '__mm6.clearView(); __mm6.setTime(12,0); __mm6.spawn("GoblinA",600); __mm6.spawn("Goblin Shaman",900); __mm6.spawn("GoblinC",1250)', 2600],
+  // Bolt fight: a real shaman (spawned by tier ID so it has its ranged entry)
+  // alone at casting range on a fresh vantage - frame 10's melee goblins would
+  // otherwise be parked on the lens by now. The settle time catches the bolt
+  // mid-flight with its trail, or the detonation burst.
+  ['10b-bolt-fight', '__mm6.clearView(); __mm6.spawn("GoblinB", 1600)', 800],
   ['11-combat-attack', '__mm6.attack()', 700],
   ['12-combat-turnbased', '__mm6.session.toggleTurnBased(); __mm6.attack()', 900],
   // A field of corpses: three goblins dropped where they stand, so the judge

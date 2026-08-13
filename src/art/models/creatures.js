@@ -871,9 +871,11 @@ function poseBiped(r, action, t) {
     case 'die': case 'dead': {
       const u = action === 'dead' ? 1 : ez(t);
       const e = u * u;
-      // Keel over almost flat. The old half-crumple (1.10 rad + heavy squash)
-      // left the corpse an upright green bundle that read as a still-standing
-      // monster; a body on the ground has to *lie down* to read as a kill.
+      // Keel over almost flat, limbs thrown wide. The flat keel alone read as
+      // a "featureless green lump" past ~400u (visual 3 #5): the splay is what
+      // gives the corpse a silhouette - arms flung out to the sides, legs
+      // scissored, head lolled - and it exposes the torso front, whose
+      // cloth/skin banding is the body's own value contrast.
       r.root.rotation.x += e * 1.42;
       r.root.rotation.z += e * 0.22;
       r.root.scale.y *= 1 - e * 0.10;
@@ -881,11 +883,13 @@ function poseBiped(r, action, t) {
       r.body.position.y += -e * H * 0.10;
       r.torso.rotation.x += e * 0.35;
       r.head.rotation.x += e * 0.55;
-      r.armL.rotation.x += e * 1.1; r.armL.rotation.z += e * 0.6;
-      r.armR.rotation.x += e * 0.7; r.armR.rotation.z += -e * 0.8;
-      r.foreL.rotation.x += -e * 0.7; r.foreR.rotation.x += -e * 0.7;
+      r.head.rotation.z += e * 0.5;
+      r.armL.rotation.x += e * 0.9; r.armL.rotation.z += e * 1.45;
+      r.armR.rotation.x += e * 0.5; r.armR.rotation.z += -e * 1.30;
+      r.foreL.rotation.x += -e * 0.45; r.foreR.rotation.x += -e * 0.55;
       if (hasLegs) {
-        r.legL.rotation.x += e * 0.55; r.legR.rotation.x += -e * 0.30;
+        r.legL.rotation.x += e * 0.45; r.legR.rotation.x += -e * 0.25;
+        r.legL.rotation.z += e * 0.34; r.legR.rotation.z += -e * 0.30;
         r.shinL.rotation.x += e * 0.9; r.shinR.rotation.x += e * 0.5;
       }
       if (r.wingL) { r.wingL.rotation.z += e * 0.9; r.wingR.rotation.z += -e * 0.9; }

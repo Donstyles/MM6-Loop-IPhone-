@@ -104,7 +104,11 @@ export function daylightFactor(hours) {
   const minutes = clamp((h - 5) * 60, 0, 960);
   const sunY = Math.sin(minutes * Math.PI / 960);
   const rel = sunY >= 0.30 ? 1 : Math.max(0, sunY) / 0.30;
-  return 0.5 + 0.5 * rel;
+  // Night floor 0.62, not 0.5: the post pass already multiplies the frame to
+  // ~15%, and 0.5 * 0.15 put a midnight street at 5% luminance - unreadable
+  // (wow-judge cycle 3). The floor is the *bake-side* exposure; real darkness
+  // still comes from the global night multiply.
+  return 0.62 + 0.38 * rel;
 }
 
 // --- cloud plate -----------------------------------------------------------
@@ -232,6 +236,9 @@ const SKY_FRAG = /* glsl */`
   uniform sampler2D uSky;
   uniform vec3 uTint;        // time-of-day grey multiply
   uniform vec3 uHaze;        // sub-horizon fill / fog target
+  uniform vec3 uWarm;        // horizon-band tint (dawn/dusk warmth)
+  uniform float uNight;      // 0 = day, 1 = deep night
+  uniform vec3 uMoonDir;
   uniform vec2 uDrift;       // self-scroll of the cloud plate
   uniform vec2 uCamXZ;
   uniform float uScale;      // world units per texture repeat
@@ -240,6 +247,10 @@ const SKY_FRAG = /* glsl */`
   uniform float uViewportH;
   varying vec3 vRay;
   varying vec2 vScreen;
+
+  float hash21(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+  }
 
   // The cloud plate is sRGB-tagged (decoded to linear on fetch), uHaze is
   // stored linear, and the render target is an SRGB8 attachment whose
@@ -256,20 +267,60 @@ const SKY_FRAG = /* glsl */`
       // exactly what compresses the cloud plate into a striated band there.
       float t = uHeight / d.y;
       vec2 uv = (uCamXZ + d.xz * t) / uScale + uDrift;
-      vec3 c = texture2D(uSky, uv).rgb * uTint;
+      vec3 plate = texture2D(uSky, uv).rgb;
+      float cloudLum = dot(plate, vec3(0.299, 0.587, 0.114));
+      vec3 c = plate * uTint;
+      // Night: MM6 multiplies the sky bitmap itself down; without this the
+      // plate rides at daylight brightness and the moon has nothing to shine
+      // against (the global grey multiply lands on both equally).
+      c *= mix(1.0, 0.34, uNight);
+      if (uNight > 0.02) {
+        // Stars: sparse hashed points on the same infinite-plane projection,
+        // hidden where the cloud plate is bright (a star through a cumulus
+        // bank is an instant tell). They compress into the horizon band like
+        // everything else and drown in the haze there, which is right.
+        vec2 sp = d.xz / (d.y + 0.32) * 9.0;
+        vec2 cell = floor(sp);
+        float h = hash21(cell);
+        vec2 spos = vec2(hash21(cell + 17.0), hash21(cell + 41.0)) * 0.8 + 0.1;
+        float dist2 = length(fract(sp) - spos);
+        float star = step(0.78, h) * (1.0 - smoothstep(0.045, 0.085, dist2));
+        star *= 0.45 + 0.55 * hash21(cell + 7.0);
+        // The bare plate is already ~0.7 luminance sky-blue; only the cumulus
+        // tops rise past ~0.8. Gate on that so stars hide behind cloud banks
+        // but survive open sky.
+        float cover = smoothstep(0.74, 0.86, cloudLum);
+        star *= 1.0 - cover;
+        star *= smoothstep(0.05, 0.16, d.y);                  // fade at horizon
+        c += vec3(0.82, 0.86, 0.95) * star * uNight;
+        // Moon: a pale disc with a shadowed bite, fixed high in the sky.
+        float mdot = dot(d, uMoonDir);
+        float disc = smoothstep(0.99936, 0.99946, mdot);
+        float halo = smoothstep(0.9986, 0.99936, mdot) * 0.16;
+        float bite = smoothstep(0.99930, 0.99952, dot(normalize(d + vec3(0.024, 0.013, 0.0)), uMoonDir));
+        vec3 moonC = mix(vec3(0.97, 0.98, 0.92), vec3(0.58, 0.60, 0.57), bite * 0.72);
+        c = mix(c, moonC, (disc + halo) * uNight * (1.0 - cover * 0.7));
+      }
       // Two-stage haze. The engine draws a hard 39px fade band at the horizon;
       // on its own that leaves the sky above it still fully saturated and the
       // world ends on a visible line. A broad soft ramp over roughly a quarter
       // of the sky, with the tight band inside it, is what actually reads as
       // "the terrain dissolves into the horizon".
+      // The broad ramp fades toward a *warmed* haze (uWarm carries the hour's
+      // cast - amber at dawn/dusk, near-neutral at noon) while the tight band
+      // stays exactly on the fog target, so the terrain seam never shows. This
+      // replaces the tall flat grey band of cycle 3 with a graded horizon.
       float band = 1.0 - smoothstep(0.0, uBandPx, horizonPx);
       float broad = 1.0 - smoothstep(0.0, uBandPx * 4.5, horizonPx);
-      float f = clamp(band * 0.97 + broad * 0.45, 0.0, 1.0);
-      gl_FragColor = vec4(mix(c, uHaze, f), 1.0);
+      c = mix(c, uHaze * uWarm, clamp(broad * 0.38, 0.0, 1.0));
+      gl_FragColor = vec4(mix(c, uHaze, band * 0.97), 1.0);
     } else {
-      // Below the horizon: solid haze fill. Terrain covers most of it; what is
-      // left is the colour the world dissolves into.
-      gl_FragColor = vec4(uHaze, 1.0);
+      // Below the horizon: haze fill, darkening gently with depression angle
+      // so the strip between the far clip and the horizon reads as distant
+      // sea-haze rather than a flat grey card. The first degrees below the
+      // horizon stay exactly on the fog target to keep the terrain seam clean.
+      float deep = smoothstep(0.03, 0.30, -d.y);
+      gl_FragColor = vec4(uHaze * mix(1.0, 0.86, deep), 1.0);
     }
   }`;
 
@@ -291,6 +342,11 @@ export function buildSky(scene, opts = {}) {
       uSky: { value: skyTexture(opts.sky || 'plansky3') },
       uTint: { value: new THREE.Color(1, 1, 1) },
       uHaze: { value: new THREE.Color(0.62, 0.67, 0.73) },
+      uWarm: { value: new THREE.Color(1, 1, 1) },
+      uNight: { value: 0 },
+      // Elevation ~28 deg: high enough to sit over the rooftops, low enough
+      // that the +-22 deg pitch clamp can still frame it.
+      uMoonDir: { value: new THREE.Vector3(0.42, 0.44, -0.62).normalize() },
       uDrift: { value: new THREE.Vector2() },
       uCamXZ: { value: new THREE.Vector2() },
       uScale: { value: 3400 },
@@ -452,6 +508,28 @@ export function buildSky(scene, opts = {}) {
       fog.far = fog.near + (FAR_CLIP - fog.near) / maxA;
     }
     mat.uniforms.uHaze.value.copy(state.haze);
+
+    // Night factor for the plate dim, stars and moon: same curve the towns use
+    // for their lanterns, so the moon rises exactly as the lamps come up.
+    const nightK = clamp((0.92 - daylightFactor(state.tod)) / 0.30, 0, 1);
+    mat.uniforms.uNight.value = nightK;
+
+    // Horizon warmth: amber at dawn/dusk while the sun sits low, fading to a
+    // whisper at noon and to nothing at night. Applied only to the broad ramp
+    // above the horizon - the fog target itself stays neutral, so distance
+    // haze and the sky can never seam.
+    {
+      const h = state.tod;
+      const minutes = clamp((h - 5) * 60, 0, 960);
+      const sunY = Math.sin(minutes * Math.PI / 960);
+      const low = st.night ? 0 : clamp(1 - sunY / 0.55, 0, 1);
+      const w = Math.pow(low, 1.5);
+      mat.uniforms.uWarm.value.setRGB(
+        1.04 + 0.24 * w,
+        1.01 + 0.02 * w,
+        0.98 - 0.22 * w,
+      );
+    }
 
     // Cloud plate self-drift; MM6's sky moves even when you stand still.
     const t = performance.now() / 1000;

@@ -7,6 +7,7 @@ import {
   placeableOnLand,
 } from './terrain.js';
 import { buildSky, FAR_CLIP, SHADE_DIST, timeTint, sunTerms, sunDirection, quantiseShade, daylightFactor } from './sky.js';
+import { SFX_IDS } from '../core/audio.js';
 import { generateTown } from './town.js';
 import { monstersInLevelRange, MONSTER_IDS } from '../game/monsters.js';
 import { MeshBuilder, buildRuins, buildHouse, addProp, materialFor, setBuildingLight, setWindowsLit } from './building.js';
@@ -876,7 +877,7 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
       if (heightAt(hm, x, z) < hm.water) return 'water';
       const i = clamp(Math.floor((x - hm.origin) / hm.tile), 0, hm.size - 1);
       const j = clamp(Math.floor((z - hm.origin) / hm.tile), 0, hm.size - 1);
-      return SURFACE_OF[hm.texIds[hm.tileTex[j * hm.size + i]]] || 'grass';
+      return surfaceAvailable(SURFACE_OF[hm.texIds[hm.tileTex[j * hm.size + i]]] || 'grass');
     },
     id, name: def.name, def, hm, terrain, sky, group,
     towns, dungeons, props, spawns, colliders, water, roads,
@@ -927,8 +928,10 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
       terrain.update(camera, dt);
       flora.update(camera);
       // Night dressing: windows light and lanterns halo as the daylight curve
-      // rolls off through dusk, and go dark again at dawn.
-      const nightK = clamp((0.78 - daylightFactor(sky.state.tod)) / 0.28, 0, 1);
+      // rolls off through dusk, and go dark again at dawn. (Curve rebased for
+      // the 0.62 night floor of daylightFactor: 0 while the sun is up, 1 at
+      // the floor - lamps start coming up ~40 minutes before dusk.)
+      const nightK = clamp((0.92 - daylightFactor(sky.state.tod)) / 0.30, 0, 1);
       setWindowsLit(nightK > 0.45);
       for (const t of towns) {
         if (t.glow) t.glow.userData.setGlow(nightK);
@@ -940,7 +943,7 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
       terrain.setTimeOfDay(bakedHour);
       setBuildingLight(bakedHour);
       sky.update(0, bakedHour);
-      const nightK = clamp((0.78 - daylightFactor(bakedHour)) / 0.28, 0, 1);
+      const nightK = clamp((0.92 - daylightFactor(bakedHour)) / 0.30, 0, 1);
       setWindowsLit(nightK > 0.45);
       for (const t of towns) if (t.glow) t.glow.userData.setGlow(nightK);
     },
@@ -961,14 +964,27 @@ export async function generateRegion(regionId, seed = 1, onProgress, opts = {}) 
 const SURFACE_OF = {
   grass: 'grass', grass_dry: 'grass', grass_lush: 'grass', farmland: 'grass',
   forest_floor: 'grass', tundra: 'grass', moss_rock: 'stone',
-  dirt: 'grass', mud: 'grass', swamp_muck: 'water', beach_wet: 'water',
+  dirt: 'grass', mud: 'grass', swamp_muck: 'water', beach_wet: 'sand',
   road_dirt: 'grass', road_cobble: 'stone', gravel: 'stone',
-  sand: 'grass', sand_dune: 'grass',
+  sand: 'sand', sand_dune: 'sand',
   snow: 'snow', snow_rock: 'snow', cliff_snow: 'snow',
   ash: 'stone', volcanic_rock: 'stone',
   cliff_rock: 'stone', cliff_sand: 'stone', cliff_volcanic: 'stone',
   water: 'water', water_deep: 'water', swamp_water: 'water', lava: 'stone',
 };
+
+// The audio module ships step_<surface> per class. 'sand' is new this cycle;
+// until the shell's step_sand asset lands, fall back to grass rather than
+// spamming unknown-sound warnings on every beach step.
+let _hasSandStep = null;
+function surfaceAvailable(surf) {
+  if (surf !== 'sand') return surf;
+  if (_hasSandStep === null) {
+    _hasSandStep = false;
+    try { _hasSandStep = SFX_IDS.includes('step_sand'); } catch (e) { /* no audio module */ }
+  }
+  return _hasSandStep ? 'sand' : 'grass';
+}
 
 /**
  * Pre-render the top-down automap plate once.

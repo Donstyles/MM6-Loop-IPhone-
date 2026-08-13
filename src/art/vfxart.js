@@ -1112,7 +1112,10 @@ function wispGlow(p, f, n) {
 // --- effect table ----------------------------------------------------------
 
 const DEFS = [
-  ['fire_bolt', 48, 8, 14, true, 140, 140, (p, f, n) => fireBall(p, f, n, { r: 0.4 })],
+  // 200u, up from 140: at bestiary cast ranges (2500-3500u) the bolt head has
+  // to survive being a distant sprite - vfx.render also floors its projected
+  // size, but the art itself carries the near/mid read.
+  ['fire_bolt', 48, 8, 14, true, 200, 200, (p, f, n) => fireBall(p, f, n, { r: 0.4 })],
   ['fireball', 64, 8, 14, true, 230, 230, (p, f, n) => fireBall(p, f, n, { r: 0.43 })],
   ['fire_burst', 96, 10, 20, false, 470, 470, fireBurst],
   ['flame_pillar', 64, 8, 12, true, 280, 470, flamePillar],

@@ -102,10 +102,14 @@ export class SpriteBatch {
   /**
    * @param {THREE.Texture} texture sprite atlas
    * @param {number} capacity max simultaneous sprites
+   * @param {{additive?:boolean}} [opts] additive batches glow (bolt trails,
+   *   halos): blending adds, depth is read-only, and fog pulls toward black
+   *   because an additive quad fading to pale haze leaves a glowing smudge.
    */
-  constructor(texture, capacity = 256) {
+  constructor(texture, capacity = 256, opts = {}) {
     this.capacity = capacity;
     this.count = 0;
+    this.additive = !!opts.additive;
 
     const geo = new THREE.InstancedBufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(QUAD_POS, 3));
@@ -133,13 +137,14 @@ export class SpriteBatch {
       fragmentShader: FRAG,
       uniforms: {
         map: { value: texture },
-        fogColor: { value: new THREE.Color(0x8fa5bd) },
+        fogColor: { value: new THREE.Color(this.additive ? 0x000000 : 0x8fa5bd) },
         fogNear: { value: 2000 },
         fogFar: { value: 6000 },
-        alphaTest: { value: 0.5 },
+        alphaTest: { value: this.additive ? 0.12 : 0.5 },
       },
-      transparent: false,
-      depthWrite: true,
+      transparent: this.additive,
+      blending: this.additive ? THREE.AdditiveBlending : THREE.NormalBlending,
+      depthWrite: !this.additive,
       depthTest: true,
       side: THREE.DoubleSide,
     });
@@ -148,7 +153,7 @@ export class SpriteBatch {
     this.material = mat;
     this.mesh = new THREE.Mesh(geo, mat);
     this.mesh.frustumCulled = false;
-    this.mesh.renderOrder = 1;
+    this.mesh.renderOrder = this.additive ? 2 : 1;
   }
 
   begin() { this.count = 0; }
@@ -190,7 +195,9 @@ export class SpriteBatch {
   }
 
   setFog(color, near, far) {
-    this.material.uniforms.fogColor.value.copy(color);
+    // Additive quads must always fade to black - toward any lighter fog they
+    // stop *adding* less and start smearing haze over the frame.
+    if (!this.additive) this.material.uniforms.fogColor.value.copy(color);
     this.material.uniforms.fogNear.value = near;
     this.material.uniforms.fogFar.value = far;
   }
@@ -220,6 +227,19 @@ export class SpriteRenderer {
       b.setFog(this.fog.color, this.fog.near, this.fog.far);
       this.scene.add(b.mesh);
       this.batches.set(texture.uuid, b);
+    }
+    return b;
+  }
+
+  /** Additive twin of batchFor - one extra draw call per glowing atlas. */
+  batchForAdditive(texture, capacity = 256) {
+    const key = texture.uuid + '|add';
+    let b = this.batches.get(key);
+    if (!b) {
+      b = new SpriteBatch(texture, capacity, { additive: true });
+      b.setFog(this.fog.color, this.fog.near, this.fog.far);
+      this.scene.add(b.mesh);
+      this.batches.set(key, b);
     }
     return b;
   }
