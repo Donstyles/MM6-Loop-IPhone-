@@ -331,6 +331,10 @@ function handleKeys() {
     if (input.justPressed.has(`Digit${i + 1}`)) session.activeChar = i;
   }
   if (input.justPressed.has('KeyE') || input.justPressed.has('Space')) doActivate();
+  // The attack key was never wired: KEY_BINDS said KeyA but nothing polled
+  // it, and KeyA is strafe anyway. F and Ctrl swing (README/quickref agree).
+  if (input.justPressed.has('KeyF') || input.justPressed.has('ControlLeft')
+    || input.justPressed.has('ControlRight')) doAttack();
 }
 
 function handleWorldInput() {

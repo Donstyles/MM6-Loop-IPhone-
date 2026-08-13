@@ -25,6 +25,7 @@ import { mergeStatic } from './game/mergestatic.js';
 // ---------------------------------------------------------------------------
 
 export const SAVE_KEY = 'mm6-save';
+export const AUTOSAVE_KEY = 'mm6-autosave';
 export const SAVE_VERSION = 2;
 
 /** Realtime pace: MM6-ish, one real second is about one game minute. */
@@ -396,7 +397,10 @@ function inTown(session, wasIn) {
 function installSaveSystem(session, shell) {
   session.gameStarted = false;
 
-  session.saveGame = () => {
+  // Manual saves and autosaves live in SEPARATE slots: a defeat's autosave
+  // must never clobber the save the player deliberately made before the
+  // dungeon (veteran blocker #2). Continue/load picks whichever is newest.
+  session.saveGame = (opts = {}) => {
     try {
       const partyMod = session.modules?.partyMod;
       const data = {
@@ -418,14 +422,14 @@ function installSaveSystem(session, shell) {
       // (a monster's material, a THREE.Texture on a cached sprite); letting
       // JSON.stringify walk into their toJSON() spat ~15 texture-serialisation
       // warnings per save and bloated the blob. Strip them at the fence.
-      localStorage.setItem(SAVE_KEY, JSON.stringify(data, (k, v) => (
+      localStorage.setItem(opts.auto ? AUTOSAVE_KEY : SAVE_KEY, JSON.stringify(data, (k, v) => (
         v && typeof v === 'object'
           && (v.isTexture || v.isObject3D || v.isMaterial || v.isBufferGeometry
             || v.isWebGLRenderTarget || v instanceof HTMLCanvasElement
             || v instanceof HTMLImageElement)
           ? undefined : v
       )));
-      session.saveName = `Saved ${session.clock.formatDate()}, ${session.clock.format()}`;
+      session.saveName = `${opts.auto ? 'Autosaved' : 'Saved'} ${session.clock.formatDate()}, ${session.clock.format()}`;
       return true;
     } catch (e) {
       console.warn('save failed', e);
@@ -436,9 +440,15 @@ function installSaveSystem(session, shell) {
   session.loadGame = () => {
     let data = null;
     try {
-      const raw = localStorage.getItem(SAVE_KEY);
-      if (!raw) return false;
-      data = JSON.parse(raw);
+      // Newest slot wins, manual or auto.
+      const parse = (key) => {
+        try { const r = localStorage.getItem(key); return r ? JSON.parse(r) : null; }
+        catch { return null; }
+      };
+      const manual = parse(SAVE_KEY), auto = parse(AUTOSAVE_KEY);
+      data = !manual ? auto : !auto ? manual
+        : ((auto.at || 0) > (manual.at || 0) ? auto : manual);
+      if (!data) return false;
     } catch (e) { console.warn('load failed', e); return false; }
     if (!data || typeof data !== 'object') return false;
     // The promise is exposed so the menu flow can hold a loading veil up until
@@ -452,7 +462,7 @@ function installSaveSystem(session, shell) {
   // --- autosave ------------------------------------------------------------
   const autosave = (why) => {
     if (!session.gameStarted) return;   // never clobber a real save from the menu
-    try { session.saveGame(); } catch { /* best effort */ }
+    try { session.saveGame({ auto: true }); } catch { /* best effort */ }
   };
   addEventListener('pagehide', () => autosave('pagehide'));
   document.addEventListener('visibilitychange', () => {
@@ -563,7 +573,7 @@ async function applySave(session, shell, data) {
 
 /** True when a save exists that loadGame could restore. */
 export function hasSave() {
-  try { return !!localStorage.getItem(SAVE_KEY); } catch { return false; }
+  try { return !!(localStorage.getItem(SAVE_KEY) || localStorage.getItem(AUTOSAVE_KEY)); } catch { return false; }
 }
 
 // ---------------------------------------------------------------------------

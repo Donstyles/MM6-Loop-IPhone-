@@ -23,10 +23,11 @@ On a phone, open the dev server's LAN address in Safari and add it to the home
 screen. Drag anywhere in the world window to look, use the stick in the lower
 left to move, tap to attack or interact, and tap the interface as normal.
 
-Keyboard: `WASD` move, `A`/`D` strafe, arrows turn, mouse-drag looks, `Space`
-jump, `E`/`Enter` interact, `A` attack, `C` character sheet, `I` inventory,
-`B` spellbook, `Q` quests, `M` map, `Z` quick reference, `R` rest,
-`Enter` turn-based mode, `1`–`4` select a character, `Esc` options.
+Keyboard: `WASD` move (`A`/`D` strafe), arrows turn, mouse-drag looks,
+`E`/`Space` interact, `F` or `Ctrl` attack, `C` character sheet,
+`I` inventory, `B` spellbook, `Q` quests, `M` map, `Z` quick reference,
+`R` rest, `Enter` turn-based mode, `1`–`4` select a character,
+`Esc` options.
 
 ## How the look is reproduced
 
