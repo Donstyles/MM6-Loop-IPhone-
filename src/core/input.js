@@ -61,7 +61,7 @@ export class Input {
     this.lookTouch = { active: false, id: -1, lx: 0, ly: 0, moved: 0, sx: 0, sy: 0 };
 
     // On-screen action keys (portrait control zone). id -> pressed pointerId.
-    this.touchButtons = { attack: -1, interact: -1 };
+    this.touchButtons = { attack: -1, interact: -1, inventory: -1, questlog: -1 };
 
     // Pointer events queued for the UI layer to consume this frame.
     this.uiEvents = [];
@@ -136,7 +136,12 @@ export class Input {
     const c = layout.controls;
     if (!c) return null;
     const w = Math.round(c.w * 0.38);
-    const h = Math.min(c.h - 16, Math.max(200, mmToLogical(45)));
+    // Never taller than the band below the log + action-key rows: the grown
+    // 3D window leaves a shorter band, and a pad that crept up over the key
+    // row would capture their presses as look-drags.
+    const keyS = Math.max(44, mmToLogical(7.5));
+    const cap = c.h - (58 + keyS + 20);
+    const h = Math.max(120, Math.min(c.h - 16, cap, Math.max(200, mmToLogical(45))));
     return {
       x: c.x + c.w - w - layout.safe.right - 8,
       y: c.y + c.h - h - 8,
@@ -152,15 +157,20 @@ export class Input {
       // Landscape phone: ATTACK/USE stacked in the lower-right of the 3D
       // window, inside the safe insets. They did not exist at all here, which
       // made combat unreachable by touch (wowjudge landscape finding).
+      // PACK/QUEST stand in a second column beside them: landscape had NO
+      // touch path to the inventory or the quest log at all (iphone #3).
       if (!this.hasTouch) return [];
       const v = layout.view;
       const ls = Math.max(44, mmToLogical(8));
       const lgap = Math.max(8, mmToLogical(2));
       const lx = Math.round(v.x + v.w - ls - 12 - layout.safe.right);
       const ly = Math.round(v.y + v.h - ls - 12 - Math.max(0, layout.safe.bottom - (layout.h - (v.y + v.h))));
+      const px = lx - ls - lgap;
       return [
         { id: 'attack', x: lx, y: ly - ls - lgap, w: ls, h: ls },
         { id: 'interact', x: lx, y: ly, w: ls, h: ls },
+        { id: 'inventory', x: px, y: ly - ls - lgap, w: ls, h: ls },
+        { id: 'questlog', x: px, y: ly, w: ls, h: ls },
       ];
     }
     const s = Math.max(44, mmToLogical(8));

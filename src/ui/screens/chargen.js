@@ -41,6 +41,11 @@ function makeSlot(i, seed) {
     name: rnd.pick(sex === 'm' ? NAMES_M : NAMES_F),
     sex,
     class: klass,
+    // The painting's identity. The portrait renderer dresses a face by class
+    // (collar, hood, background tint), so this is pinned at roll time and
+    // NEVER follows a class pick: choosing Sorcerer must not repaint the
+    // face the player already chose (iphone chargen quibble).
+    portraitKlass: klass,
     portraitSeed: (seed + i * 131) >>> 0,
     stats: Object.assign({}, CLASSES[klass].startStats),
     spent: 0,
@@ -129,6 +134,7 @@ export class ChargenScreen extends Screen {
 
   pointsLeft(s) { return POOL - (s.spent | 0); }
 
+  /** Class pick resets the STAT SHEET only - name, face and portrait stay. */
   setClass(s, klass) {
     s.class = klass;
     s.stats = Object.assign({}, CLASSES[klass].startStats);
@@ -160,6 +166,7 @@ export class ChargenScreen extends Screen {
       name: s.name, class: s.class, klass: s.class, sex: s.sex, level: 1, age: 18,
       stats: s.stats, skills: this.startSkills(s), conditions: {}, buffs: {},
       portraitSeed: s.portraitSeed,
+      portraitKlass: s.portraitKlass || s.class,
     };
   }
 

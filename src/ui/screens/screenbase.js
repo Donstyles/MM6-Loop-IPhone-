@@ -347,11 +347,13 @@ export const A = {
   },
 };
 
-/** Portrait canvas for a character, or null if the art module is not ready. */
+/** Portrait canvas for a character, or null if the art module is not ready.
+ *  `portraitKlass` pins the painting's garb to the class it was rolled with,
+ *  so re-picking a profession in chargen never repaints the chosen face. */
 export function portraitOf(ch, expression) {
   if (!ch) return null;
   return guard('portrait', () => PORTRAITS.getPortrait(ch.portraitSeed || 1,
-    { sex: ch.sex, klass: ch.class || ch.klass }, expression || 'normal'), () => null);
+    { sex: ch.sex, klass: ch.portraitKlass || ch.class || ch.klass }, expression || 'normal'), () => null);
 }
 export const PW = PORTRAITS.PORTRAIT_W || 90;
 export const PH = PORTRAITS.PORTRAIT_H || 78;

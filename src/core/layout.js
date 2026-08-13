@@ -50,6 +50,8 @@ export const layout = {
   wide: false,
   /** Portrait phone mode: frame scaled to full width, control zone below. */
   portrait: false,
+  /** Extra rows the 3D window grows by in portrait mode (0 elsewhere). */
+  viewExtra: 0,
   /** The touch control zone under the frame in portrait mode, or null. */
   controls: null,
   /** Safe-area insets in LOGICAL pixels (already divided by scale). */
@@ -140,20 +142,41 @@ export function computeLayout(cw, ch, allowWide = true) {
   layout.wide = logicalW > BASE_W;
   layout.portrait = portrait;
 
+  // Portrait: the band under the 480-row frame used to be mostly blank ashlar
+  // (the 3D window held ~26% of the screen). Grow the 3D window downward into
+  // that slack - the same GrayFace trick the wide mode plays horizontally,
+  // turned vertical - keeping enough band below for the message log, the
+  // thumb keys and the stick zone at their full physical sizes.
+  let viewExtra = 0;
+  if (portrait && logicalH > BASE_H + 24) {
+    const pxPerMm = cssPxPerMm() / scale;
+    const mm = (v) => Math.ceil(v * pxPerMm);
+    const keyS = Math.max(44, mm(7.5));          // portrait-band action keys
+    const stickR = Math.max(46, mm(9));          // virtual stick ring
+    // log (3 lines) + key row + stick zone + breathing room.
+    const minBand = 58 + keyS + 18 + stickR * 2 + 34;
+    const safeBottomL = insets.bottom / scale;
+    const slack = logicalH - BASE_H - safeBottomL - minBand;
+    // Cap: the window stops at 461x561 (~40% of a 19.5:9 screen) so the world
+    // stays a window, not a corridor.
+    viewExtra = Math.max(0, Math.min(216, Math.floor(slack)));
+  }
+  layout.viewExtra = viewExtra;
+
   layout.side.x = logicalW - SIDE_W;
   layout.side.y = 0;
   layout.side.w = SIDE_W;
-  layout.side.h = BASE_H - HUD_H;
+  layout.side.h = BASE_H - HUD_H + viewExtra;
 
   layout.hud.x = 0;
-  layout.hud.y = BASE_H - HUD_H;
+  layout.hud.y = BASE_H - HUD_H + viewExtra;
   layout.hud.w = logicalW;
   layout.hud.h = HUD_H;
 
   layout.view.x = VIEW_X;
   layout.view.y = VIEW_Y;
   layout.view.w = logicalW - SIDE_W - VIEW_X;
-  layout.view.h = VIEW_H;
+  layout.view.h = VIEW_H + viewExtra;
 
   PANEL.x = layout.view.x; PANEL.y = layout.view.y;
   PANEL.w = layout.view.w; PANEL.h = layout.view.h;
@@ -180,12 +203,13 @@ export function computeLayout(cw, ch, allowWide = true) {
   layout.pxPerMm = cssPxPerMm() / scale;
   layout.dpr = (typeof devicePixelRatio === 'number' ? devicePixelRatio : 1);
 
-  // The control zone: everything under the 480-row frame, minus the bottom
-  // safe inset (home indicator).
-  if (portrait && logicalH > BASE_H + 24) {
+  // The control zone: everything under the (possibly grown) frame, minus the
+  // bottom safe inset (home indicator).
+  const frameH = BASE_H + viewExtra;
+  if (portrait && logicalH > frameH + 24) {
     layout.controls = {
-      x: 0, y: BASE_H, w: logicalW,
-      h: Math.max(0, logicalH - BASE_H - layout.safe.bottom),
+      x: 0, y: frameH, w: logicalW,
+      h: Math.max(0, logicalH - frameH - layout.safe.bottom),
     };
   } else {
     layout.controls = null;

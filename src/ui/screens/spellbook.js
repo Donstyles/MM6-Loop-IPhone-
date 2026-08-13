@@ -19,8 +19,15 @@ import {
   SCHOOLS, SPELLS_BY_SCHOOL, spCostFor, canCast, schoolSkill,
   spellDamageAvg, spellDuration,
 } from '../../game/spells.js';
-import { MASTERY_NAMES, SCHOOL_TIER_LIMIT } from '../../game/skills.js';
+import { SCHOOL_TIER_LIMIT } from '../../game/skills.js';
 import { maxHP } from '../../game/stats.js';
+
+/** Mastery as a scribe would set it: rank words, not "Normal 1" (aesthete #9). */
+const RANK_NAMES = ['-', 'Novice', 'Expert', 'Master'];
+
+const ORDINALS = ['zeroth', 'first', 'second', 'third', 'fourth', 'fifth', 'sixth',
+  'seventh', 'eighth', 'ninth', 'tenth', 'eleventh', 'twelfth'];
+function ordinal(n) { return ORDINALS[n] || `${n}th`; }
 
 /** Bookmark tabs down the right edge, panel-relative - the engine's own list. */
 const TAB_Y = [10, 46, 83, 121, 158, 196, 234, 271, 307];
@@ -172,7 +179,12 @@ export class SpellbookScreen extends Screen {
     this.drawTabs(ctx, ch);
 
     if (!ch) {
-      F.drawText(ctx, 'No character selected.', px(198), py(150), { align: 'center', color: BOOK_INK });
+      // Themed empty state, never a bare toast on the leaf (aesthete #9): the
+      // same small-caps band the rank header uses, ruled into the parchment.
+      this.drawSmallCaps(ctx, 'THE BOOK LIES CLOSED', px(198), py(146), '#5a4630');
+      A.rule(ctx, px(120), py(160), 156, '#6b5636', 0.5);
+      F.drawText(ctx, 'No hand holds it open.', px(198), py(168),
+        { face: 'small', align: 'center', color: BOOK_INK });
     } else {
       this.drawSigils(ctx, ch, tint);
       this.drawFooter(ctx, ch);
@@ -247,6 +259,27 @@ export class SpellbookScreen extends Screen {
     if (cancel.click) { this.pickFor = null; this.sound('click'); }
   }
 
+  /**
+   * A letterspaced small-caps band with hairline rules either side - the way
+   * a scribe rules a rank entry into parchment. Ink only, no chrome.
+   */
+  drawSmallCaps(ctx, text, cx, y, color) {
+    const chars = [...String(text)];
+    const sp = 1;
+    const widths = chars.map((c) => (c === ' ' ? 3 : F.measure(c, 'small').w));
+    const total = widths.reduce((a, b) => a + b + sp, -sp);
+    let x = Math.round(cx - total / 2);
+    const x0 = x;
+    for (let i = 0; i < chars.length; i++) {
+      if (chars[i] !== ' ') {
+        F.drawText(ctx, chars[i], x, y, { face: 'small', color, shadow: '#ece0c2' });
+      }
+      x += widths[i] + sp;
+    }
+    A.rule(ctx, x0 - 26, y + 4, 20, '#6b5636', 0.5);
+    A.rule(ctx, x0 + total + 6, y + 4, 20, '#6b5636', 0.5);
+  }
+
   /** Nine painted bookmark tabs, no lettering, at the engine's coordinates. */
   drawTabs(ctx, ch) {
     for (let i = 0; i < SCHOOLS.length; i++) {
@@ -282,8 +315,16 @@ export class SpellbookScreen extends Screen {
 
     F.drawText(ctx, `${school ? school.name : ''} Magic`, px(LEFT.x + LEFT.w / 2), py(LEFT.y + 6),
       { face: 'title', align: 'center', color: '#2e2e2e' });
-    F.drawText(ctx, k.level > 0 ? `${MASTERY_NAMES[k.mastery]} ${k.level}` : 'Not learned',
-      px(RIGHT.x + RIGHT.w / 2), py(RIGHT.y + 8), { face: 'small', align: 'center', color: BOOK_INK });
+    // Rank band on the recto: a ruled small-caps entry a scribe would set,
+    // never the "Normal 1" debug read-out (aesthete #9). Mastery becomes the
+    // rank word and the skill level its circle.
+    if (k.level > 0) {
+      const rank = RANK_NAMES[k.mastery] || RANK_NAMES[1];
+      const band = k.level > 1 ? `${rank} · ${ordinal(k.level)} circle` : rank;
+      this.drawSmallCaps(ctx, band.toUpperCase(), px(RIGHT.x + RIGHT.w / 2), py(RIGHT.y + 8), '#5a4630');
+    } else {
+      this.drawSmallCaps(ctx, 'UNSTUDIED', px(RIGHT.x + RIGHT.w / 2), py(RIGHT.y + 8), '#8a7a62');
+    }
 
     let hovered = null;
     for (let i = 0; i < Math.min(11, list.length); i++) {

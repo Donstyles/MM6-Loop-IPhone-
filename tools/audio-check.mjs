@@ -20,6 +20,12 @@ const PAGE = 'tools/preview/audio.html';
 const MUSIC_BARS = 16;
 const WANT_EVENTS = process.argv.includes('--events');
 
+// One-shot stings, not loops: the victory fanfare and the defeat dirge are
+// deliberately sparse (the dirge is a bell toll over a drone - music.js
+// 316-331), so the "does it have a rhythm" lint does not apply to them.
+// They are tagged in the report instead of silently skipped.
+const STING_TRACKS = new Set(['victory', 'defeat']);
+
 const LIMITS = {
   sfxMaxDur: 8.0,
   silentRms: 0.001,
@@ -201,20 +207,21 @@ async function main() {
       };
     }, [id, MUSIC_BARS]);
     sanity[id] = r;
+    const sting = STING_TRACKS.has(id);
     const p = [];
     if (r.inKeyPct < LIMITS.inKeyPct) p.push('OUT-OF-KEY');
     if (r.melodyNotes && r.repeatedBars < 2) p.push('NO-REPEAT');
     if (!r.onGrid) p.push('OFF-GRID');
     if (r.melodySpan > LIMITS.melodySpan) p.push('MELODY-SPAN');
     if (r.badLen) p.push('BAD-LEN');
-    if (r.distinctSteps < 3) p.push('NO-RHYTHM');
+    if (r.distinctSteps < 3 && !sting) p.push('NO-RHYTHM');
     if (p.length) fails++;
     console.log('  ' + id.padEnd(14) + String(r.events).padStart(5) + ' ev  ' +
       String(r.inKeyPct).padStart(5) + '% in key  mel ' + String(r.melodyNotes).padStart(3) +
       ' span ' + String(r.melodySpan).padStart(2) +
       '  repeated-bars ' + String(r.repeatedBars).padStart(2) + '/' + r.melodyBars +
       '  steps ' + String(r.distinctSteps).padStart(2) +
-      '  ' + (p.length ? p.join(',') : 'ok'));
+      '  ' + (p.length ? p.join(',') : sting ? 'ok (sting)' : 'ok'));
   }
 
   console.log('\nRUNTIME  (live scheduler and voice pooling, not offline)');

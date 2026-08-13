@@ -160,11 +160,24 @@ export class HUD {
    * The party bar lifts clear of the home indicator in landscape: the niche
    * bottoms sit at y=452 of 480, so any inset deeper than the 28px remainder
    * pushed the portraits into the swipe zone (mobile3 #6).
+   *
+   * In portrait the whole bar rides DOWN by however many rows the 3D window
+   * grew (layout.viewExtra) - the window eats the blank band, the bar keeps
+   * its seat under it.
    */
   get pby() {
-    if (layout.portrait) return 0;
+    if (layout.portrait) return layout.viewExtra || 0;
     return -Math.max(0, Math.min(20, Math.ceil(layout.safe.bottom - 28)));
   }
+
+  /**
+   * Shift for the right column's LOWER fixtures (buff plaque, food/gold
+   * trough, book shelf) in portrait: they stay bottom-anchored against the
+   * party bar when the 3D window grows, so the seam into the bar never opens.
+   * The upper cluster (automap, compass, hirelings) stays top-anchored and
+   * the surplus reads as more carved stone between the two.
+   */
+  get sideShift() { return layout.portrait ? (layout.viewExtra || 0) : 0; }
 
   /**
    * Safe-area shifts for the interactive right-column rows. In landscape a
@@ -174,7 +187,7 @@ export class HUD {
    * parks the frame clear of both, so the shifts are zero there.
    */
   get keyShift() {
-    if (layout.portrait) return { x: 0, y: 0 };
+    if (layout.portrait) return { x: 0, y: layout.viewExtra || 0 };
     // The stock row already overhangs the 640x480 frame by a couple of pixels
     // (BUTTON_X[3]+40 = 642, BUTTON_Y+35 = 485), so under a live inset the
     // shift covers the inset AND that overhang, plus a 4px breath.
@@ -213,10 +226,10 @@ export class HUD {
    * is supposed to be holding.
    */
   chromeGeom() {
-    const dx = this.rx, bx = this.bx, by = this.pby;
+    const dx = this.rx, bx = this.bx, by = this.pby, sy = this.sideShift;
     const slots = [];
     for (let row = 0; row < 2; row++) {
-      for (const x of BUFF_ROW_X[row]) slots.push([x + dx, BUFF_ROW_Y[row]]);
+      for (const x of BUFF_ROW_X[row]) slots.push([x + dx, BUFF_ROW_Y[row] + sy]);
     }
     return {
       view: layout.view, side: layout.side, hud: layout.hud,
@@ -227,9 +240,9 @@ export class HUD {
       map: { x: MAP_X + dx, y: MAP_Y, w: MAP_W, h: MAP_H },
       compass: { x: COMPASS_X + dx, y: COMPASS_Y, w: COMPASS_W, h: HC.COMPASS_H },
       hire: { x: [HIRE_X[0] + dx, HIRE_X[1] + dx], y: HIRE_Y, w: PORTRAIT_W, h: PORTRAIT_H },
-      buffPanel: { y: BUFF_ROW_Y[0] - 8, h: (BUFF_ROW_Y[1] + 16) - (BUFF_ROW_Y[0] - 8) + 8, slots },
-      foodGold: { y: FOODGOLD_Y, split: 554 + dx + this.keyShift.x },
-      tabs: { y: TAB_POS[0][1], h: 28 },
+      buffPanel: { y: BUFF_ROW_Y[0] + sy - 8, h: (BUFF_ROW_Y[1] + 16) - (BUFF_ROW_Y[0] - 8) + 8, slots },
+      foodGold: { y: FOODGOLD_Y + sy, split: 554 + dx + this.keyShift.x },
+      tabs: { y: TAB_POS[0][1] + sy, h: 28 },
       keys: { y: BUTTON_Y + this.keyShift.y },
     };
   }
@@ -354,10 +367,18 @@ export class HUD {
     ctx.restore();
     ctx.restore();
 
-    // Night: the automap darkens with the world instead of showing noon
-    // (wowjudge polish). A hard navy checker - no alpha washes in this frame.
-    if (S.map && !S.map.indoor && S.clock && S.clock.isNight) {
-      ctx.drawImage(nightShade(m.w, m.h), m.x, m.y);
+    // Twilight and night: the automap darkens with the WORLD's own curve
+    // (session.dayTint - the same value the sky and haze multiply by), not a
+    // noon-green map snapping dark at 21:00 (aesthete #6). The shade is an
+    // ordered navy dither whose coverage tracks the curve in 16 steps - no
+    // alpha washes in this frame.
+    if (S.map && !S.map.indoor && S.clock) {
+      let day = 1;
+      if (typeof S.dayTint === 'function') { try { day = S.dayTint(); } catch { day = 1; } }
+      else if (S.clock.isNight) day = 58 / 255;
+      // 0 at full day .. ~0.51 coverage at deep night (the old checker's 50%).
+      const step = Math.round(Math.max(0, Math.min(1, (1 - day) * 0.66)) * 16);
+      if (step > 0) ctx.drawImage(duskShade(m.w, m.h, step), m.x, m.y);
     }
 
     // ib-autmask goes on last, cutting the square blit into an arched aperture.
@@ -367,6 +388,10 @@ export class HUD {
     const zo = this.region('map:zoomout', ZOOM_OUT_X + this.rx, ZOOM_Y, 18, HC.COMPASS_H, 'Zoom out');
     HC.drawZoomKey(ctx, ZOOM_IN_X + this.rx, ZOOM_Y, 18, HC.COMPASS_H, 1, zi.down);
     HC.drawZoomKey(ctx, ZOOM_OUT_X + this.rx, ZOOM_Y, 18, HC.COMPASS_H, -1, zo.down);
+    if (this.modal) {
+      ctx.drawImage(dimShade(18, HC.COMPASS_H), ZOOM_IN_X + this.rx, ZOOM_Y);
+      ctx.drawImage(dimShade(18, HC.COMPASS_H), ZOOM_OUT_X + this.rx, ZOOM_Y);
+    }
     if (zi.click) this.minimapZoom = Math.max(2048, this.minimapZoom / 2);
     if (zo.click) this.minimapZoom = Math.min(65536, this.minimapZoom * 2);
 
@@ -375,6 +400,17 @@ export class HUD {
     // reads out on hover for desktop.
     const dt = this.region('map:open', m.x, m.y, m.w, m.h,
       `${this.session.clock.format()}  ${this.session.clock.formatDate()} - tap for the map`);
+    // Press state: the aperture's rim catches gold under the finger, so the
+    // automap visibly IS a key, not just a picture (iphone panels note).
+    if (dt.down && !this.modal) {
+      ctx.fillStyle = '#E1CD23';
+      ctx.fillRect(m.x + 2, m.y + 2, m.w - 4, 1);
+      ctx.fillRect(m.x + 2, m.y + m.h - 3, m.w - 4, 1);
+      ctx.fillRect(m.x + 2, m.y + 3, 1, m.h - 6);
+      ctx.fillRect(m.x + m.w - 3, m.y + 3, 1, m.h - 6);
+      F.drawText(ctx, 'MAP', m.x + m.w / 2, m.y + m.h - 14,
+        { face: 'small', align: 'center', color: '#E1CD23', shadow: '#000000' });
+    }
     this.buttons.push({ id: 'minimap', hit: dt });
   }
 
@@ -399,12 +435,16 @@ export class HUD {
       // hover/tap says what it is for.
       if (!npc) {
         HC.drawEmptyHook(ctx, x + (PORTRAIT_W >> 1), HIRE_Y + 5);
-        ctx.drawImage(nicheShade(PORTRAIT_W, PORTRAIT_H), x, HIRE_Y);
+        // Under a modal panel the panel's own backdrop dim does the knocking
+        // back; stacking the 50% checker under it read as hard black slabs in
+        // the level-up dither (aesthete #8).
+        if (!this.modal) ctx.drawImage(nicheShade(PORTRAIT_W, PORTRAIT_H), x, HIRE_Y);
         this.region(`hire${i}`, x, HIRE_Y, PORTRAIT_W, PORTRAIT_H,
           'An empty alcove. Hirelings you engage wait here.');
         continue;
       }
-      const p = getPortrait(npc.portraitSeed || i * 977, { sex: npc.sex || 'm', klass: npc.klass || npc.class }, 'normal');
+      const p = getPortrait(npc.portraitSeed || i * 977,
+        { sex: npc.sex || 'm', klass: npc.portraitKlass || npc.klass || npc.class }, 'normal');
       ctx.drawImage(p, x, HIRE_Y);
       UI.drawPortraitFrame(ctx, x, HIRE_Y, PORTRAIT_W, PORTRAIT_H, 'normal');
       const hit = this.region(`hire${i}`, x, HIRE_Y, PORTRAIT_W, PORTRAIT_H, `${npc.name} the ${npc.profession || 'Hireling'}`);
@@ -420,17 +460,20 @@ export class HUD {
   drawPartyBuffs(ctx) {
     const buffs = this.partyBuffs;
     const now = this.session.clock ? this.session.clock.minutes : 0;
+    const sy = this.sideShift;
     for (let row = 0; row < 2; row++) {
       const xs = BUFF_ROW_X[row];
       for (let i = 0; i < xs.length; i++) {
         const idx = row * 7 + i;
         const id = PARTY_BUFFS[idx];
         if (!id) continue;
-        const x = xs[i] + this.rx, y = BUFF_ROW_Y[row];
+        const x = xs[i] + this.rx, y = BUFF_ROW_Y[row] + sy;
         if (!buffUp(buffs, id, now)) {
           // The empty socket stays painted chrome, knocked back into shadow so
           // it reads as a waiting recess; the name only surfaces on hover/tap.
-          ctx.drawImage(nicheShade(16, 16), x, y);
+          // Not under a panel: the checker stacked with a panel's backdrop
+          // dither into hard black squares down the column (aesthete #8).
+          if (!this.modal) ctx.drawImage(nicheShade(16, 16), x, y);
           this.region(`buff${idx}`, x, y, 16, 16, `${PARTY_BUFF_NAMES[idx]} (not active)`);
           continue;
         }
@@ -458,20 +501,23 @@ export class HUD {
   drawFoodGold(ctx) {
     const P = this.session.party;
     const x = this.dx + this.keyShift.x;
-    F.drawText(ctx, fmtNum(P ? P.food : 0), 553 + x, FOODGOLD_Y, { face: 'small', align: 'right', color: '#FFFFFF' });
-    F.drawText(ctx, fmtNum(P ? P.gold : 0), 632 + x, FOODGOLD_Y, { face: 'small', align: 'right', color: '#FFFFFF' });
-    UI.drawIcon(ctx, 'food', 478 + x, FOODGOLD_Y - 2, 14);
-    UI.drawIcon(ctx, 'gold', 557 + x, FOODGOLD_Y - 2, 14);
-    this.region('food', 476 + x, FOODGOLD_Y, 77, 17, 'Food');
-    this.region('gold', 555 + x, FOODGOLD_Y, 77, 17, 'Gold');
+    const fy = FOODGOLD_Y + this.sideShift;
+    F.drawText(ctx, fmtNum(P ? P.food : 0), 553 + x, fy, { face: 'small', align: 'right', color: '#FFFFFF' });
+    F.drawText(ctx, fmtNum(P ? P.gold : 0), 632 + x, fy, { face: 'small', align: 'right', color: '#FFFFFF' });
+    UI.drawIcon(ctx, 'food', 478 + x, fy - 2, 14);
+    UI.drawIcon(ctx, 'gold', 557 + x, fy - 2, 14);
+    this.region('food', 476 + x, fy, 77, 17, 'Food');
+    this.region('gold', 555 + x, fy, 77, 17, 'Gold');
   }
 
   drawBookTabs(ctx) {
     const ids = ['quests', 'autonotes', 'maps', 'calendar', 'history'];
     const icons = ['quest', 'autonotes', 'map', 'options', 'history'];
     const flash = Math.floor(this.t) % 2 === 0;
+    const sy = this.sideShift;
     ids.forEach((id, i) => {
-      const [tx, by] = TAB_POS[i];
+      const [tx, ty] = TAB_POS[i];
+      const by = ty + sy;
       const x = tx + this.dx + this.keyShift.x;
       const w = TAB_W[i], h = TAB_H[i];
       // Touch: the hit rect grows to the full spine slot - down to the party
@@ -480,7 +526,7 @@ export class HUD {
       const touch = this.showTouch;
       const nx = i + 1 < TAB_POS.length ? TAB_POS[i + 1][0] + this.dx + this.keyShift.x : x + w + 6;
       const hit = touch
-        ? this.region(`tab:${id}`, x - 2, by - 6, Math.max(w + 4, nx - x - 1), 388 - (by - 6), TAB_LABELS[i])
+        ? this.region(`tab:${id}`, x - 2, by - 6, Math.max(w + 4, nx - x - 1), 388 + sy - (by - 6), TAB_LABELS[i])
         : this.region(`tab:${id}`, x, by, w, h, TAB_LABELS[i]);
       const alert = this.session.newEntries && this.session.newEntries[id];
       if (UI.drawBookSpine) {
@@ -491,6 +537,8 @@ export class HUD {
         UI.drawButton(ctx, x, by, w, h, null, hit.down ? 'down' : 'up');
         UI.drawIcon(ctx, icons[i], x + 6, by + 5, 16);
       }
+      // Asleep under a panel: the spines cannot answer, so they dim.
+      if (this.modal) ctx.drawImage(dimShade(w, h), x, by);
       this.buttons.push({ id: `tab:${id}`, hit });
     });
   }
@@ -513,7 +561,8 @@ export class HUD {
       // `klass` for legacy stub parties, `class` for the real party module -
       // reading only one of them was why the HUD busts stopped matching the
       // faces picked at character creation.
-      const p = getPortrait(ch.portraitSeed, { sex: ch.sex, klass: ch.klass || ch.class }, this.expressionFor(ch));
+      const p = getPortrait(ch.portraitSeed,
+        { sex: ch.sex, klass: ch.portraitKlass || ch.klass || ch.class }, this.expressionFor(ch));
       ctx.drawImage(p, px, PY);
 
       // IB-selec: one continuous glowing border round the portrait, following
@@ -573,6 +622,9 @@ export class HUD {
         const o = hit.down ? 1 : 0;
         UI.drawIcon(ctx, icon, x + 10 + o, y + 8 + o, 20);
       }
+      // A key that will not answer under an open panel dims instead of
+      // silently eating the tap (iphone #4).
+      if (this.modal) ctx.drawImage(dimShade(BUTTON_W, BUTTON_H), x, y);
       this.buttons.push({ id, hit });
     });
 
@@ -636,18 +688,19 @@ export class HUD {
    */
   drawStatusLine(ctx) {
     const cx = 11 + 225 + this.bx;
+    const STATUS = STATUS_Y + this.pby;   // the strip rides with the party bar
     const ink = { color: F.TEXT_HUD || '#0A0000', shadow: F.TEXT_HUD_SHADOW || '#E6D6C1' };
 
     if (this.modal) {
       // Panels register their regions AFTER this draws, so use the tooltip
       // they produced last frame; one frame of lag is invisible.
       const tip = this.ui.hoverText || this.ui.prevHoverText || '';
-      if (tip) { F.drawText(ctx, tip, cx, STATUS_Y, { align: 'center', maxWidth: 450, ...ink }); return; }
+      if (tip) { F.drawText(ctx, tip, cx, STATUS, { align: 'center', maxWidth: 450, ...ink }); return; }
       // No tooltip: a FRESH game message still gets through - quest
       // completion lines used to land invisibly behind the dialogue panel.
       const note = this._logNote;
       if (note && this.t < note.until) {
-        F.drawText(ctx, note.line.text, cx, STATUS_Y,
+        F.drawText(ctx, note.line.text, cx, STATUS,
           { align: 'center', maxWidth: 450, color: note.line.color || ink.color, shadow: ink.shadow });
       }
       return;
@@ -657,18 +710,18 @@ export class HUD {
       || (this.session.hoverEntity && this.session.hoverEntity.label)
       || '';
     if (hoverTip) {
-      F.drawText(ctx, hoverTip, cx, STATUS_Y, { align: 'center', maxWidth: 450, ...ink });
+      F.drawText(ctx, hoverTip, cx, STATUS, { align: 'center', maxWidth: 450, ...ink });
       return;
     }
     if (this._charStatus && this.t < this._charStatus.until) {
-      F.drawText(ctx, this._charStatus.text, cx, STATUS_Y, { align: 'center', maxWidth: 450, ...ink });
+      F.drawText(ctx, this._charStatus.text, cx, STATUS, { align: 'center', maxWidth: 450, ...ink });
       return;
     }
     // Facing a door within reach: name the establishment and the key that
     // opens it (wowjudge #5 - "label the world").
     const prompt = this.doorPrompt();
     if (prompt) {
-      F.drawText(ctx, prompt, cx, STATUS_Y, { align: 'center', maxWidth: 450, ...ink });
+      F.drawText(ctx, prompt, cx, STATUS, { align: 'center', maxWidth: 450, ...ink });
       return;
     }
 
@@ -682,11 +735,11 @@ export class HUD {
     const recent = this.session.log.recent(2);
     if (!recent.length) return;
     if (recent.length === 1) {
-      F.drawText(ctx, recent[0].text, cx, STATUS_Y, { align: 'center', maxWidth: 450, ...ink });
+      F.drawText(ctx, recent[0].text, cx, STATUS, { align: 'center', maxWidth: 450, ...ink });
       return;
     }
     const lh = 10;
-    let y = STATUS_Y - 1;
+    let y = STATUS - 1;
     for (const l of recent) {
       F.drawText(ctx, l.text, cx, y, { face: 'small', align: 'center', maxWidth: 450, ...ink });
       y += lh;
@@ -760,10 +813,11 @@ export class HUD {
     // Turn-based indicator in the window's bottom-right corner.
     if (S.turnBased) {
       const ap = Math.max(0, Math.min(5, Math.floor((S.turnPoints ?? 130) / 26)));
-      // The engine blits the turn sprite at a fixed (394,288) in frame space,
-      // not relative to the window's corner.
+      // The engine blits the turn sprite at (394,288) - 65 rows above the
+      // window's foot. Anchor to the foot so a portrait-grown window keeps it
+      // in the corner instead of mid-sky.
       UI.drawIcon(ctx, S.turnActor === 'monsters' ? 'turnhour' : `turn${5 - ap}`,
-        394, 288, 44);
+        394, v.y + v.h - 65, 44);
     }
 
     // ATTACK feedback: a hard two-stroke slash across the reticle for a beat,
@@ -977,7 +1031,9 @@ export class HUD {
       ctx.fillRect(b.x + o, b.y + o, b.w, 2);
       ctx.fillStyle = down ? '#584a30' : '#141008';
       ctx.fillRect(b.x + o, b.y + o + b.h - 2, b.w, 2);
-      const label = b.id === 'attack' ? 'ATTACK' : 'USE';
+      const label = b.id === 'attack' ? 'ATTACK'
+        : b.id === 'inventory' ? 'PACK'
+          : b.id === 'questlog' ? 'QUEST' : 'USE';
       F.drawText(ctx, label, b.x + o + b.w / 2, b.y + o + (b.h - 10) / 2, {
         face: 'small', align: 'center', color: down ? '#E1CD23' : '#c8b888',
       });
@@ -994,20 +1050,54 @@ const SHOPKIND_NAMES = {
   stable: 'Stables', stables: 'Stables', docks: 'Docks',
 };
 
-/** Cached navy checker for the night automap - 50% coverage, zero alpha. */
-const _nightShadeCache = new Map();
-function nightShade(w, h) {
-  const key = `${w}x${h}`;
-  let c = _nightShadeCache.get(key);
+/** 4x4 Bayer thresholds, for the ordered shades below. */
+const BAYER4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 5, 13];
+
+/**
+ * Cached navy dither for the twilight/night automap. `step` is coverage in
+ * sixteenths (1..16), so the shade deepens smoothly along the dusk curve
+ * instead of snapping from noon to midnight - zero alpha, ordered pattern.
+ */
+const _duskShadeCache = new Map();
+function duskShade(w, h, step) {
+  const key = `${w}x${h}:${step}`;
+  let c = _duskShadeCache.get(key);
   if (c) return c;
   c = document.createElement('canvas');
   c.width = w; c.height = h;
   const g = c.getContext('2d');
   g.fillStyle = '#000030';
   for (let y = 0; y < h; y++) {
-    for (let x = (y & 1); x < w; x += 2) g.fillRect(x, y, 1, 1);
+    for (let x = 0; x < w; x++) {
+      if (BAYER4[(y & 3) * 4 + (x & 3)] < step) g.fillRect(x, y, 1, 1);
+    }
   }
-  _nightShadeCache.set(key, c);
+  _duskShadeCache.set(key, c);
+  return c;
+}
+
+/**
+ * Disabled treatment for HUD keys while a panel is open: a light ordered
+ * knock-back (~1/3 coverage), so a key that will not answer LOOKS asleep
+ * instead of silently eating the tap (iphone #4). Deliberately lighter than
+ * nicheShade so a panel's own backdrop dither cannot stack it into a hard
+ * black slab (aesthete #8).
+ */
+const _dimShadeCache = new Map();
+function dimShade(w, h) {
+  const key = `${w}x${h}`;
+  let c = _dimShadeCache.get(key);
+  if (c) return c;
+  c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  g.fillStyle = '#0a0806';
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (BAYER4[(y & 3) * 4 + (x & 3)] < 5) g.fillRect(x, y, 1, 1);
+    }
+  }
+  _dimShadeCache.set(key, c);
   return c;
 }
 

@@ -28,6 +28,7 @@ import {
   giveQuest, turnInQuest, dispatchQuestEvent, questProgressText, updateAwards, refreshGating,
 } from '../../game/quests.js';
 import { awardXP } from '../../game/combat.js';
+import { npcName, profession, professionTalk, rumour } from '../../game/npcnames.js';
 
 export { Screen, A, PANEL, portraitOf, wrapLines, drawWrapped };
 export { MM6 };
@@ -1197,9 +1198,22 @@ export class DialogueScreen extends HouseScreen {
   constructor(session, ui, hud, opts = {}) {
     super(session, ui, hud, opts);
     this.id = 'dialogue';
-    this.npc = opts.npc || DEFAULT_NPC;
-    // Never greet as "undefined": whatever record arrives gets a name.
-    if (!this.npc.name) this.npc = Object.assign({}, DEFAULT_NPC, this.npc, { name: DEFAULT_NPC.name });
+    // Identity for a record that arrives without one: seeded from where the
+    // NPC stands, so the same stranger is the same person every time.
+    const ent = opts.entity;
+    const fbKey = ent && ent.pos
+      ? `${(session && session.mapId) || 'map'}:${Math.round(ent.pos.x)}:${Math.round(ent.pos.z)}`
+      : (opts.npc && (opts.npc.portraitSeed || opts.npc.title)) || 'stray';
+    this.npc = opts.npc || fallbackNPC(fbKey);
+    // Never greet as "undefined": whatever record arrives gets a full person
+    // behind it - provided fields win, the minted identity fills the rest.
+    if (!this.npc.name) {
+      const merged = fallbackNPC(fbKey);
+      for (const [k, v] of Object.entries(this.npc)) {
+        if (v !== undefined && v !== null && v !== '') merged[k] = v;
+      }
+      this.npc = merged;
+    }
     this.keeper = this.npc;
     this.title = opts.title || this.npc.house || this.npc.name;
     this.optionY = OPTION.npcY;
@@ -1360,7 +1374,19 @@ export class DialogueScreen extends HouseScreen {
         this.offering = null;
         this.setBody('"Think it over, then. The work will keep - for a while."');
         return;
-      case 'smalltalk': this.setBody(n.talk || '...', 'smile'); return;
+      case 'smalltalk': {
+        // A pool rotates so the trade topic keeps paying out; a bare `talk`
+        // string behaves as it always did.
+        const pool = Array.isArray(n.talkPool) && n.talkPool.length ? n.talkPool : null;
+        if (pool) {
+          this._talkIdx = ((this._talkIdx | 0) % pool.length);
+          this.setBody(pool[this._talkIdx] || '...', 'smile');
+          this._talkIdx++;
+        } else {
+          this.setBody(n.talk || '...', 'smile');
+        }
+        return;
+      }
       case 'quest': this.doQuest(); return;
       case 'teach': this.teachMode = true; this.setBody(this.teachIntro()); return;
       case 'hire': this.doHire(); return;
@@ -1706,11 +1732,54 @@ export function vignette(g, w, h, strength = 0.55) {
   g.putImageData(img, 0, 0);
 }
 
-const DEFAULT_NPC = {
-  name: 'Townsfolk', title: 'Citizen', portraitSeed: 12,
-  greeting: 'Good day to you.',
-  topics: [],
-  rumours: ['They say the roads north are not safe after dark.'],
-};
+/**
+ * A record with no name is not a person, and "Townsfolk, citizen" was a stock
+ * template the aesthete could smell (#13). Any NPC that reaches the screen
+ * without an identity gets one MINTED here, deterministically from where they
+ * stand: a seeded name, a trade, a greeting in that trade's voice, a pool of
+ * three or four things to say about the work, and two rumours - the same
+ * enrichment the spawner gives its own townsfolk.
+ */
+function fallbackNPC(key) {
+  const rnd = rngFor(`npcfb:${key}`);
+  const sex = rnd.bool() ? 'm' : 'f';
+  const prof = profession(rnd);
+  const name = npcName(rnd, sex, { epithet: false, title: false });
+  const low = prof.toLowerCase();
+  // 3-4 lines per trade: the curated profession line first, then seeded
+  // variations in the same voice, so pressing the topic keeps paying out.
+  const talkPool = [
+    professionTalk(rnd, prof),
+    rnd.pick([
+      `"Been a ${low} in this town for ${rnd.int(4, 26)} years. You learn to keep your eyes open."`,
+      `"My ${rnd.bool() ? 'mother' : 'father'} was a ${low} before me. The trade was kinder then."`,
+      `"A ${low}'s day starts before yours and ends after it. Remember that at haggling time."`,
+    ]),
+    rnd.pick([
+      `"Adventurers mean coin for some and trouble for the rest of us. Which are you bringing?"`,
+      `"If you are staying, learn our ways. If you are passing through, pass through quickly."`,
+      `"The town has been jumpier of late. Even the dogs sleep with one eye open."`,
+    ]),
+    `"Enough about my work. ${rnd.bool() ? 'The road tells better stories than I do.' : 'Buy something or ask your questions, either is fine.'}"`,
+  ];
+  return {
+    name,
+    npcId: name,
+    title: prof,
+    profession: prof,
+    sex,
+    portraitSeed: rnd.int(0, 0x7fffffff),
+    greeting: rnd.pick([
+      `"Well met. ${name}, ${low} here."`,
+      `${name} looks up from the day's work. "Yes? Be quick about it."`,
+      `"A good day to you, travellers." ${name} gives a small nod.`,
+      `"${prof}s see everything that passes through this town," says ${name}.`,
+    ]),
+    talk: talkPool[0],
+    talkPool,
+    topics: [],
+    rumours: [rumour(rnd), rumour(rnd)],
+  };
+}
 
 export default DialogueScreen;

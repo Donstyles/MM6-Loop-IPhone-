@@ -237,8 +237,13 @@ export const BASE_ASPECT = 461 / 345;
 
 export function vfovForAspect(aspect, indoor = false) {
   const hfov = THREE.MathUtils.degToRad(indoor ? HFOV_INDOOR : HFOV_OUTDOOR);
-  const a = Math.max(aspect, BASE_ASPECT);
-  return THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(hfov / 2) / a));
+  // Derive vertical from the TRUE aspect, which holds the horizontal FOV at
+  // exactly the engine's 75/60 degrees at every window shape. For wide
+  // windows this is what Math.max(aspect, BASE_ASPECT) already did; the
+  // change is the portrait-grown window (aspect < 4:3), where the old clamp
+  // pinned vertical FOV at the 4:3 value and so CROPPED the view sideways -
+  // the taller window must reveal more sky and ground, not zoom in.
+  return THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(hfov / 2) / aspect));
 }
 
 /**

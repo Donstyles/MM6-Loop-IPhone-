@@ -258,6 +258,8 @@ function tickGame(dt) {
       pressed: {
         attack: input.touchButtons.attack >= 0,
         interact: input.touchButtons.interact >= 0,
+        inventory: input.touchButtons.inventory >= 0,
+        questlog: input.touchButtons.questlog >= 0,
       },
     };
     hud.draw(uiCtx, dt);
@@ -334,9 +336,11 @@ function handleKeys() {
 function handleWorldInput() {
   for (const e of input.takeWorldEvents()) {
     if (e.type === 'button') {
-      // The portrait-mode on-screen action keys.
+      // The on-screen action keys (portrait control zone and landscape view).
       if (e.id === 'attack') doAttack();
       else if (e.id === 'interact') doActivate();
+      else if (e.id === 'inventory') openScreen('inventory');
+      else if (e.id === 'questlog') openScreen('questlog', { tab: 'quests' });
     } else if (e.type === 'tap') {
       tapWorld(e);
     }
@@ -480,6 +484,10 @@ async function tryOpenSpellbook() {
 }
 function doActivate() {
   if (!session) return;
+  // USE with nothing in range: session.activate() itself says "Nothing
+  // here." (rate-limited, soft, no error buzz - the game layer owns the
+  // words). The shell's job is keeping the line visible, which the status
+  // strip and the portrait band log already do.
   const hit = session.activate();
   if (hit && session.handleActivate) session.handleActivate(hit);
 }

@@ -67,11 +67,17 @@ export class LevelUpScreen extends Screen {
     // Darken everything behind, the way MM6 dims the frame under a message box.
     // A 62% black wash would blend every pixel behind it off-palette. MM6
     // dims the frame under a message box with a dither, so this is a dense
-    // Bayer stipple of solid near-black instead.
+    // Bayer stipple of solid near-black instead. (The HUD skips its own
+    // socket checkers while modal, so this dither lands on clean chrome -
+    // stacked patterns read as hard black slabs over the sidebar, aesthete #8.)
     M.stipple(ctx, 0, 0, W, H, [5, 5, 10], 0.62);
 
-    const x = Math.round((W - BOX.w) / 2);
-    const y = Math.round((H - BOX.h) / 2) - 20;
+    // Centred over the 3D WINDOW, as MM6 centres its message boxes - centring
+    // on the whole logical frame overhung the side column on desktop and fell
+    // below the panel clip line on a tall portrait frame.
+    const v = layout.view;
+    const x = Math.round(v.x + (v.w - BOX.w) / 2);
+    const y = Math.max(v.y + 6, Math.round(v.y + (v.h - BOX.h) / 2) - 10);
     drawMessageBox(ctx, x, y, BOX.w, BOX.h);
 
     // Portrait, lit by a gold pool so the moment reads as a celebration.
