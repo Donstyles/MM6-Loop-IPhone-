@@ -593,3 +593,27 @@ const SHOP_LABELS = {
 };
 
 function shopLabel(kind) { return SHOP_LABELS[kind] || 'Shop'; }
+
+/**
+ * Rebuild an NPC's spoken identity from their CURRENT name.
+ *
+ * Quest binding renames a free townsfolk entity, but the greeting and small
+ * talk were baked with the old name at spawn - so Sir Charles Quixote opened
+ * his mouth and introduced himself as somebody else (veteran blocker #3).
+ * Deterministic per name, so saves and repeat visits agree.
+ */
+export function regreetNPC(data, name, profOverride) {
+  const prof = profOverride || data.title || data.profession || 'Citizen';
+  const rnd = new Rand(hashStr('regreet:' + name + ':' + prof));
+  data.greeting = rnd.pick([
+    `"Well met. I am ${name}, ${prof.toLowerCase()} here."`,
+    `${name} looks up from their work. "Yes? Be quick about it."`,
+    `"A good day to you, travelers." ${name} gives a small nod.`,
+    `"You would be the newcomers. ${name}," they offer with a hand.`,
+  ]);
+  data.talk = professionTalk(rnd, prof);
+  data.portraitSeed = rnd.int(0, 0x7fffffff);
+  const rumorPair = [rumour(rnd), rumour(rnd)];
+  data.rumours = rumorPair;
+  data.rumors = rumorPair;
+}

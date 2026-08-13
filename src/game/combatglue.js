@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CATEGORY } from '../ents/entity.js';
 import { Rand } from '../core/rng.js';
-import { Spawner } from './spawner.js';
+import { Spawner, regreetNPC } from './spawner.js';
 import {
   spellById, schoolSkill, spCostFor, canCast, spellRadius, spellPower, spellDuration,
 } from './spells.js';
@@ -339,6 +339,10 @@ export function installCombat(session) {
         e.data.npcId = npcId || name;
         e.label = name;
         if (title) e.data.title = title;
+        // The greeting and small talk were baked with the OLD name at spawn;
+        // regenerate them so this person introduces themselves as themselves
+        // (veteran blocker #3: "Philippa Jessop looks up..." under Quixote).
+        regreetNPC(e.data, name, title || e.data.title);
         e.data.reserved = true;
         byName.set(name, e);
       }
