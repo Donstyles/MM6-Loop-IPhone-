@@ -797,6 +797,7 @@ export class ShopScreen extends HouseScreen {
    * the price appear only for the item under the pointer, on the status line.
    */
   drawContent(ctx) {
+    this._suppressToast = false;
     const list = this.currentList();
     const heading = {
       buy: this.special ? 'Special Stock' : 'For Sale',
@@ -833,9 +834,13 @@ export class ShopScreen extends HouseScreen {
     }
     F.drawText(ctx, heading, gx - 4, gy - 18, { color: C_CANARY });
     // The establishment's own name, engraved along the top of the room -
-    // shrunk to the small face rather than ellipsized when it runs long.
+    // shrunk to the small face rather than ellipsized when it runs long, and
+    // clamped INSIDE the panel: it right-aligned to x=474 on a 469 page and
+    // lost its last glyph to the clip (ui3 #7).
     const titleFace = F.measure(this.title, 'normal').w > 214 ? 'small' : 'normal';
-    F.drawText(ctx, this.title, gx + GRID.cols * GRID.cw + 4, gy - 18 + (titleFace === 'small' ? 2 : 0),
+    F.drawText(ctx, this.title,
+      Math.min(gx + GRID.cols * GRID.cw + 4, PANEL.x + PANEL.w - 6),
+      gy - 18 + (titleFace === 'small' ? 2 : 0),
       { face: titleFace, align: 'right', color: C_GOLD });
 
     if (!list.length) {
@@ -904,8 +909,10 @@ export class ShopScreen extends HouseScreen {
     }
 
     // The item's name and price, engraved along the bottom of the room: the
-    // hovered item first, else the touch-selected one.
+    // hovered item first, else the touch-selected one. While this band is up
+    // the reply toast stands down so it can never cover the price (ui3 #5).
     const shown = hover || (touch ? this._sel : null);
+    this._suppressToast = !!(shown && list.indexOf(shown) >= 0);
     if (shown && list.indexOf(shown) < 0) this._sel = null;
     else if (shown) {
       const price = this.priceFor(shown);

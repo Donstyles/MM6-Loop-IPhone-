@@ -21,7 +21,7 @@
 // and the menu are painted per frame.
 // ---------------------------------------------------------------------------
 
-import { layout } from '../../core/layout.js';
+import { layout, mmToLogical, isTouchDevice } from '../../core/layout.js';
 import { clamp, valueNoise2, hash2 } from '../../core/rng.js';
 import * as F from '../../art/font.js';
 import { Screen, baked, vignette, MM6, C_GOLD } from './dialogue.js';
@@ -36,7 +36,9 @@ function buildMenu(hasSave) {
   if (!hasSave) items.push({ id: 'load', label: 'Load Game' });
   items.push({ id: 'options', label: 'Options' });
   items.push({ id: 'credits', label: 'Credits' });
-  items.push({ id: 'quit', label: 'Quit' });
+  // A browser tab on a phone has nothing to quit TO: the dead option read as
+  // a broken button (wowjudge polish). Desktop keeps it.
+  if (!isTouchDevice()) items.push({ id: 'quit', label: 'Quit' });
   return items;
 }
 
@@ -186,6 +188,15 @@ function groundCanvas(W, H, lo, hi, dx) {
   const gh = H - GTOP;
   const { L } = ridgeCols(W, dx);
   const rc = new Float32Array(gh), rw = new Float32Array(gh);
+  // On a tall portrait frame the evening fade stretches with the hillside, so
+  // the foreground stays a readable moonlit slope instead of a black band
+  // (wowjudge #3: "bottom 60% black"). At the classic 480 height this is the
+  // original 190-row falloff exactly.
+  const fadeSpan = Math.max(190, Math.round((H - 300) * 0.62));
+  // More, shallower steps on the stretched fade, and a slightly higher floor:
+  // five 130-row bands read as hard seams across a 1300-row hillside.
+  const fadeSteps = H > 700 ? 10 : 5;
+  const fadeDepth = H > 700 ? 0.46 : 0.62;
   for (let i = 0; i < gh; i++) {
     const r = roadAt(i + GTOP, dx);
     rc[i] = r[0]; rw[i] = r[1];
@@ -203,7 +214,7 @@ function groundCanvas(W, H, lo, hi, dx) {
 
     // Everything below the skyline falls away into the evening: one banded
     // multiplier, five steps, shared by the ground and the track.
-    const dk = 1 - band(clamp((y - 292) / 190, 0, 1), 5) * 0.62;
+    const dk = 1 - band(clamp((y - 292) / fadeSpan, 0, 1), fadeSteps) * fadeDepth;
 
     // The track, wherever it lies on the castle's knoll or in front of it.
     if (y >= knoll[x]) {
@@ -612,6 +623,25 @@ export function paintTitleArt(g, w, h) {
     tussock(g, tx, ty, 5 + ((hash2(i, 11, 7) * 7) | 0), i);
   }
 
+  // Tall portrait frames: the slope keeps its furniture all the way down, so
+  // the extended painting reads as MORE painting, not as fill.
+  if (h > 700) {
+    const my0 = Math.round(h * 0.54);
+    for (let i = 0; i < 14; i++) {
+      const bxx = (hash2(i, 17, 3) * w) | 0;
+      const byy = 490 + ((hash2(i, 19, 5) * (h - 560)) | 0);
+      if (bxx > 140 && bxx < 500 && byy > my0 - 40) continue;   // menu column
+      boulder(g, bxx, byy, 22 + ((hash2(i, 23, 7) * 30) | 0),
+        13 + ((hash2(i, 29, 9) * 18) | 0), 51 + i * 6);
+    }
+    for (let i = 0; i < 40; i++) {
+      const tx = (hash2(i, 31, 3) * w) | 0;
+      const ty = 470 + ((hash2(i, 37, 5) * (h - 520)) | 0);
+      if (tx > 150 && tx < 490 && ty > my0 - 30) continue;
+      tussock(g, tx, ty, 6 + ((hash2(i, 41, 7) * 8) | 0), 100 + i);
+    }
+  }
+
   paintTree(g);
   g.restore();
   vignette(g, w, h, 0.28);
@@ -706,6 +736,7 @@ export class TitleScreen extends Screen {
   update(dt) { this.t += dt || 0; }
 
   pick(id) {
+    if (this.loading) return;   // the veil owns the screen until the load lands
     this.sound('click');
     if (this.onPick) this.onPick(id, this);
     else if (this.session && typeof this.session.mainMenu === 'function') this.session.mainMenu(id);
@@ -726,6 +757,18 @@ export class TitleScreen extends Screen {
     // Nothing else is printed on the frame: no strapline, no build stamp. A
     // 1998 title screen announces the game and nothing about itself.
     this.drawMenu(ctx, W, H);
+
+    // Continue veil: the saved world is being rebuilt behind this frame, and
+    // dropping the player in early meant ~6 seconds standing in the wrong
+    // place (mobile3 #3). Stippled dark, never an alpha wash.
+    if (this.loading) {
+      const my = Math.round(H * (layout.portrait && H > 700 ? 0.48 : 0.62));
+      stipple(ctx, 0, 0, W, H, [6, 6, 8], 0.55);
+      const dots = '.'.repeat(1 + (Math.floor(this.t * 2) % 3));
+      F.drawText(ctx, `${this.loading}${dots}`, Math.round(W / 2), my, {
+        face: 'title', align: 'center', color: C_GOLD, shadow: '#000000', outline: '#100c06',
+      });
+    }
   }
 
   /** Two bands of cloud drifting across the sky at different speeds. */
@@ -759,14 +802,21 @@ export class TitleScreen extends Screen {
   drawMenu(ctx) {
     const MENU = this.menu;
     const MENU_CX = Math.round(layout.w / 2);
+    // Portrait phones: the menu drops onto the lower hillside of the extended
+    // painting, with thumb-height rows (>= 8 mm; the stock 27px pitch measured
+    // 2.5 mm - mobile3 #2).
+    const tall = layout.portrait && layout.h > 700;
+    const y0 = tall ? Math.round(layout.h * 0.54) : MENU_Y0;
+    const step = tall ? Math.max(48, mmToLogical(8)) : MENU_STEP;
+    const tOff = tall ? Math.round((step - 22) / 2) : 0;   // centre label in the row
     const x0 = MENU_CX - MENU_W / 2;
     const hits = MENU.map((m, i) => this.ui.region(`title:${m.id}${i}`,
-      x0, MENU_Y0 + i * MENU_STEP - 3, MENU_W, MENU_STEP - 2, null));
+      x0, y0 + i * step - 3, MENU_W, step - 2, null));
     const hovered = hits.findIndex((hh) => hh.hover);
     if (hovered >= 0) this.selected = hovered;
 
     MENU.forEach((m, i) => {
-      const my = MENU_Y0 + i * MENU_STEP;
+      const my = y0 + i * step + tOff;
       const on = i === this.selected;
       if (on) {
         const half = Math.round(F.measure(m.label, 'title').w / 2);

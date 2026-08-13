@@ -59,6 +59,27 @@ export class SpellbookScreen extends Screen {
     this.pickFor = null;   // a 'one'-target support spell awaiting an ally choice
   }
 
+  /**
+   * MM6 reflex: while the "cast on whom?" plaque is armed, the party bar's
+   * portraits ARE targets. Clicking one casts on that member instead of
+   * switching characters and swapping the book behind the plaque (ui3 #4).
+   */
+  pollPartyBar() {
+    if (!this.pickFor) { super.pollPartyBar(); return; }
+    const btns = (this.hud && this.hud.buttons) || [];
+    for (const b of btns) {
+      const m = /^char(\d)$/.exec(b.id);
+      if (m && b.hit && b.hit.click && this.members[+m[1]]) {
+        const sp = this.pickFor;
+        this.pickFor = null;
+        b.hit.click = false;   // consume: the shell must not also switch chars
+        this.session.castSpell(this.charIndex, sp, { member: +m[1] });
+        this.close();
+        return;
+      }
+    }
+  }
+
   onOpen() {
     const ch = this.character;
     // A character with no magic at all has no spellbook: refuse to open with
@@ -331,3 +352,18 @@ export class SpellbookScreen extends Screen {
 }
 
 export default SpellbookScreen;
+
+/**
+ * Can the ACTIVE character open a spellbook at all? The shell gates the
+ * screen on this so a no-magic knight gets the refusal BEFORE the book
+ * visibly opens and slams shut (ui3 #8).
+ */
+export function canOpenSpellbook(session) {
+  try {
+    const ms = (session && session.party && session.party.members) || [];
+    const ch = ms[Math.max(0, Math.min(ms.length - 1, session.activeChar | 0))];
+    if (!ch) return true;   // nothing to refuse against: let the screen decide
+    if (ch.spells && ch.spells.length) return true;
+    return SCHOOLS.some((s) => schoolSkill(ch, s.id).level > 0);
+  } catch { return true; }
+}

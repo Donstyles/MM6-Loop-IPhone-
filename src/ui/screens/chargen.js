@@ -102,6 +102,21 @@ export class ChargenScreen extends Screen {
     this.messageT = 99;
     this.onDone = opts.onDone || null;
     this.onCancel = opts.onCancel || null;
+    /** Leave-confirmation plaque, up when Back is pressed with points unspent. */
+    this.confirmLeave = false;
+  }
+
+  /** Back / Escape: confirm before discarding a party with points unspent
+   *  (wowjudge chargen beat). A fully-spent party leaves without ceremony. */
+  requestLeave() {
+    const left = this.slots.reduce((t, sl) => t + this.pointsLeft(sl), 0);
+    if (left > 0) { this.confirmLeave = true; return; }
+    this.doLeave();
+  }
+
+  doLeave() {
+    this.confirmLeave = false;
+    if (this.onCancel) this.onCancel(this); else this.close();
   }
 
   get slot() { return this.slots[this.sel]; }
@@ -331,6 +346,42 @@ export class ChargenScreen extends Screen {
           { align: 'center', color: this.messageColor || C_WHITE });
       });
     }
+
+    if (this.confirmLeave) this.drawLeaveConfirm(ctx, W, H);
+  }
+
+  /** "Leave with points unspent?" - a carved plaque with two honest keys. */
+  drawLeaveConfirm(ctx, W, H) {
+    const left = this.slots.reduce((t, sl) => t + this.pointsLeft(sl), 0);
+    MM6.stipple(ctx, 0, 0, W, H, [8, 7, 5], 0.5);
+    const bw = this.touch ? Math.max(96, mmToLogical(16)) : 96;
+    const bh = this.touch ? Math.max(30, mmToLogical(7.5)) : 30;
+    const pw = Math.min(W - 60, Math.max(340, bw * 2 + 80));
+    const ph = 92 + bh;
+    const x = Math.round((W - pw) / 2);
+    const y = Math.round(Math.min(H * 0.3, H - this.barH - ph - 16));
+    MM6.rct(ctx, x + 4, y + 4, pw, ph, [12, 9, 6]);
+    MM6.carvedPlate(ctx, x, y, pw, ph, { material: 'wood', seed: 41 });
+    MM6.carvedWell(ctx, x + 5, y + 5, pw - 10, ph - 10, { material: 'wood', seed: 44 });
+    F.drawText(ctx, 'Return to the title screen?', W / 2, y + 18,
+      { align: 'center', color: C_GOLD });
+    F.drawText(ctx, left > 0
+      ? `${left} point${left === 1 ? '' : 's'} still unspent - this party will be discarded.`
+      : 'This party will be discarded.',
+    W / 2, y + 36, { face: 'small', align: 'center', color: C_WHITE, maxWidth: pw - 30 });
+    const by = y + ph - bh - 14;
+    const gap = 24;
+    const bx1 = Math.round(W / 2 - bw - gap / 2), bx2 = Math.round(W / 2 + gap / 2);
+    const stay = this.ui.region('cg:leave:no', bx1, by, bw, bh, 'Keep building the party');
+    const go = this.ui.region('cg:leave:yes', bx2, by, bw, bh, 'Discard and leave');
+    let d = A.button(ctx, bx1, by, bw, bh, null, stay.down ? 'down' : stay.hover ? 'hot' : 'up');
+    F.drawText(ctx, 'Stay', bx1 + bw / 2 + d, by + (bh - 11) / 2 + d,
+      { align: 'center', color: stay.hover ? C_GOLD : C_WHITE });
+    d = A.button(ctx, bx2, by, bw, bh, null, go.down ? 'down' : go.hover ? 'hot' : 'up');
+    F.drawText(ctx, 'Leave', bx2 + bw / 2 + d, by + (bh - 11) / 2 + d,
+      { align: 'center', color: go.hover ? C_GOLD : C_WHITE });
+    if (stay.click) { this.confirmLeave = false; this.sound('click'); }
+    if (go.click) { this.sound('click'); this.doLeave(); }
   }
 
   drawPortraitColumn(ctx) {
@@ -578,9 +629,7 @@ export class ChargenScreen extends Screen {
     // cold open to the world is one tap here and one on Done.
     if (cmd('auto', 'Recommended', 'Spend every character\'s points sensibly', left > 0)) this.recommendAll();
     if (cmd('done', 'Done', 'Begin the game', false)) this.done();
-    if (cmd('back', 'Back', 'Back to the title screen', false)) {
-      if (this.onCancel) this.onCancel(this); else this.close();
-    }
+    if (cmd('back', 'Back', 'Back to the title screen', false)) this.requestLeave();
   }
 
   /** Touch keyboard: MM6 never needed one, but a phone does. */
@@ -640,9 +689,9 @@ export class ChargenScreen extends Screen {
 
   handleKey(code) {
     if (code === 'Escape') {
+      if (this.confirmLeave) { this.confirmLeave = false; return true; }
       if (this.keyboard || this.editing) { this.keyboard = false; this.editing = false; return true; }
-      if (this.onCancel) { this.onCancel(this); return true; }
-      this.close();
+      this.requestLeave();
       return true;
     }
     if (this.editing) {

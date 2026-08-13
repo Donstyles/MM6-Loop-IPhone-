@@ -1034,8 +1034,15 @@ export class HouseScreen extends Screen {
     const opts = this.options();
     // Compress the row pitch when a long option list would run under the
     // Exit plate (six shop services at the stock 30px step end at y=326).
+    // While there is reply text to show, a MINIMUM reading window is reserved
+    // below the options - the offer terms of a long quest list used to get
+    // room for zero lines, so players accepted blind (ui3 #2). Options
+    // compress further (floor 16px) before the reply window gives an inch.
+    const hasInfo = !!(this.panelInfo && this.panelInfo().length);
+    const reserve = hasInfo ? (this.offering ? 68 : 46) : 0;
     const step = opts.length
-      ? Math.min(OPTION.step, Math.floor((EXIT_BTN.y - 6 - this.optionY) / opts.length))
+      ? Math.max(16, Math.min(OPTION.step,
+        Math.floor((EXIT_BTN.y - 6 - reserve - this.optionY) / opts.length)))
       : OPTION.step;
     this._optStep = step;
     const clicked = optionList(this.ui, ctx, opts, { ns: this.id, y: this.optionY, step, h: Math.min(OPTION.h, step) });
@@ -1093,7 +1100,10 @@ export class HouseScreen extends Screen {
     const lh = 11;
     const room = Math.max(1, Math.floor((bottom - top) / lh));
     const overflow = rows.length > room;
-    const visible = overflow ? room - 1 : room;   // last row goes to the chip
+    // At least ONE line always shows, and the More chip ALWAYS draws on
+    // overflow - room-1 hitting zero used to blank the reply AND skip the
+    // chip, hiding quest terms entirely (ui3 #2).
+    const visible = overflow ? Math.max(1, room - 1) : room;
     const maxScroll = Math.max(0, rows.length - visible);
     let s = Math.max(0, Math.min(maxScroll, this.infoScroll | 0));
 
@@ -1147,6 +1157,9 @@ export class HouseScreen extends Screen {
 
   /** Transient reply text, printed over the bottom of the illustration. */
   drawMessage(ctx) {
+    // A screen showing its own footer band (the shop's hover price strip)
+    // suppresses the toast so the price is never covered (ui3 #5).
+    if (this._suppressToast) return;
     const msg = this.messageT < 8 ? this.message : '';
     if (!msg) return;
     const x = PANEL.x + 14, w = PANEL.w - 28;
@@ -1251,6 +1264,15 @@ export class DialogueScreen extends HouseScreen {
   topics() {
     const n = this.npc;
     const out = [];
+    // While an offer is on the table the offer IS the conversation: two
+    // options, so the terms get the whole reply window and are read in full
+    // BEFORE Accept (ui3 #2 - players accepted blind past a 7-topic list).
+    if (this.offering) {
+      return [
+        { id: 'accept', label: 'Accept the Task' },
+        { id: 'decline', label: 'Not Now' },
+      ];
+    }
     const q = this.questRef();
     if (q) {
       const label = q.state === 'complete' ? 'Reward'
@@ -1258,7 +1280,6 @@ export class DialogueScreen extends HouseScreen {
           : q.state === 'available' ? q.title : null;
       if (label) out.push({ id: 'questref', label });
     }
-    if (this.offering) out.push({ id: 'accept', label: 'Accept the Task' });
     if (n.quest && this.questState() !== 'done') out.push({ id: 'quest', label: n.quest.topic || 'Quest' });
     if (n.teaches && n.teaches.length) out.push({ id: 'teach', label: 'Learn Skill' });
     if (n.hire) out.push(this.isHired() ? { id: 'dismiss', label: 'Dismiss' } : { id: 'hire', label: 'Hire' });
@@ -1335,6 +1356,10 @@ export class DialogueScreen extends HouseScreen {
     switch (id) {
       case 'questref': this.doQuestRef(); return;
       case 'accept': this.doAccept(); return;
+      case 'decline':
+        this.offering = null;
+        this.setBody('"Think it over, then. The work will keep - for a while."');
+        return;
       case 'smalltalk': this.setBody(n.talk || '...', 'smile'); return;
       case 'quest': this.doQuest(); return;
       case 'teach': this.teachMode = true; this.setBody(this.teachIntro()); return;

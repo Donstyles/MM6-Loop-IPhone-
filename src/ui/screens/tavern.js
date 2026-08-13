@@ -305,8 +305,16 @@ export class TavernScreen extends HouseScreen {
     // The payload's own name and keeper win; the fallbacks are generated per
     // establishment, the same treatment the shops get - never one hardcoded
     // Mira behind every bar in Enroth.
-    this.tavernId = opts.id || (opts.tavern && opts.tavern.id) || opts.title || 'tavern';
+    // The world's door payload (opts.shop) names the establishment and keys
+    // the per-door RNG - the fallbacks used to collapse to one 'tavern'
+    // constant, so every barkeep and patron in Enroth was the same person
+    // (ui3 #3).
+    const shopRec = opts.shop && typeof opts.shop === 'object' ? opts.shop : null;
+    this.tavernId = opts.id || (opts.tavern && opts.tavern.id)
+      || (shopRec && `${shopRec.name || ''}:${Math.round(shopRec.x ?? (shopRec.door && shopRec.door.x) ?? 0)},${Math.round(shopRec.z ?? (shopRec.door && shopRec.door.z) ?? 0)}`)
+      || opts.title || 'tavern';
     this.title = opts.title || (opts.tavern && opts.tavern.name)
+      || (shopRec && shopRec.name)
       || genTavernName(rngFor(`tavname:${this.tavernId}`));
     this.tier = opts.tier || 1;
     const krand = rngFor(`keeper:${this.tavernId}`);

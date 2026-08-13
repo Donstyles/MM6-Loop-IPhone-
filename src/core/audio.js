@@ -472,6 +472,13 @@ def('step_snow', 0.22, 0.34, (r) => {
   r.nz({ t: 0.02, dur: 0.09, g: 0.18, f: 6400, Q: 8, a: 0.006, d: 0.08 });
 });
 
+def('step_sand', 0.22, 0.40, (r) => {
+  // A soft grind, lower and duller than snow: grains shifting, no squeak.
+  r.nz({ t: 0, dur: 0.16, g: 0.5, f: [2600, 900], Q: 0.7, a: 0.004, d: 0.14 });
+  r.nz({ t: 0.03, dur: 0.08, g: 0.16, f: [3600, 1600], Q: 1.2, a: 0.004, d: 0.07 });
+  r.tone({ t: 0, f: 120, f2: 78, dur: 0.07, g: 0.12, type: 'sine', a: 0.002, d: 0.06 });
+});
+
 def('jump', 0.30, 0.45, (r) => {
   r.nz({ t: 0, dur: 0.18, g: 0.3, f: [700, 2600], Q: 1.2, a: 0.01, d: 0.16 });
   r.tone({ t: 0, f: 180, f2: 320, dur: 0.14, g: 0.22, type: 'triangle', a: 0.005, d: 0.13 });
@@ -1351,7 +1358,7 @@ export const SFX_IDS = Object.keys(R);
 
 /** Grouped for the preview page / debug UI. */
 export const SFX_GROUPS = {
-  movement: ['step_grass', 'step_stone', 'step_wood', 'step_water', 'step_snow', 'jump', 'land', 'swim'],
+  movement: ['step_grass', 'step_stone', 'step_wood', 'step_water', 'step_snow', 'step_sand', 'jump', 'land', 'swim'],
   combat: ['swing_light', 'swing_heavy', 'hit_flesh', 'hit_armor', 'hit_bone', 'hit_stone', 'miss', 'bow_shot', 'arrow_hit', 'block', 'crit', 'death_player', 'party_hurt'],
   monsters: ['growl_small', 'growl_large', 'hiss', 'screech', 'roar_dragon', 'skeleton_rattle', 'zombie_moan', 'insect_chitter', 'wolf_howl', 'goblin_yelp', 'golem_step', 'slime_squelch', 'monster_die'],
   magic: ['cast_fire', 'cast_air', 'cast_water', 'cast_earth', 'cast_spirit', 'cast_mind', 'cast_body', 'cast_light', 'cast_dark', 'spell_fail', 'explosion', 'lightning_crack', 'ice_shatter', 'heal_chime', 'buff_shimmer', 'teleport', 'portal_open'],
@@ -1368,7 +1375,7 @@ const HOT = ['click', 'click_soft', 'error', 'item_pickup'];
 // once. A cold sound bakes in a few milliseconds anyway - the warm set exists
 // to make sure not even that shows up on the first swing.
 const WARM = [
-  'step_grass', 'step_stone', 'step_wood', 'step_water', 'step_snow', 'jump', 'land',
+  'step_grass', 'step_stone', 'step_wood', 'step_water', 'step_snow', 'step_sand', 'jump', 'land',
   'swing_light', 'swing_heavy', 'hit_flesh', 'hit_armor', 'hit_bone', 'miss',
   'party_hurt', 'page_turn', 'coin', 'gold_pickup', 'door_open', 'door_close',
 ];

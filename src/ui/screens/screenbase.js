@@ -18,7 +18,7 @@ import * as UI from '../../art/uiart.js';
 import * as PORTRAITS from '../../art/portraits.js';
 import { mulberry32 } from '../../core/rng.js';
 import { rampCss, quantizeImageData } from '../../core/palette.js';
-import { layout } from '../../core/layout.js';
+import { layout, mmToLogical } from '../../core/layout.js';
 import * as M from './mm6art.js';
 
 // --- geometry ---------------------------------------------------------------
@@ -412,6 +412,60 @@ export function drawShellExit(ctx, ui, screen, label = 'Exit') {
     align: 'center', color: hit.hover ? HILITE : CANARY,
   });
   return false;
+}
+
+/**
+ * Portrait phones: the house/dialogue option list mirrored into the dead band
+ * under the frame as thumb-height rows (>= 7 mm), ending in the Exit/Goodbye
+ * row. The panel's own 3 mm rows stay for authenticity; these are the touch
+ * path (mobile3 #2/#7, wowjudge #2). Drawn by the shell OUTSIDE the panel
+ * clip, after the screen has painted.
+ */
+export function drawPortraitOptionStrip(ctx, ui, screen, exitLabel = 'Exit') {
+  const c = layout.controls;
+  if (!c || c.h < 120) return;
+  if (!screen || typeof screen.options !== 'function') return;
+  let opts;
+  try { opts = screen.options() || []; } catch { opts = []; }
+  const items = opts.concat([{ id: '__exit', label: exitLabel, exit: true }]);
+
+  const gap = Math.max(6, mmToLogical(1.2));
+  const w = Math.min(c.w - 24, 460);
+  const x = Math.round(c.x + (c.w - w) / 2);
+  let rh = Math.max(44, mmToLogical(7));
+  // Long lists compress toward 44pt before they ever scroll off the band.
+  const avail = c.h - 16;
+  if (items.length * (rh + gap) > avail) {
+    rh = Math.max(44, Math.floor(avail / items.length) - gap);
+  }
+  let y = c.y + 10;
+  for (const it of items) {
+    if (y + rh > c.y + c.h) break;   // deeper rows than the band holds: drop
+    const on = it.enabled !== false;
+    const hit = ui.region(`bandopt:${screen.id}:${it.id}`, x, y, w, rh, it.tip || null);
+    const d = A.button(ctx, x, y, w, rh, null, !on ? 'up' : hit.down ? 'down' : hit.hover ? 'hot' : 'up');
+    const hasNote = !!it.note;
+    const ly = y + Math.round((rh - (hasNote ? 22 : 11)) / 2) + d;
+    F.drawText(ctx, it.label, x + w / 2 + d, ly, {
+      align: 'center', maxWidth: w - 16,
+      color: !on ? DIM : it.exit ? CANARY : (hit.hover || hit.down) ? HILITE : WHITE,
+    });
+    if (hasNote) {
+      F.drawText(ctx, it.note, x + w / 2 + d, ly + 12, {
+        face: 'small', align: 'center', maxWidth: w - 16, color: on ? CANARY : DIM,
+      });
+    }
+    if (hit.click && on) {
+      try {
+        if (it.exit) { if (typeof screen.close === 'function') screen.close(); }
+        else if (typeof screen.onOption === 'function') {
+          if (screen.sound) screen.sound('click');
+          screen.onOption(it.id);
+        }
+      } catch { /* a bad option handler must not kill the frame */ }
+    }
+    y += rh + gap;
+  }
 }
 
 // --- text -------------------------------------------------------------------

@@ -179,9 +179,33 @@ export async function startGame(shell) {
   installAudioDirector(session, screens);
   installSaveSystem(session, shell);
 
+  // The shell keeps the loading screen up through this call; feed it honest
+  // phase labels and yield a couple of frames around the long synchronous
+  // stretches so the bar shimmer actually ticks (wowjudge #3: the bar must
+  // never freeze).
+  const phase = (label) => { try { shell.onBootPhase && shell.onBootPhase(label); } catch { /* optional */ } };
+  const breathe = async () => { await nextFrame(); await nextFrame(); };
+
+  // Party damage rings through to the HUD wherever it lands, so the shell can
+  // raise its "You are under attack!" banner while a panel is open
+  // (wowjudge #4). The glue layer reports every party hit through
+  // session.message with its alarm colour.
+  {
+    const baseMessage = session.message.bind(session);
+    session.message = (text, color) => {
+      baseMessage(text, color);
+      if (color === '#e04030' && hud && typeof hud.notifyPartyDamage === 'function') {
+        hud.notifyPartyDamage();
+      }
+    };
+  }
+
   // --- world ---------------------------------------------------------------
+  phase('Raising the walls of Enroth');
+  await breathe();
   session.setMap(emptyMap(), 'void');
   await loadRegion(session, 'new_sorpigal', seed);
+  await breathe();
 
   // Quests live in session.questPool, seeded by the spawner when the region
   // loads (main chain + regional sides); nothing to pre-generate here.
@@ -274,18 +298,20 @@ const DUNGEON_TRACKS = {
 function installAudioDirector(session, screens) {
   const current = { track: null, amb: null };
   let lastHour = session.clock.hour;
-  let accum = 0;
   let wasOverridden = false;
   /** Town hysteresis: sticky in-town flag, only flipped past the deadband. */
   let townState = false;
   /** Wall-clock time of the last situational track change (cooldown). */
   let lastChangeAt = -1e9;
   const nowS = () => (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+  // Gated on the wall clock, not summed frame dt: at a headless/starved frame
+  // rate the dt accumulator lagged real time by seconds (audio3 #10).
+  let lastTickAt = -1e9;
 
   session.tickAudioDirector = (dt, topScreenId, force) => {
-    accum += dt || 0;
-    if (!force && accum < 0.5) return;   // twice a second is plenty
-    accum = 0;
+    const tNow = nowS();
+    if (!force && tNow - lastTickAt < 0.5) return;   // twice a second is plenty
+    lastTickAt = tNow;
 
     const music = session.music, audio = session.audio;
     if (!music && !audio) return;
@@ -415,7 +441,11 @@ function installSaveSystem(session, shell) {
       data = JSON.parse(raw);
     } catch (e) { console.warn('load failed', e); return false; }
     if (!data || typeof data !== 'object') return false;
-    applySave(session, shell, data).catch((e) => console.warn('load apply failed', e));
+    // The promise is exposed so the menu flow can hold a loading veil up until
+    // the world and position are actually applied - Continue used to drop the
+    // player into the wrong place for ~6 seconds while this ran (mobile #3).
+    session._loadPromise = applySave(session, shell, data)
+      .catch((e) => console.warn('load apply failed', e));
     return true;
   };
 
@@ -464,6 +494,31 @@ async function applySave(session, shell, data) {
   // arrays are ignored on purpose.
   if (session.resetClockBridge) session.resetClockBridge();
 
+  // THE ORDER HERE IS THE WHOLE FIX (systems3 #1, CRITICAL): the map rebuild
+  // below runs populate -> session.applyMapState(), and applyMapState reads
+  // session.worldState. Restoring the world ledger only AFTER the rebuild
+  // meant every cross-boot load re-populated chests as unopened and threw the
+  // saved ground loot away - then the next snapshot recorded the reset state
+  // permanently (the infinite chest faucet). So the deterministic spine -
+  // worldSeed, RNG cursors, world ledger - is installed BEFORE the rebuild;
+  // session.restoreState() afterwards re-asserts the same values plus
+  // everything positional, which is idempotent.
+  const st = data.state && typeof data.state === 'object' ? data.state : null;
+  if (st) {
+    try {
+      if (st.worldSeed !== undefined && st.worldSeed !== null) session.worldSeed = st.worldSeed;
+      if (st.rngs && typeof st.rngs === 'object' && session._rngs !== undefined) {
+        session._rngs = {};
+        for (const [tag, r] of Object.entries(st.rngs)) {
+          session._rngs[tag] = { seed: (r.seed >>> 0), cursor: r.cursor | 0, rand: null };
+        }
+      }
+      if (st.worldState && st.worldState.maps) {
+        session.worldState = JSON.parse(JSON.stringify(st.worldState));
+      }
+    } catch (e) { console.warn('could not pre-install saved world state', e); }
+  }
+
   // Rebuild the map the save was standing in, then put the party back.
   // The glue layer writes mapMeta.kind, older shell saves wrote .type -
   // accept both spellings.
@@ -472,9 +527,17 @@ async function applySave(session, shell, data) {
   const mseed = meta.seed !== undefined ? meta.seed : (data.seed !== undefined ? data.seed : session.seed);
   try {
     if (metaKind === 'dungeon' && meta.spec) {
-      await loadDungeon(session, meta.spec, mseed);
+      // The exit's way home rides in meta.back (systems3 #3): without it the
+      // dungeon exit fell back to entry:null and dumped the party tens of
+      // thousands of units from the door they entered through.
+      session._dungeonBack = meta.back
+        || (st && st.mapMeta && st.mapMeta.back) || null;
+      // meta.entry puts the pre-restore camera roughly in the right place;
+      // the exact saved position is applied just below.
+      await loadDungeon(session, meta.spec, mseed, meta.entry || null);
     } else {
-      await loadRegion(session, meta.id || 'new_sorpigal', mseed);
+      session._dungeonBack = null;
+      await loadRegion(session, meta.id || 'new_sorpigal', mseed, meta.entry || null);
     }
   } catch (e) { console.warn('could not rebuild the saved map', e); }
 
@@ -522,12 +585,21 @@ function installMenuFlow(shell, session, seed) {
   const showTitle = () => {
     openScreen('title', {
       hasSave: hasSave(),
-      onPick: (id) => {
+      onPick: (id, titleScreen) => {
         if (id === 'new') showChargen();
         else if (id === 'options') openScreen('options', { onBack: showTitle });
         else if (id === 'load') {
           const ok = session.loadGame ? session.loadGame() : false;
-          if (ok) startPlay(); else showTitle();
+          if (!ok) { showTitle(); return; }
+          // Hold a veil on the title until the world and position are applied,
+          // instead of six seconds of standing in the wrong place (mobile #3).
+          if (session._loadPromise && titleScreen) {
+            titleScreen.loading = 'Returning to Enroth';
+            session._loadPromise.then(() => {
+              titleScreen.loading = null;
+              startPlay();
+            });
+          } else startPlay();
         } else if (id === 'quit') startPlay();
       },
     });
@@ -548,7 +620,27 @@ function installMenuFlow(shell, session, seed) {
 
   // The options screen's own New Game / Quit plaques.
   session.newGame = () => showChargen();
-  session.quitGame = () => { session.gameStarted = false; showTitle(); };
+  session.quitGame = () => {
+    session.gameStarted = false;
+    // Quitting mid-fight must not leave the combat override latched: the
+    // title screen looped combat music forever (audio3 #2). Prefer the game
+    // layer's own reset, fall back to clearing the latched flags directly.
+    try {
+      if (typeof session.clearCombatState === 'function') session.clearCombatState();
+      else {
+        session.inCombat = false;
+        session.turnBased = false;
+        if ('_victoryT' in session) session._victoryT = 0;
+        if ('_defeatMusicT' in session) session._defeatMusicT = 0;
+        if ('_combatLinger' in session) session._combatLinger = 0;
+        if (session.music) session.music.setIntensity(0);
+      }
+    } catch { /* music is optional */ }
+    showTitle();
+    // Re-evaluate immediately so the title track starts now, not on the next
+    // half-second director tick.
+    if (session.tickAudioDirector) session.tickAudioDirector(0, 'title', true);
+  };
 
   window.__mm6_showTitle = showTitle;
   window.__mm6_newGame = startPlay;
@@ -627,13 +719,28 @@ export async function loadRegion(session, regionId, seed, entry = null) {
     .filter((t) => Number.isFinite(t.x) && Number.isFinite(t.z))
     .map((t) => ({ x: t.x, z: t.z, r: (Number.isFinite(t.radius) ? t.radius : 1200) + 400 }));
   session.musicTrack = region.music || regionTrack(regionId, region);
-  session.ambienceId = region.ambience || 'amb_forest';
+  session.ambienceId = region.ambience || regionAmbience(regionId, region);
   if (session.tickAudioDirector) session.tickAudioDirector(0, null, true);
   else {
     if (session.music) session.music.play(session.musicTrack);
     if (session.audio && session.audio.setAmbience) session.audio.setAmbience(session.ambienceId);
   }
   session.message(`You arrive in ${region.name}.`);
+}
+
+/**
+ * Biome -> ambience bed for regions that do not declare one (audio3 #6): the
+ * sea for coasts and isles, bare wind for snowfields and deserts, rain for
+ * marshland, forest for everywhere green.
+ */
+function regionAmbience(regionId, region) {
+  const id = String(regionId || '').toLowerCase();
+  if (/frozen|snow|winter|white|tundra/.test(id)) return 'amb_wind';
+  if (/desert|dune|drago|sand|waste/.test(id)) return 'amb_wind';
+  if (/swamp|marsh|bog|mire|fen/.test(id)) return 'amb_rain';
+  if (region && (region.coast || (region.towns || []).some((t) => t.coastal))) return 'amb_sea';
+  if (/bay|cove|isle|coast|harbor|harbour|port|haven|mist/.test(id)) return 'amb_sea';
+  return 'amb_forest';
 }
 
 /** Pick an outdoor track for a region that does not name one. */
@@ -671,7 +778,13 @@ export async function loadDungeon(session, spec, seed, entry = null) {
   const map = dungeonMap(d);
   session.setMap(map, spec.id || 'dungeon', entry);
   populateDungeon(session, d, seed);
-  session.mapMeta = { kind: 'dungeon', type: 'dungeon', spec: { ...spec }, seed };
+  // `back` is how the exit finds the door the party came in through; dropping
+  // it here made every save-in-dungeon exit to the region's default spawn
+  // after a reload (systems3 #3).
+  session.mapMeta = {
+    kind: 'dungeon', type: 'dungeon', spec: { ...spec }, seed,
+    back: session._dungeonBack || null,
+  };
   session.regionTowns = [];
   session.musicTrack = d.music || DUNGEON_TRACKS[spec.theme] || 'dungeon';
   session.ambienceId = d.ambience || (spec.theme === 'cave' || spec.theme === 'mine' ? 'amb_cave' : 'amb_dungeon');
@@ -715,4 +828,9 @@ function fallbackParty(seed) {
 /** Legacy export kept for older callers; the live path is session.saveGame(). */
 export function saveGame(session) {
   return session && typeof session.saveGame === 'function' ? session.saveGame() : false;
+}
+
+function nextFrame() {
+  return new Promise((r) => (typeof requestAnimationFrame === 'function'
+    ? requestAnimationFrame(() => r()) : setTimeout(r, 16)));
 }

@@ -190,10 +190,19 @@ export class TempleScreen extends HouseScreen {
     this.id = 'temple';
     this.tier = opts.tier || 2;
     this.god = opts.god || GODS[(opts.tier || 2) % GODS.length];
-    this.title = opts.title || (opts.temple && opts.temple.name) || `Temple of ${this.god}`;
+    // The world's door payload rides in opts.shop (the shop record the town
+    // generator built): its NAME is the temple's name, and its door is the
+    // per-establishment seed - every temple in Enroth shared one identity
+    // before this (ui3 #3).
+    const shopRec = opts.shop && typeof opts.shop === 'object' ? opts.shop : null;
+    this.title = opts.title || (opts.temple && opts.temple.name)
+      || (shopRec && shopRec.name) || `Temple of ${this.god}`;
+    const doorKey = shopRec
+      ? `${shopRec.name || ''}:${Math.round(shopRec.x ?? (shopRec.door && shopRec.door.x) ?? 0)},${Math.round(shopRec.z ?? (shopRec.door && shopRec.door.z) ?? 0)}`
+      : (opts.id || this.title);
     // Payload keeper first; else a generated healer for THIS temple - the
     // same treatment the shops get, never one Brother Aldric everywhere.
-    const krand = rngFor(`keeper:temple:${opts.id || this.title}`);
+    const krand = rngFor(`keeper:temple:${doorKey}`);
     const keeperSex = krand.bool() ? 'm' : 'f';
     this.keeper = opts.keeper || {
       name: `${keeperSex === 'm' ? 'Brother' : 'Sister'} ${npcName(krand, keeperSex, { epithet: false }).split(' ')[0]}`,
@@ -202,6 +211,13 @@ export class TempleScreen extends HouseScreen {
       sex: keeperSex,
       klass: 'cleric',
     };
+    // A payload keeper whose sex was never set gets it from the honorific, so
+    // Sister Cecily can no longer wear a masculine portrait (ui3 #9c).
+    if (this.keeper && !this.keeper.sex && this.keeper.name) {
+      this.keeper.sex = /^(sister|mother|abbess|priestess)\b/i.test(this.keeper.name) ? 'f'
+        : /^(brother|father|abbot|priest)\b/i.test(this.keeper.name) ? 'm'
+          : keeperSex;
+    }
     this.tint = opts.tint || '#e1cd23';
     this.mode = null;
   }
@@ -373,7 +389,9 @@ export class TempleScreen extends HouseScreen {
     // down further than a shop's - at 0.62 the jewel glass reads through the
     // dither as coloured speckle across the figures.
     plate(ctx, x, y, w, h, 0.80);
-    F.drawText(ctx, `The Temple of ${this.god}`, x + 10, y + 6, { color: C_CANARY });
+    // The door's own name, not a hardcoded "The Temple of <god>" - the sign
+    // outside and the ledger inside must agree (ui3 #3).
+    F.drawText(ctx, this.title, x + 10, y + 6, { color: C_CANARY, maxWidth: w - 120 });
     F.drawText(ctx, this.keeper && this.keeper.name ? this.keeper.name : '', x + w - 12, y + 6,
       { face: 'small', align: 'right', color: C_DIM });
     A.rule(ctx, x + 8, y + 20, w - 16, '#7a6a4a');

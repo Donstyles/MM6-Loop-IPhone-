@@ -17,8 +17,9 @@ import { CLASSES } from '../../game/stats.js';
 import {
   HouseScreen, PANEL, baked, poly, figure, gold, paintWall, paintFloor,
   paintShelf, paintClutter, vignette, members, activeMember, charName, partyGold, spend,
-  C_WHITE, C_CANARY, C_DIM, C_RED, C_GREEN,
+  rngFor, C_WHITE, C_CANARY, C_DIM, C_RED, C_GREEN,
 } from './dialogue.js';
+import { npcName } from '../../game/npcnames.js';
 
 const SCHOOL_TINT = {
   fire: '#e05a1e', air: '#9fd8ff', water: '#3f7ad8', earth: '#7a8c3a',
@@ -128,8 +129,21 @@ export class GuildScreen extends HouseScreen {
     this.title = opts.title || GUILD_NAME[this.school] || 'Guild';
     this.fee = opts.fee === undefined ? 1000 : opts.fee;
     this.tier = opts.tier || 2;
+    // A named guildmaster per school and per door - portraitSeed 96 used to
+    // put the identical woman behind every guild lectern in Enroth, whatever
+    // the school (ui3 identity sweep). The school is part of the seed.
+    const shopRec = opts.shop && typeof opts.shop === 'object' ? opts.shop : null;
+    const doorKey = shopRec
+      ? `${shopRec.name || ''}:${Math.round(shopRec.x ?? (shopRec.door && shopRec.door.x) ?? 0)},${Math.round(shopRec.z ?? (shopRec.door && shopRec.door.z) ?? 0)}`
+      : (opts.id || this.title);
+    const krand = rngFor(`keeper:guild:${this.school}:${doorKey}`);
+    const keeperSex = krand.bool() ? 'm' : 'f';
     this.keeper = opts.keeper || {
-      name: 'Guildmaster', title: `${this.school} magic`, portraitSeed: 96, sex: 'f', klass: 'sorcerer',
+      name: npcName(krand, keeperSex, { epithet: false }),
+      title: `Guildmaster of ${this.school} magic`,
+      portraitSeed: krand.int(0, 0x7fffffff),
+      sex: keeperSex,
+      klass: 'sorcerer',
     };
     this.scroll = 0;
   }

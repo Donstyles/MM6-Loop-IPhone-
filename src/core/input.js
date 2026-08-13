@@ -119,7 +119,9 @@ export class Input {
       return { cx: c.x + layout.safe.left + r + 18, cy: c.y + c.h - r - 16, r };
     }
     const v = layout.view;
-    const r = 46;
+    // Landscape phone: the same 18 mm ring as portrait (it measured 12.4 mm
+    // at the fixed 46px radius - mobile3 #6); desktop keeps the classic size.
+    const r = this.hasTouch ? Math.max(46, mmToLogical(9)) : 46;
     // Landscape/desktop: lower-left of the 3D window, nudged inside the safe
     // inset so the ring is reachable past a notch.
     return { cx: v.x + layout.safe.left + r + 14, cy: v.y + v.h - r - 14, r };
@@ -146,7 +148,21 @@ export class Input {
    *  clustered at the stick's height so the thumb does not have to travel. */
   get touchButtonRects() {
     const c = layout.controls;
-    if (!c) return [];
+    if (!c) {
+      // Landscape phone: ATTACK/USE stacked in the lower-right of the 3D
+      // window, inside the safe insets. They did not exist at all here, which
+      // made combat unreachable by touch (wowjudge landscape finding).
+      if (!this.hasTouch) return [];
+      const v = layout.view;
+      const ls = Math.max(44, mmToLogical(8));
+      const lgap = Math.max(8, mmToLogical(2));
+      const lx = Math.round(v.x + v.w - ls - 12 - layout.safe.right);
+      const ly = Math.round(v.y + v.h - ls - 12 - Math.max(0, layout.safe.bottom - (layout.h - (v.y + v.h))));
+      return [
+        { id: 'attack', x: lx, y: ly - ls - lgap, w: ls, h: ls },
+        { id: 'interact', x: lx, y: ly, w: ls, h: ls },
+      ];
+    }
     const s = Math.max(44, mmToLogical(8));
     const sr = this.stickRect;
     const lp = this.lookPadRect;

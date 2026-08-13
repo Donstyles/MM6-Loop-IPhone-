@@ -318,7 +318,10 @@ track('defeat', {
   progA: [i_, VI, iv_, i_],
   progB: [i_, VI, iv_, i_],
   parts: {
-    pad: { v: 'choir', center: 52, gain: 0.5 },
+    // Drone: the choir holds through every bar. The dirge's sparse melody
+    // left a near-silent hole at seconds 2.5-4.5, the peak of the wipe
+    // (audio3 #9).
+    pad: { v: 'choir', center: 52, gain: 0.5, drone: true },
     bass: { v: 'bass', pattern: 'whole', center: 33, gain: 0.7 },
     melody: { v: 'brass', center: 64, lo: 55, hi: 74, density: 'vsparse', gain: 0.45 },
     arp: null,
@@ -646,8 +649,73 @@ export function buildSong(def) {
 const songCache = new Map();
 function songFor(id) {
   let s = songCache.get(id);
-  if (!s) { s = buildSong(T[id]); songCache.set(id, s); }
+  if (!s) {
+    // Victory is a WRITTEN three-bar tag - pickup, roll, held tonic - not a
+    // generated loop sliced off mid-phrase (audio3 #9, the critic's ask).
+    s = id === 'victory' ? victoryTag() : buildSong(T[id]);
+    songCache.set(id, s);
+  }
   return s;
+}
+
+/**
+ * The victory fanfare, written by hand: bar 1 a rising brass pickup over
+ * IV-V, bar 2 the snare roll and the leading tone, bar 3 the tonic held under
+ * choir and cymbal. ~6.2s; the session's victory window fades out on the held
+ * chord instead of chopping a generated phrase in half.
+ */
+function victoryTag() {
+  const def = T.victory;
+  const spb = 16;
+  const stepSec = 60 / 116 / 4;
+  const key = def.key || 60;   // C
+  const bars = [];
+  const N = (s2, m, len, v, layer, vel) => ({ s: s2, m, len, v, layer, vel });
+  const D = (s2, d, vel) => ({ s: s2, len: 1, drum: d, layer: 'perc', vel });
+  const bar = (evs, chord) => {
+    const byStep = new Array(spb);
+    for (const e of evs) {
+      const st = clamp(e.s | 0, 0, spb - 1);
+      (byStep[st] || (byStep[st] = [])).push(e);
+    }
+    bars.push({ events: evs, byStep, chord, bar: bars.length });
+  };
+  // Bar 1 - pickup: G, C, E climbing to a held G over F then G in the bass.
+  bar([
+    N(0, key + 7 - 12, 3, 'brass', 'melody', 0.6),
+    N(3, key + 12, 3, 'brass', 'melody', 0.62),
+    N(6, key + 16, 3, 'brass', 'melody', 0.66),
+    N(9, key + 19, 7, 'brass', 'melody', 0.7),
+    N(0, key - 19, 8, 'bass', 'bass', 0.8),          // F
+    N(8, key - 17, 8, 'bass', 'bass', 0.8),          // G
+    N(0, key + 5 - 12, 8, 'choir', 'pad', 0.35),
+    N(8, key + 7 - 12, 8, 'choir', 'pad', 0.35),
+    D(0, 'timp_lo', 0.8), D(8, 'timp_hi', 0.7), D(12, 'snare', 0.5),
+  ], [5, 'maj']);
+  // Bar 2 - the roll: leading tone under a tightening snare.
+  bar([
+    N(0, key + 14, 4, 'brass', 'melody', 0.62),
+    N(4, key + 11, 4, 'brass', 'melody', 0.6),
+    N(8, key + 14, 8, 'brass', 'melody', 0.68),
+    N(0, key - 17, 16, 'bass', 'bass', 0.8),         // G held
+    N(0, key + 7 - 12, 16, 'choir', 'pad', 0.4),
+    D(0, 'snare', 0.45), D(2, 'snare', 0.4), D(4, 'snare', 0.5), D(6, 'snare', 0.45),
+    D(8, 'snare', 0.55), D(10, 'snare', 0.5), D(12, 'snare', 0.6), D(14, 'snare', 0.7),
+    D(8, 'timp_lo', 0.7),
+  ], [7, 'maj']);
+  // Bar 3 - the tonic, held: full chord, cymbal, one timpani hit. The fade
+  // lands here, on a chord that was WRITTEN to be faded on.
+  bar([
+    N(0, key + 12, 16, 'brass', 'melody', 0.72),
+    N(0, key + 16, 16, 'brass', 'accent', 0.5),
+    N(0, key + 19, 16, 'brass', 'accent', 0.45),
+    N(0, key, 16, 'choir', 'pad', 0.5),
+    N(0, key + 4, 16, 'choir', 'pad', 0.42),
+    N(0, key + 7, 16, 'choir', 'pad', 0.42),
+    N(0, key - 24, 16, 'bass', 'bass', 0.85),
+    D(0, 'cym', 0.6), D(0, 'timp_lo', 0.9), D(8, 'timp_lo', 0.5),
+  ], [0, 'maj']);
+  return { def, bars, spb, stepSec, barSec: spb * stepSec, notes: scaleNotes(key, 'major', 21, 108) };
 }
 
 /** Flat event dump for the audit tool: `bars` bars of `trackId`. */
@@ -803,6 +871,8 @@ function buildKit(sampleRate) {
 // ---------------------------------------------------------------------------
 
 const LAYERS = ['pad', 'bass', 'arp', 'melody', 'accent', 'perc'];
+/** Sparse interior tracks whose bar zero needs the entry bridge (audio3 #4). */
+const ENTRY_TRACKS = new Set(['crypt', 'dungeon', 'temple', 'cave']);
 const SEND = { pad: 0.55, bass: 0.06, arp: 0.22, melody: 0.3, accent: 0.28, perc: 0.16 };
 const LOOKAHEAD = 0.25;   // seconds of events queued ahead of the clock
 const TICK_MS = 50;
@@ -928,16 +998,50 @@ export class Music {
   play(trackId, opts = {}) {
     if (!this.ok || !T[trackId]) return;
     if (this._current === trackId && this.decks.some((d) => !d.dead)) return;
-    const fade = (opts.fadeMs ?? 900) / 1000;
-    for (const d of this.decks) if (!d.dead) this._killDeck(d, fade);
+    let fade = (opts.fadeMs ?? 900) / 1000;
+    // Mid-deck resume: remember where each outgoing track stood, so coming
+    // back to it picks the tune up at the same bar instead of replaying the
+    // intro on every town/field/night crossing (audio3 top musical ask).
+    if (!this._resume) this._resume = {};
+    for (const d of this.decks) {
+      if (d.dead) continue;
+      this._resume[d.id] = { bar: d.bar };
+      this._killDeck(d, fade);
+    }
     const deck = this._makeDeck(trackId);
     const t = this.ctx.currentTime;
+    const sting = trackId === 'victory' || trackId === 'defeat';
+    const res = !sting && opts.fromTop !== true ? this._resume[trackId] : null;
+    if (res) deck.bar = res.bar % deck.song.bars.length;   // bar-aligned re-entry
+    // First visit to a sparse interior track: bridge bar zero with a short
+    // figure in the track's own key and come up fast, instead of 3.4 seconds
+    // of digital zero under a slow crossfade (audio3 #4).
+    const wantsEntry = !res && !sting && ENTRY_TRACKS.has(trackId) && opts.entry !== false;
+    if (wantsEntry) fade = Math.min(fade, 0.3);
     deck.gain.gain.setValueAtTime(0, t);
     deck.gain.gain.linearRampToValueAtTime(1, t + fade);
     deck.nextTime = t + 0.06;
     this.decks.push(deck);
     this._current = trackId;
+    if (wantsEntry) this._entryFigure(deck, t + 0.05);
     this._startClock();
+  }
+
+  /** A written two-bar entry figure: low bell tolls walking up to the tonic. */
+  _entryFigure(deck, t0) {
+    const def = deck.song.def;
+    const key = def.key || 60;
+    const ss = deck.song.stepSec;
+    const minor = def.scale !== 'major' && def.scale !== 'mixolydian' && def.scale !== 'lydian';
+    const seq = [
+      [0, key - 12, 8, 0.5],
+      [ss * 4, key - 5, 8, 0.42],
+      [ss * 8, key, 10, 0.5],
+      [ss * 12, key + (minor ? 3 : 4), 14, 0.34],
+    ];
+    for (const [at, m, len, vel] of seq) {
+      this._note(deck, { m, v: 'bell', layer: 'accent', vel, len }, t0 + at);
+    }
   }
 
   stop(fadeMs = 900) {

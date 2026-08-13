@@ -233,9 +233,25 @@ export class Boot {
       ctx.fillStyle = rampCss('gold', 3);
       ctx.fillRect(bx + 2 + fill - 1, by + 2, 1, bh - 4);   // leading edge in shadow
     }
+    // World-build stretch: the bar is full but work is still running, so a
+    // bright chase band slides along the brass on the WALL clock - every
+    // frame the loader yields, the shimmer visibly moves (never a frozen bar).
+    if (this.finishing && fill > 8) {
+      const wall = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+      const span = 26;
+      const head = ((wall * 140) % (fill + span * 2)) - span;
+      const x0 = Math.max(0, Math.round(head)), x1 = Math.min(fill, Math.round(head + span));
+      if (x1 > x0) {
+        ctx.fillStyle = rampCss('gold', 13);
+        ctx.fillRect(bx + 2 + x0, by + 2, x1 - x0, Math.ceil(step));
+        ctx.fillStyle = rampCss('gold', 12);
+        ctx.fillRect(bx + 2 + x0, Math.round(by + 2 + step), x1 - x0, Math.ceil(step));
+      }
+    }
 
     const label = this.error ? 'Something went wrong' : this.label;
-    const dots = '.'.repeat(1 + (Math.floor(Math.abs(this.t) * 2) % 3));
+    const wallT = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+    const dots = '.'.repeat(1 + (Math.floor(wallT * 2) % 3));
     if (font && font.drawText) {
       font.drawText(ctx, label + dots, cx, by + bh + 8, { align: 'center', color: '#e8dcb0' });
       // No detail line: it printed internal asset ids ("title #4B4B4B") at the

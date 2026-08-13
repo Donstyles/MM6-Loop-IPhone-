@@ -20,7 +20,10 @@ import {
 } from './dialogue.js';
 
 const WEEK = 7 * 24 * 60;      // game minutes
-const RATE = 0.05;             // 5% a week on the balance
+// 1% a week: at 5% the bank compounded into a money printer under dawn-wait
+// spam (systems3 #7d; MM6's own bank paid nothing at all). The 4-week
+// settlement cap below stays.
+const RATE = 0.01;
 const AMOUNTS = [100, 500, 1000, 5000];
 
 /** Vault door, iron-bound counter, ledgers, scales and coin. */
