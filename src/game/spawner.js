@@ -20,6 +20,35 @@ const KIND_ALIASES = {
   lamp: 'lamppost', cart: 'cart', fire: 'campfire', torch: 'torch_wall',
 };
 
+// What the status line says when the player taps a piece of scenery (iphone
+// panel: "scenery taps no identify feedback"). Keyed by the SHELL kind before
+// aliasing, so `tree` and `oak` both read as an oak.
+const SCENERY_NAMES = {
+  oak: 'An old oak', tree: 'An old oak', trees: 'An old oak', pine: 'A tall pine',
+  palm: 'A palm tree', cypress: 'A cypress', dead_tree: 'A dead tree',
+  bush: 'A hardy bush', bush_berry: 'A berry bush', shrub: 'A hardy bush',
+  flowers: 'Wildflowers', flowers_white: 'Wildflowers', flower: 'Wildflowers',
+  flowerbed: 'A flowerbed', grass: 'A tuft of grass', grass_tuft: 'A tuft of grass',
+  rock: 'A weathered rock', rocks: 'A weathered rock', rock_small: 'A weathered rock',
+  stone: 'A weathered rock', boulder: 'A mossy boulder',
+  well: 'The town well', fountain: 'The plaza fountain',
+  stall: 'A market stall', market_stall: 'A market stall', bench: 'A wooden bench',
+  barrel: 'A barrel', crate: 'A crate', cart: 'A cart', haystack: 'A haystack',
+  signpost: 'A signpost', sign: 'A signpost', fence: 'A fence', lamppost: 'A lamppost',
+  lamp: 'A lamppost', gravestone: 'A weathered gravestone', ruins: 'Old ruins',
+  campfire: 'A campfire', fire: 'A campfire', dock: 'The docks', cactus: 'A cactus',
+  mushroom: 'A cluster of mushrooms', stump: 'A tree stump', log: 'A fallen log',
+};
+
+/** A friendly name for any scenery kind, with a readable fallback. */
+export function sceneryName(kind) {
+  const k = String(kind || '');
+  if (SCENERY_NAMES[k]) return SCENERY_NAMES[k];
+  const base = k.replace(/_(small|large|big|white|red|wet|dry|dark)$/, '').replace(/_/g, ' ');
+  if (!base) return 'Nothing of note';
+  return (/^[aeiou]/i.test(base) ? 'An ' : 'A ') + base;
+}
+
 export class Spawner {
   constructor(session) {
     this.session = session;
@@ -82,6 +111,7 @@ export class Spawner {
           category: CATEGORY.FLORA, kind: f.kind, sheet: sh, static: true,
           x: f.x, y: f.y ?? ground(f.x, f.z), z: f.z,
           radius: f.radius ?? 70, solid: f.solid ?? true, action: 'stand',
+          interact: { kind: 'scenery' }, label: sceneryName(f.kind),
         });
         e.scale = f.height && sh.worldH ? f.height / sh.worldH : (f.scale || 1);
         S.entities.add(e);
@@ -95,7 +125,9 @@ export class Spawner {
         category: CATEGORY.PROP, kind: p.kind, sheet: sh, static: !p.animated,
         x: p.x, y: p.y ?? ground(p.x, p.z), z: p.z,
         scale: p.scale || 1, radius: p.radius ?? 60, solid: p.solid ?? false,
-        interact: p.interact || null, label: p.label || null,
+        // A prop with no real interaction still answers a tap with its name.
+        interact: p.interact || { kind: 'scenery' },
+        label: p.label || sceneryName(p.kind),
         action: p.animated ? 'stand' : 'stand',
       });
       if (p.contents) e.data = { contents: p.contents };
@@ -162,7 +194,8 @@ export class Spawner {
       S.entities.add(new Entity({
         category: CATEGORY.PROP, kind: p.kind, sheet: sh, static: true,
         x: p.x, y: p.y ?? ground(p.x, p.z), z: p.z,
-        scale: p.scale || 1, solid: p.solid ?? false, label: p.label || null,
+        scale: p.scale || 1, solid: p.solid ?? false,
+        interact: { kind: 'scenery' }, label: p.label || sceneryName(p.kind),
       }));
     }
 
@@ -233,7 +266,8 @@ export class Spawner {
         category: CATEGORY.PROP, kind: p.kind, sheet: sh, static: true,
         x: p.x, y: p.y ?? ground(p.x, p.z), z: p.z,
         scale: p.scale || 1, solid: p.solid ?? false,
-        interact: p.interact || null, label: p.label || null,
+        interact: p.interact || { kind: 'scenery' },
+        label: p.label || sceneryName(p.kind),
       }));
     }
     for (const c of dungeon.chests || []) {

@@ -23,8 +23,25 @@ export class ColliderGrid {
 
   key(cx, cz) { return cx * 73856093 ^ cz * 19349663; }
 
-  /** @param {{minX,minY,minZ,maxX,maxY,maxZ}} b */
+  /**
+   * @param {object} b an AABB {minX,minY,minZ,maxX,maxY,maxZ} or an oriented
+   * box {type:'obb', x, z, hw, hd, rot, y0, y1} - the shape the world
+   * generator emits for every rotated building, wall run and pillar. An OBB
+   * is stored with its world-aligned envelope for the grid walk and its
+   * rotation precomputed for the narrow test.
+   */
   add(b) {
+    if (b && b.type === 'obb') {
+      const cos = Math.cos(b.rot || 0), sin = Math.sin(b.rot || 0);
+      const ex = Math.abs(cos) * b.hw + Math.abs(sin) * b.hd;
+      const ez = Math.abs(sin) * b.hw + Math.abs(cos) * b.hd;
+      b = {
+        minX: b.x - ex, minY: b.y0 ?? -1e9, minZ: b.z - ez,
+        maxX: b.x + ex, maxY: b.y1 ?? 1e9, maxZ: b.z + ez,
+        obb: { x: b.x, z: b.z, hw: b.hw, hd: b.hd, cos, sin },
+        walkable: b.walkable, data: b.data ?? null,
+      };
+    }
     const i = this.boxes.length;
     this.boxes.push(b);
     const c = this.cell;
@@ -68,6 +85,19 @@ export class ColliderGrid {
           const b = this.boxes[i];
           if (b.disabled) continue;
           if (y + h <= b.minY || y >= b.maxY) continue;
+          if (b.obb) {
+            // Into the box's local frame (inverse of makeRotationY(rot)),
+            // then the same closest-point test against the unrotated extents.
+            const o = b.obb;
+            const wx = x - o.x, wz = z - o.z;
+            const lx = wx * o.cos - wz * o.sin;
+            const lz = wx * o.sin + wz * o.cos;
+            const cx2 = Math.max(-o.hw, Math.min(lx, o.hw));
+            const cz2 = Math.max(-o.hd, Math.min(lz, o.hd));
+            const dx = lx - cx2, dz = lz - cz2;
+            if (dx * dx + dz * dz < r * r) return true;
+            continue;
+          }
           // Closest point on the box to the cylinder axis.
           const px = Math.max(b.minX, Math.min(x, b.maxX));
           const pz = Math.max(b.minZ, Math.min(z, b.maxZ));
@@ -102,7 +132,9 @@ export class ColliderGrid {
 export function outdoorMap(region) {
   const grid = new ColliderGrid(2048);
   for (const c of region.colliders || []) {
-    if (c.isBox3) grid.addBox(c.min.x, c.min.y, c.min.z, c.max.x, c.max.y, c.max.z);
+    if (!c) continue;
+    if (c.type === 'obb') grid.add(c);              // rotated buildings/walls
+    else if (c.isBox3) grid.addBox(c.min.x, c.min.y, c.min.z, c.max.x, c.max.y, c.max.z);
     else if (c.minX !== undefined) grid.add(c);
     else if (c.isObject3D) grid.addObject(c);
   }
@@ -159,11 +191,47 @@ export function outdoorMap(region) {
   };
 }
 
+/**
+ * The dungeon's carved-volume collider: a solid-rock bitmap plus per-cell
+ * floor/ceiling heights ({type:'grid'} from world/dungeon.js). Everything
+ * outside the dug cells is rock; an open cell still blocks when its floor is
+ * an unclimbable riser or its ceiling too low to stand under. The circle test
+ * runs against the cell rectangles, so the party (and the camera it carries)
+ * always keeps its full radius away from every wall face - the wall-hug
+ * camera-in-rock void came from exactly this margin not existing.
+ */
+function cellGridBlocked(gc, x, y, z, r, h) {
+  const lx = x - gc.originX, lz = z - gc.originZ;
+  const i0 = Math.floor((lx - r) / gc.cell), i1 = Math.floor((lx + r) / gc.cell);
+  const j0 = Math.floor((lz - r) / gc.cell), j1 = Math.floor((lz + r) / gc.cell);
+  for (let i = i0; i <= i1; i++) {
+    for (let j = j0; j <= j1; j++) {
+      let solid = i < 0 || j < 0 || i >= gc.w || j >= gc.h;
+      if (!solid) {
+        const k = j * gc.w + i;
+        if (gc.solid[k]) solid = true;
+        else if (gc.floor[k] > y + 130) solid = true;      // riser, not a step
+        else if (gc.ceil[k] < y + Math.min(h, 150)) solid = true; // crawlspace
+        else continue;
+      }
+      const minX = i * gc.cell, minZ = j * gc.cell;
+      const px = Math.max(minX, Math.min(lx, minX + gc.cell));
+      const pz = Math.max(minZ, Math.min(lz, minZ + gc.cell));
+      const dx = lx - px, dz = lz - pz;
+      if (dx * dx + dz * dz < r * r) return true;
+    }
+  }
+  return false;
+}
+
 /** Wrap a generated dungeon as a GameMap. */
 export function dungeonMap(dungeon) {
   const grid = new ColliderGrid(1024);
+  const cellGrids = [];
   for (const c of dungeon.colliders || []) {
-    if (c.minX !== undefined) grid.add(c);
+    if (!c) continue;
+    if (c.type === 'grid') cellGrids.push(c);
+    else if (c.type === 'obb' || c.minX !== undefined) grid.add(c);
     else if (c.isBox3) grid.addBox(c.min.x, c.min.y, c.min.z, c.max.x, c.max.y, c.max.z);
   }
 
@@ -182,12 +250,24 @@ export function dungeonMap(dungeon) {
     colliders: grid,
 
     groundAt(x, z, y) {
-      return dungeon.floorAt ? dungeon.floorAt(x, z, y) : grid.supportAt(x, z, y ?? 0);
+      if (dungeon.floorAt) {
+        const f = dungeon.floorAt(x, z, y);
+        // null = solid rock. blocked() keeps the party out of it; if a query
+        // still lands there (a seam, a probe), hold the current height rather
+        // than returning null and dropping the caller into the void.
+        return f === null || f === undefined ? (y ?? 0) : f;
+      }
+      return grid.supportAt(x, z, y ?? 0);
     },
     ceilingAt(x, z, y) {
-      return dungeon.ceilAt ? dungeon.ceilAt(x, z, y) : Infinity;
+      if (!dungeon.ceilAt) return Infinity;
+      const c = dungeon.ceilAt(x, z, y);
+      return c === null || c === undefined ? Infinity : c;
     },
-    blocked(x, y, z, r, h) { return grid.blocked(x, y, z, r, h); },
+    blocked(x, y, z, r, h) {
+      for (const gc of cellGrids) if (cellGridBlocked(gc, x, y, z, r, h)) return true;
+      return grid.blocked(x, y, z, r, h);
+    },
     waterLevelAt(x, z) { return dungeon.waterAt ? dungeon.waterAt(x, z) : null; },
     lightAt: dungeon.lightAt || (() => ({ r: 0.35, g: 0.34, b: 0.4 })),
     surfaceAt: dungeon.surfaceAt || (() => 'stone'),

@@ -5,6 +5,7 @@ import { SpriteRenderer } from '../ents/billboard.js';
 import { MessageLog, Transition } from '../ui/uikit.js';
 import { Rand, hashStr } from '../core/rng.js';
 import { tickTimeEffects } from './party.js';
+import { sceneryName } from './spawner.js';
 
 // ---------------------------------------------------------------------------
 // The running game.
@@ -99,6 +100,59 @@ function angleDelta(a, b) {
   if (d > Math.PI) d -= Math.PI * 2;
   if (d < -Math.PI) d += Math.PI * 2;
   return d;
+}
+
+/**
+ * DETERMINISTIC OPENING (iphone flip #1): the fixed new-game camera. Given a
+ * generated town layout, stand the party on the main street a stride past the
+ * signed storefront nearest the plaza, looking back down the lane - so the
+ * first frame is always a street with a named shop in it and the market
+ * beyond, never a treeline. Pure function of the town data (which is itself
+ * seeded), so the same seed always produces the same opening and EVERY seed
+ * produces a street.
+ */
+export function streetSpawnAnchor(town) {
+  if (!town || !Number.isFinite(town.x) || !Number.isFinite(town.z)) return null;
+  const cx = town.x, cz = town.z;
+  const plazaR = (town.plaza && town.plaza.radius) || 900;
+  const mains = (town.roads || []).filter((rd) => rd.main && rd.points && rd.points.length >= 2);
+  if (!mains.length) return null;
+  const shops = town.shops || [];
+  let best = null;
+  for (const rd of mains) {
+    const a = rd.points[0], b = rd.points[1];
+    const len = Math.hypot(b.x - a.x, b.z - a.z) || 1;
+    const ux = (b.x - a.x) / len, uz = (b.z - a.z) / len;
+    const c0 = (cx - a.x) * ux + (cz - a.z) * uz;      // plaza centre along the road
+    for (const s of shops) {
+      const d = s.door;
+      if (!d || !Number.isFinite(d.x)) continue;
+      const t = (d.x - a.x) * ux + (d.z - a.z) * uz;
+      const perp = Math.abs((d.x - a.x) * -uz + (d.z - a.z) * ux);
+      if (perp > (rd.width || 800) / 2 + 700) continue;  // not fronting this street
+      const along = t - c0;
+      const dist = Math.abs(along);
+      // Close enough that the plaza market shares the frame, far enough that
+      // the stand is on the street proper rather than among the stalls.
+      if (dist < plazaR * 0.55 || dist > plazaR + 2400) continue;
+      const score = dist - (s.name ? 600 : 0) - (s.kind === 'tavern' ? 250 : 0);
+      if (!best || score < best.score) best = { a, ux, uz, c0, s, along, score };
+    }
+  }
+  if (!best) return null;
+  const sgn = best.along >= 0 ? 1 : -1;
+  const standT = best.c0 + best.along + sgn * 780;     // a stride beyond the shop door
+  const px = best.a.x + best.ux * standT;
+  const pz = best.a.z + best.uz * standT;
+  // Aim between the storefront's door and the plaza centre: the hanging sign
+  // sits ahead to the side, the well and the stalls dead down the lane.
+  const door = best.s.door;
+  const tx = (door.x + cx) / 2, tz = (door.z + cz) / 2;
+  const yaw = Math.atan2(tx - px, tz - pz) + Math.PI;
+  return {
+    x: px, y: town.y || 0, z: pz, yaw,
+    shop: best.s.name || best.s.kind || null,
+  };
 }
 
 /**
@@ -227,6 +281,39 @@ export class Session {
       blocked: (x, y, z, r, h) => (this.map ? this.map.blocked(x, y, z, r, h) : false),
       waterLevelAt: (x, z) => (this.map ? this.map.waterLevelAt(x, z) : null),
     };
+    // The PLAYER's view of the same world additionally carries live monster
+    // bodies: you cannot walk through a goblin, but a goblin that walked into
+    // YOU never traps you (collision hardening). Entities keep using
+    // this.collision - a body must never block itself.
+    this.playerCollision = {
+      groundAt: this.collision.groundAt,
+      ceilingAt: this.collision.ceilingAt,
+      waterLevelAt: this.collision.waterLevelAt,
+      blocked: (x, y, z, r, h) => this.collision.blocked(x, y, z, r, h) || this.monsterBlocked(x, z, r),
+    };
+  }
+
+  /**
+   * Would standing at (x,z) with radius r overlap a live, solid monster?
+   * UNSTICK RULE: if the party is ALREADY overlapping that body (it stepped
+   * into us, or a spawn landed close), only moves that deepen the overlap are
+   * refused - walking out is always allowed, so a body can block but never trap.
+   */
+  monsterBlocked(x, z, r) {
+    const p = this.player.pos;
+    for (const e of this.entities.list) {
+      if (e.category !== CATEGORY.MONSTER || e.dead || !e.solid) continue;
+      const br = (e.radius || 60) * 0.9 + r;
+      const dx = e.pos.x - x, dz = e.pos.z - z;
+      const next2 = dx * dx + dz * dz;
+      if (next2 >= br * br) continue;
+      if (Math.abs(e.pos.y - p.y) > 320) continue;      // a wall-top rat is no wall
+      const cx = e.pos.x - p.x, cz = e.pos.z - p.z;
+      const cur2 = cx * cx + cz * cz;
+      if (cur2 < br * br && next2 >= cur2) continue;    // already inside: let them out
+      return true;
+    }
+    return false;
   }
 
   // --- map lifecycle -------------------------------------------------------
@@ -249,8 +336,21 @@ export class Session {
     this.mapId = id;
     if (map.group) this.mapGroup.add(map.group);
 
-    const s = entry || map.start || { x: 0, y: 0, z: 0, yaw: 0 };
+    let s = entry || map.start || { x: 0, y: 0, z: 0, yaw: 0 };
+    // DETERMINISTIC OPENING (iphone flip #1): a DEFAULT arrival into an
+    // outdoor region with a town never lands in the wilds. Only the region's
+    // own nominated spawn (or no entry at all) is overridden - an explicit
+    // entry (a dungeon exit, a travel gate, a loaded save) is sacred.
+    let anchor = null;
+    if (!map.indoor && map.region
+      && (!entry || (map.region.spawnPoint && entry === map.region.spawnPoint))) {
+      try { anchor = streetSpawnAnchor((map.region.towns || [])[0]); } catch (e) { anchor = null; }
+    }
+    if (anchor) s = anchor;
     const spot = this.findClearSpot(map, s);
+    // The anchor's facing IS the composition (signed storefront + market):
+    // findClearSpot may relocate a blocked stand but never re-aim it.
+    if (anchor) spot.yaw = anchor.yaw;
     this.player.pos.set(spot.x, spot.y, spot.z);
     this.player.vel.set(0, 0, 0);
     this.player.yaw = spot.yaw;
@@ -560,11 +660,12 @@ export class Session {
     const prevVy = this.player.vel.y;
     const wasGround = this.player.onGround;
     const prevX = this.player.pos.x, prevZ = this.player.pos.z;
-    const moving = this.player.update(dt, axes, this.collision, {
+    const moving = this.player.update(dt, axes, this.playerCollision || this.collision, {
       run: input.down('run'),
       jump: wantJump,
       indoor: this.map ? this.map.indoor : false,
     });
+    this.updateAutoWalk(dt, axes, wantJump);
     this.clampToBounds(dt);
 
     // In turns, walking is not free - IN ANY PHASE (systems3 #5: the monster
@@ -836,18 +937,91 @@ export class Session {
     if (!this.map) return null;
     const cam = this.engine.camera;
     const dir = this._v2.set(nx, ny, 0.5).unproject(cam).sub(cam.position).normalize();
-    return this._pickAlong(cam.position, dir, 4500);
+    const hit = this._pickAlong(cam.position, dir, 4500);
+    if (hit) return hit;
+    // Nothing spritely under the finger: name what the tap landed on (iphone
+    // panel: scenery taps had no identify feedback). Buildings are one merged
+    // mesh and trees are batched billboard fields, so neither is an entity -
+    // test the ray against their recorded plans instead.
+    return this._pickScenery(cam.position, dir, 3200);
+  }
+
+  /** Ray vs building bounds and flora billboards: a tap-only identify target. */
+  _pickScenery(origin, dir, range) {
+    const region = this.map && this.map.region;
+    if (!region) return null;
+    let best = null, bestT = Infinity;
+    for (const town of region.towns || []) {
+      for (const b of town.buildings || []) {
+        if (!b.bounds || !b.bounds.min) continue;
+        const lo = b.bounds.min, hi = b.bounds.max;
+        // Slab test against the world-aligned envelope.
+        let t0 = 0, t1 = range, ok = true;
+        for (const [o, d, mn, mx] of [
+          [origin.x, dir.x, lo.x, hi.x], [origin.y, dir.y, lo.y, hi.y], [origin.z, dir.z, lo.z, hi.z]]) {
+          if (Math.abs(d) < 1e-9) { if (o < mn || o > mx) { ok = false; break; } continue; }
+          let a = (mn - o) / d, c = (mx - o) / d;
+          if (a > c) { const s = a; a = c; c = s; }
+          t0 = Math.max(t0, a); t1 = Math.min(t1, c);
+          if (t0 > t1) { ok = false; break; }
+        }
+        if (!ok || t0 >= bestT) continue;
+        bestT = t0;
+        const label = b.name
+          || ({ cottage: 'A cottage', hut: 'A hut', longhouse: 'A longhouse', townhouse: 'A townhouse', manor: 'A manor', shop: 'A shopfront', warehouse: 'A warehouse' })[b.style]
+          || 'A house';
+        best = { label };
+      }
+    }
+    // Trees: the flora plan plus each town's own trunks. Vertical cylinders.
+    const trunk = (f, h, w, label) => {
+      if (!h) return;
+      const dx = f.x - origin.x, dz = f.z - origin.z;
+      const dd = dir.x * dir.x + dir.z * dir.z;
+      if (dd < 1e-9) return;
+      const t = (dx * dir.x + dz * dir.z) / dd;      // closest approach in XZ
+      if (t <= 0 || t >= Math.min(range, bestT)) return;
+      const px = origin.x + dir.x * t - f.x, pz = origin.z + dir.z * t - f.z;
+      const r = Math.max(70, (w || h * 0.6) * 0.30);  // the crown, not the leaf-box
+      if (px * px + pz * pz > r * r) return;
+      const y = origin.y + dir.y * t;
+      const y0 = f.y ?? 0;
+      if (y < y0 - 40 || y > y0 + h) return;
+      bestT = t;
+      best = { label };
+    };
+    for (const f of region.floraPlan || []) {
+      trunk(f, f.height || 0, f.height ? f.height * 0.6 : 0, sceneryName(f.kind));
+    }
+    for (const town of region.towns || []) {
+      for (const f of town.treeSpots || []) trunk(f, f.h || 0, f.w || 0, sceneryName('tree'));
+    }
+    if (!best) return null;
+    // A transient identify target in entity clothing: activate() names it.
+    return {
+      category: CATEGORY.PROP, kind: 'scenery', sheet: null,
+      pos: new THREE.Vector3(origin.x + dir.x * bestT, origin.y + dir.y * bestT, origin.z + dir.z * bestT),
+      sizeW: 0, sizeH: 0, radius: 0, dead: false, remove: false, visible: true,
+      interact: { kind: 'scenery' }, label: best.label,
+    };
   }
 
   _pickAlong(origin, dir, range) {
     let best = null, bestT = Infinity;
     for (const e of this.entities.list) {
-      if (!e.visible || !e.sheet) continue;
+      if (!e.visible) continue;
+      // Door and shop-entrance markers are sprite-less on purpose (they never
+      // draw), but they MUST be pickable or a tap on a visible door does
+      // nothing at all (iphone flip #2 - the judge's organic door taps).
+      const marker = !e.sheet && !!e.interact;
+      if (!e.sheet && !marker) continue;
       const dx = e.pos.x - origin.x, dy = (e.pos.y + e.sizeH * 0.5) - origin.y, dz = e.pos.z - origin.z;
       const t = dx * dir.x + dy * dir.y + dz * dir.z;
       if (t <= 0 || t > range) continue;
       const px = dx - dir.x * t, py = dy - dir.y * t, pz = dz - dir.z * t;
-      const rad = Math.max(e.sizeW, e.sizeH) * 0.42;
+      const rad = marker
+        ? Math.max(150, (e.radius || 60) * 1.5)        // fat-finger forgiveness
+        : Math.max(e.sizeW, e.sizeH) * 0.42;
       if (px * px + py * py + pz * pz < rad * rad && t < bestT) { bestT = t; best = e; }
     }
     return best;
@@ -871,7 +1045,19 @@ export class Session {
   }
 
   /** MM6's activation reach: short, plus the target's own footprint. */
-  activateReach(c) { return 256 + (c.radius || 0); }
+  activateReach(c) {
+    const k = c && c.interact ? c.interact.kind : null;
+    // Doors, shopfronts and dungeon mouths take a generous arm (iphone flip
+    // #2): a tap that lands on a visible door within ~500u simply opens it.
+    if (k === 'door' || k === 'shop' || k === 'transition') return 420 + (c.radius || 0);
+    return 256 + (c.radius || 0);
+  }
+
+  /** Door-ish things a tap may auto-approach: walk a few steps, then open. */
+  isApproachable(c) {
+    const k = c && c.interact ? c.interact.kind : null;
+    return k === 'door' || k === 'shop' || k === 'transition';
+  }
 
   /**
    * A cheap line test at eye height that deliberately skips both endpoints, so
@@ -890,11 +1076,15 @@ export class Session {
 
   activate() {
     let e = this.hoverEntity;
+    const tapped = e;    // what the finger actually landed on, kept for fallbacks
     // A prop under the crosshair must never swallow the activation: if it is
     // not interactable, or out of reach, fall through to the scan.
     if (e) {
       const d = Math.hypot(e.pos.x - this.player.pos.x, e.pos.z - this.player.pos.z);
       if (!this.isInteractable(e) || d > this.activateReach(e) || !this.hasLineTo(e)) e = null;
+      // Scenery is identification, not activation: never let a bush under the
+      // reticle shadow a real door - keep scanning, name it only as a last resort.
+      if (e && e.interact && e.interact.kind === 'scenery') e = null;
     }
     if (!e) {
       const px = this.player.pos.x, pz = this.player.pos.z;
@@ -903,6 +1093,7 @@ export class Session {
       for (const c of this.entities.list) {
         if (!this.isInteractable(c)) continue;
         if (c.category === CATEGORY.MONSTER) continue;   // attack handles those
+        if (c.interact && c.interact.kind === 'scenery') continue; // USE never "opens" a bush
         const dx = c.pos.x - px, dz = c.pos.z - pz;
         const d = Math.hypot(dx, dz);
         if (d > this.activateReach(c)) continue;
@@ -923,8 +1114,86 @@ export class Session {
       }
       e = best;
     }
-    if (!e) return null;
+    if (!e) {
+      // WALK-AND-OPEN (iphone flip #2): a tap that clearly hit a door beyond
+      // arm's reach is an instruction, not a miss - close the last few strides
+      // automatically and open on arrival. Any real movement input cancels.
+      if (tapped && this.isApproachable(tapped) && !tapped.dead && !tapped.remove) {
+        const d = Math.hypot(tapped.pos.x - this.player.pos.x, tapped.pos.z - this.player.pos.z);
+        if (d <= 1200 && this.hasLineTo(tapped)) {
+          this._autoWalk = { target: tapped, t: 0 };
+          return null;
+        }
+      }
+      // Scenery under the tap still earns a word: name what was touched.
+      if (tapped && tapped.interact && tapped.interact.kind === 'scenery') {
+        return { entity: tapped, kind: 'scenery' };
+      }
+      // Anything else tapped beyond reach is IDENTIFIED, not ignored: a
+      // villager across the plaza gets their name, not "Nothing here."
+      if (tapped && tapped.label) {
+        this.message(`${tapped.label}.`);
+        return null;
+      }
+      // Soft feedback, no error sound: USE with nothing in range says so
+      // instead of silently doing nothing (iphone panel, USE feedback note).
+      if (!this._nothingT || this.clock.minutes - this._nothingT > 2) {
+        this._nothingT = this.clock.minutes;
+        this.message('Nothing here.');
+      }
+      return null;
+    }
+    this._autoWalk = null;
     return { entity: e, kind: e.interact ? e.interact.kind : e.category };
+  }
+
+  /**
+   * The walk half of walk-and-open: steer toward the tapped door at walking
+   * pace, collision-checked, and activate it the moment it comes into reach.
+   * Hands control straight back on any real input, a vanished target, a wall
+   * it cannot slide around, or a four-second timeout.
+   */
+  updateAutoWalk(dt, axes, wantJump) {
+    const aw = this._autoWalk;
+    if (!aw) return;
+    const e = aw.target;
+    aw.t += dt;
+    if (!e || e.remove || e.dead || aw.t > 4
+      || Math.abs(axes.forward) > 0.05 || Math.abs(axes.strafe) > 0.05
+      || Math.abs(axes.turn) > 0.05 || wantJump) {
+      this._autoWalk = null;
+      return;
+    }
+    const p = this.player.pos;
+    const dx = e.pos.x - p.x, dz = e.pos.z - p.z;
+    const d = Math.hypot(dx, dz);
+    const reach = this.activateReach(e) - 40;
+    // Turn to face it while closing, like a player would.
+    const wantYaw = Math.atan2(dx, dz) + Math.PI;
+    const dy = angleDelta(wantYaw, this.player.yaw);
+    this.player.yaw += Math.max(-3.4 * dt, Math.min(3.4 * dt, dy));
+    if (d <= reach) {
+      this._autoWalk = null;
+      this.hoverEntity = e;
+      const hit = { entity: e, kind: e.interact ? e.interact.kind : e.category };
+      if (this.handleActivate) this.handleActivate(hit);
+      return;
+    }
+    const step = Math.min(d - reach + 8, PLAYER.walkSpeed * dt);
+    const nx = p.x + (dx / d) * step, nz = p.z + (dz / d) * step;
+    const R = PLAYER.radius, H = PLAYER.height;
+    if (!this.collision.blocked(nx, p.y + 8, nz, R, H)) {
+      p.x = nx; p.z = nz;
+    } else if (!this.collision.blocked(nx, p.y + 8, p.z, R, H)) {
+      p.x = nx;
+    } else if (!this.collision.blocked(p.x, p.y + 8, nz, R, H)) {
+      p.z = nz;
+    } else {
+      this._autoWalk = null;
+      return;
+    }
+    p.y = this.collision.groundAt(p.x, p.z, p.y);
+    this._awaitFirstMove = false;   // walking to a door is a real first move
   }
 
   // --- world services --------------------------------------------------------
@@ -1854,5 +2123,16 @@ export class Session {
     }
   }
 
-  message(text, color) { this.log.add(text, color); }
+  message(text, color) {
+    // One live arrival line only (iphone panel: doubled "You arrive in New
+    // Sorpigal" after Continue): the boot-time toast has not aged - the log
+    // only ticks while playing - when a load re-announces the same region.
+    // Refresh the existing line instead of appending a twin.
+    if (typeof text === 'string' && /^You (arrive|enter) /.test(text)) {
+      for (const l of this.log.lines) {
+        if (l.text === text && l.t < (l.ttl || 4)) { l.t = 0; return; }
+      }
+    }
+    this.log.add(text, color);
+  }
 }

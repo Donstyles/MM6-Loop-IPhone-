@@ -13,7 +13,11 @@ import * as THREE from 'three';
 // every monster in the game - which is true of the original.
 export const PLAYER = {
   eyeHeight: 160,
-  radius: 37,
+  // 56, up from 37 (collision hardening): the camera sits AT the collision
+  // cylinder's axis, so the old radius let a wall-hug-and-turn poke the near
+  // plane through thin dungeon niche walls (aesthete #2). Corridors are 512u
+  // wide and gates 900u, so the fatter capsule costs no doorway in the game.
+  radius: 56,
   height: 192,
   walkSpeed: 384,
   runSpeed: 768,
@@ -106,6 +110,11 @@ export class PlayerController {
 
   _move(dt, map, o) {
     const p = this.pos;
+    const startX = p.x, startZ = p.z;
+    // Was the start pose already inside something? Then never re-trap below -
+    // any move that gets out must be allowed to stand.
+    const startOverlapped = map.blocked
+      && map.blocked(p.x, p.y + 8, p.z, PLAYER.radius, PLAYER.height);
     const nx = p.x + this.vel.x * dt;
     const nz = p.z + this.vel.z * dt;
     let ny = p.y + this.vel.y * dt;
@@ -119,8 +128,14 @@ export class PlayerController {
       const ox = p.x, oz = p.z;
       const okX = !map.blocked(nx, p.y, p.z, PLAYER.radius, PLAYER.height);
       const okZ = !map.blocked(p.x, p.y, nz, PLAYER.radius, PLAYER.height);
-      if (okX) p.x = nx;
-      if (okZ) p.z = nz;
+      // Never apply BOTH axes here: the combined target is the very position
+      // the guard above just rejected - sliding into a corner pocket walked
+      // the party inside right-angle building corners (collision hardening).
+      if (okX && okZ) {
+        if (Math.abs(this.vel.x) >= Math.abs(this.vel.z)) p.x = nx;
+        else p.z = nz;
+      } else if (okX) p.x = nx;
+      else if (okZ) p.z = nz;
       const sp = Math.hypot(this.vel.x, this.vel.z);
       const wanted = sp * dt;
       const got = Math.hypot(p.x - ox, p.z - oz);
@@ -165,6 +180,42 @@ export class PlayerController {
       if (this.vel.y > 0) this.vel.y = 0;
     }
     p.y = ny;
+
+    // COLLISION HARDENING: the horizontal pass ran at the OLD height, and the
+    // ground snap above may have carried the capsule up INTO a collider whose
+    // base sat above the old head (walking uphill under a building's box).
+    // If the settled pose overlaps, take the horizontal move back - unless the
+    // step STARTED overlapped, in which case moving out must stay legal.
+    if (map.blocked && map.blocked(p.x, p.y + 8, p.z, PLAYER.radius, PLAYER.height)) {
+      if (!startOverlapped && (p.x !== startX || p.z !== startZ)) {
+        p.x = startX;
+        p.z = startZ;
+        this.vel.x *= 0.2;
+        this.vel.z *= 0.2;
+        const g2 = map.groundAt ? map.groundAt(p.x, p.z, p.y) : ground;
+        if (p.y < g2) { p.y = g2; this.onGround = true; if (this.vel.y < 0) this.vel.y = 0; }
+      }
+      // Still inside something (whatever put us there - a spawn, a moving
+      // body, an edited collider): UNSTICK. Search a short outward spiral for
+      // the nearest free stand and take it. A body may block, never trap.
+      if (map.blocked(p.x, p.y + 8, p.z, PLAYER.radius, PLAYER.height)) {
+        unstick:
+        for (let ring = 1; ring <= 5; ring++) {
+          const d = ring * 26;
+          for (let k = 0; k < 8; k++) {
+            const a = (k / 8) * Math.PI * 2;
+            const sx = p.x + Math.sin(a) * d, sz = p.z + Math.cos(a) * d;
+            const sy = map.groundAt ? map.groundAt(sx, sz, p.y) : p.y;
+            if (Math.abs(sy - p.y) > PLAYER.stepUp + 40) continue;
+            if (map.blocked(sx, sy + 8, sz, PLAYER.radius, PLAYER.height)) continue;
+            p.x = sx; p.z = sz; p.y = Math.max(p.y, sy);
+            this.vel.x *= 0.2;
+            this.vel.z *= 0.2;
+            break unstick;
+          }
+        }
+      }
+    }
 
     if (map.waterLevelAt) {
       const wl = map.waterLevelAt(p.x, p.z);

@@ -1344,7 +1344,81 @@ try {
       'fresh corpses are not "missing" targets - no re-mint over them');
   }
 
-  say('session-level checks complete (one clock, rng streams, defeat, ledger, TB, quests, tap safety)');
+  // ------------------------------------------------------------------------
+  // Deterministic opening (iphone flip #1): the street spawn anchor. For any
+  // seeded town layout the anchor must stand ON a main street, near the
+  // plaza, facing a signed storefront with the plaza in the same view cone -
+  // and be byte-identical when recomputed. Five seeds, no coin flips.
+  // ------------------------------------------------------------------------
+  {
+    const { streetSpawnAnchor } = await import('../src/game/session.js');
+    // Synthetic towns in the exact shape generateTown emits: two axis main
+    // streets through the plaza, shop plots at the generator's setback.
+    const makeTown = (seed) => {
+      const r = new Rand(seed);
+      const cx = r.int(-20000, 20000), cz = r.int(-20000, 20000);
+      const R = 3800, plazaR = 950, mainW = 820, ext = R * 1.02;
+      const roads = [
+        { points: [{ x: cx - ext, z: cz }, { x: cx + ext, z: cz }], width: mainW, main: true },
+        { points: [{ x: cx, z: cz - ext }, { x: cx, z: cz + ext }], width: mainW, main: true },
+        { points: [{ x: cx - R, z: cz + 1200 }, { x: cx + R, z: cz + 1200 }], width: 800 },
+      ];
+      const shops = [];
+      const names = ['The Silver Helm', 'Steel & Sons', 'Sigil & Scroll', null, 'The Green Flask'];
+      for (let i = 0; i < 5; i++) {
+        const horiz = r.bool();
+        const sgn = r.bool() ? 1 : -1;
+        const along = sgn * r.int(1400, 3200);
+        const setback = mainW / 2 + 460;
+        const side = (r.bool() ? 1 : -1) * setback;
+        shops.push({
+          kind: i === 0 ? 'tavern' : 'weapon', name: names[i], buildingIndex: i,
+          door: horiz
+            ? { x: cx + along, y: 0, z: cz + side * 0.6 }
+            : { x: cx + side * 0.6, y: 0, z: cz + along },
+        });
+      }
+      return { x: cx, z: cz, y: 0, radius: R, roads, shops, plaza: { x: cx, z: cz, radius: plazaR }, buildings: [] };
+    };
+    for (const seed of [11, 222, 3333, 44444, 555555]) {
+      const town = makeTown(seed);
+      const a = streetSpawnAnchor(town);
+      if (!ok(!!a, `seed ${seed}: street anchor exists`)) continue;
+      // On a main street's carriageway, never in a plot or the wilds.
+      let onStreet = false;
+      for (const rd of town.roads) {
+        if (!rd.main) continue;
+        const p0 = rd.points[0], p1 = rd.points[1];
+        const len = Math.hypot(p1.x - p0.x, p1.z - p0.z) || 1;
+        const ux = (p1.x - p0.x) / len, uz = (p1.z - p0.z) / len;
+        const perp = Math.abs((a.x - p0.x) * -uz + (a.z - p0.z) * ux);
+        if (perp <= rd.width / 2) onStreet = true;
+      }
+      ok(onStreet, `seed ${seed}: anchor is on a main street`);
+      const dPlaza = Math.hypot(a.x - town.x, a.z - town.z);
+      ok(dPlaza <= town.plaza.radius + 3400, `seed ${seed}: near the plaza (${Math.round(dPlaza)}u)`);
+      ok(dPlaza >= town.plaza.radius * 0.5, `seed ${seed}: on the street proper, not among the stalls`);
+      // The view cone (60 deg either side) holds the plaza centre; the signed
+      // storefront it chose sits inside a tap-friendly 60 deg as well.
+      const fx = -Math.sin(a.yaw), fz = -Math.cos(a.yaw);
+      const cosTo = (tx, tz) => {
+        const dx = tx - a.x, dz = tz - a.z;
+        const d = Math.hypot(dx, dz) || 1;
+        return (dx * fx + dz * fz) / d;
+      };
+      ok(cosTo(town.x, town.z) > 0.5, `seed ${seed}: market/plaza inside the opening frame`);
+      const shop = town.shops.find((s2) => (s2.name || s2.kind) === a.shop);
+      ok(!!shop && cosTo(shop.door.x, shop.door.z) > 0.5,
+        `seed ${seed}: facing the signed storefront (${a.shop})`);
+      ok(shop && !!shop.name, `seed ${seed}: chosen storefront is a NAMED one`);
+      const b = streetSpawnAnchor(town);
+      ok(JSON.stringify(a) === JSON.stringify(b), `seed ${seed}: anchor is deterministic`);
+    }
+    ok(streetSpawnAnchor(null) === null && streetSpawnAnchor({ x: 0, z: 0, roads: [], shops: [] }) === null,
+      'anchor degrades to null (spawn fallback) without a town layout');
+  }
+
+  say('session-level checks complete (one clock, rng streams, defeat, ledger, TB, quests, tap safety, street spawn)');
 } catch (e) {
   failures++;
   console.error('  FAIL  session-level harness crashed:', e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : e);

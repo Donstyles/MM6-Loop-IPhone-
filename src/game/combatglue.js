@@ -200,6 +200,11 @@ export function installCombat(session) {
   session.handleActivate = (hit) => {
     const e = hit.entity;
     const kind = hit.kind;
+    // Naming a tree costs nothing and opens nothing: identify and stop.
+    if (kind === 'scenery') {
+      session.message(`${(e && e.label) || 'Nothing of note'}.`);
+      return;
+    }
     // In turns, opening and talking are actions too (systems #2).
     if (session.turnBased && session.spendTurnPoints && session.countHostiles() > 0) {
       session.spendTurnPoints(13);

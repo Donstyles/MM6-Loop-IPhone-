@@ -64,7 +64,10 @@ check('casters know spells', party.spells.some((n) => n > 0), `spells ${party.sp
 // --- combat actually resolves ----------------------------------------------
 await S(() => {
   window.__mm6.setTime(12, 0);
-  for (let i = 0; i < 4; i++) window.__mm6.spawn('GoblinA', 600 + i * 120);
+  // Spawn INSIDE melee range (QA D-1): at 600u+ the party's bows deleted the
+  // pack before it closed, so "monsters fight back" was a coin flip. At
+  // ~350u a goblin lands its first swing within a second of aggro.
+  for (let i = 0; i < 4; i++) window.__mm6.spawn('GoblinA', 340 + i * 70);
 });
 await page.waitForTimeout(1200);
 const before = await S(() => {
@@ -76,7 +79,9 @@ const before = await S(() => {
 });
 check('monsters spawned', before.monsters >= 4, `${before.monsters} alive`);
 
-for (let i = 0; i < 40; i++) {
+// 50 x 180ms = a 9s window: two full goblin swing cycles even if the pack
+// spends the first seconds walking its last few strides in (QA D-1).
+for (let i = 0; i < 50; i++) {
   await S(() => window.__mm6.attack());
   await page.waitForTimeout(180);
 }
