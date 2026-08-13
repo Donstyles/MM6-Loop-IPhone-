@@ -18,6 +18,12 @@ const uiCanvas = document.getElementById('ui');
 const bootEl = document.getElementById('boot');
 
 const engine = new Engine(glCanvas);
+// On-device diagnostics: ?debug in the URL or triple-tap the top-left corner
+// opens a copyable report (GPU, shader failures, layout, insets) - the only
+// way to see what a real iPhone's WebKit actually did with our GL.
+import('./core/diag.js')
+  .then((d) => d.armDiagnostics(engine, () => window.__session || null))
+  .catch(() => {});
 const input = new Input(document.getElementById('stage'));
 const ui = new UIContext();
 const screens = new ScreenStack();
@@ -177,6 +183,7 @@ function reportFrameError(e) {
     seenFrameErrors.add(key);
     frameErrors.push(key);
     console.error('frame error (recovered):', e);
+    import('./core/diag.js').then((d) => d.recordFrameError(key)).catch(() => {});
   }
 }
 

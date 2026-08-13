@@ -109,6 +109,22 @@ export class Engine {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.NoToneMapping;
 
+    // A shader that fails to compile on one browser's GL stack renders as
+    // nothing at all - "transparent surfaces" on somebody's phone while the
+    // desktop looks perfect. Capture every failure for the ?debug report
+    // instead of letting it vanish into a console nobody can see on iOS.
+    this.renderer.debug.checkShaderErrors = true;
+    this.renderer.debug.onShaderError = (gl, program, vertexShader, fragmentShader) => {
+      const trim = (s) => (s || '').split('\n').filter((l) => /ERROR|error/.test(l)).slice(0, 6).join(' | ');
+      const info = {
+        program: (gl.getProgramInfoLog(program) || '').slice(0, 200),
+        vs: trim(gl.getShaderInfoLog(vertexShader)),
+        fs: trim(gl.getShaderInfoLog(fragmentShader)),
+      };
+      console.error('SHADER ERROR', info);
+      import('./diag.js').then((d) => d.recordShaderError(info)).catch(() => {});
+    };
+
     this.scene = new THREE.Scene();
     // Vanilla clip planes. The far plane is exactly 16 map tiles.
     this.camera = new THREE.PerspectiveCamera(59.73, 461 / 345, 32, 8192);
